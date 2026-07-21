@@ -1,4 +1,6 @@
 import { createLogger, type Logger } from "@yats/shared";
+import * as http from "node:http";
+import * as crypto from "node:crypto";
 import {
   getAllToolDefinitions,
   createToolHandlers,
@@ -8,17 +10,17 @@ import {
 } from "./tools/all-tools.js";
 
 // ============================================================
-// MCP JSON-RPC Server (stdio transport)
+// Types
 // ============================================================
 
-type JsonRpcRequest = {
+export type JsonRpcRequest = {
   jsonrpc: "2.0";
   id: number | string;
   method: string;
   params?: Record<string, unknown>;
 };
 
-type JsonRpcResponse = {
+export type JsonRpcResponse = {
   jsonrpc: "2.0";
   id: number | string;
   result?: unknown;
@@ -28,6 +30,15 @@ type JsonRpcResponse = {
     data?: unknown;
   };
 };
+
+interface SseSession {
+  id: string;
+  res: http.ServerResponse;
+}
+
+// ============================================================
+// McpServer — supports stdio and HTTP+SSE transports
+// ============================================================
 
 export class McpServer {
   private readonly tools: ToolDefinition[];
@@ -41,25 +52,113 @@ export class McpServer {
     this.handlers = createToolHandlers(deps);
   }
 
+  // ==========================================================
+  // Public API
+  // ==========================================================
+
   /**
-   * Start the MCP server on stdio.
-   * Reads JSON-RPC from stdin, writes responses to stdout.
+   * Start the MCP server.
+   * 
+   * @param options.transport — "stdio" (default) or "http"
+   * @param options.port — HTTP port (default 3000, only for http transport)
    */
-  async start(): Promise<void> {
+  async start(options?: { transport?: "stdio" | "http"; port?: number }): Promise<void> {
+    const transport = options?.transport ?? "stdio";
+
+    if (transport === "http") {
+      return this.startHttp(options?.port ?? 3000);
+    }
+    return this.startStdio();
+  }
+
+  /**
+   * Handle a JSON-RPC request and return the response.
+   * Public so both transports can use it.
+   */
+  async handleRequest(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    const { id, method, params } = request;
+
+    // Notifications (no id) — JSON-RPC spec: MUST NOT reply
+    if (id === undefined || id === null) return null;
+
+    try {
+      switch (method) {
+        case "initialize":
+          return {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: { tools: {} },
+              serverInfo: { name: "yats", version: "0.1.0" },
+            },
+          };
+
+        case "tools/list":
+          return {
+            jsonrpc: "2.0",
+            id,
+            result: { tools: this.tools },
+          };
+
+        case "tools/call": {
+          const toolName = params?.name as string;
+          const toolArgs = (params?.arguments ?? {}) as Record<string, unknown>;
+
+          const handler = this.handlers.get(toolName);
+          if (!handler) {
+            return {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32601, message: `Unknown tool: ${toolName}` },
+            };
+          }
+
+          this.logger.info(`Tool call: ${toolName}`);
+          const result = await handler(toolArgs);
+
+          return { jsonrpc: "2.0", id, result };
+        }
+
+        case "shutdown":
+          await this.shutdown();
+          return { jsonrpc: "2.0", id, result: null };
+
+        case "ping":
+          return { jsonrpc: "2.0", id, result: {} };
+
+        default:
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32601, message: `Method not found: ${method}` },
+          };
+      }
+    } catch (err: any) {
+      this.logger.error(`Handler error for ${method}: ${err.message}`);
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32603, message: `Internal error: ${err.message}` },
+      };
+    }
+  }
+
+  // ==========================================================
+  // Stdio Transport
+  // ==========================================================
+
+  private async startStdio(): Promise<void> {
     this.running = true;
     this.logger.info("MCP server starting on stdio...");
 
-    // Read from stdin
     process.stdin.setEncoding("utf-8");
-
     let buffer = "";
 
     process.stdin.on("data", async (chunk: string) => {
       buffer += chunk;
-
-      // Process complete messages (line-delimited JSON)
       const lines = buffer.split("\n");
-      buffer = lines.pop() ?? ""; // Keep incomplete line in buffer
+      buffer = lines.pop() ?? "";
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -68,10 +167,10 @@ export class McpServer {
         try {
           const request = JSON.parse(trimmed) as JsonRpcRequest;
           const response = await this.handleRequest(request);
-          if (response) this.sendResponse(response);
+          if (response) this.sendStdioResponse(response);
         } catch (err: any) {
           this.logger.error(`Parse error: ${err.message}`);
-          this.sendResponse({
+          this.sendStdioResponse({
             jsonrpc: "2.0",
             id: 0,
             error: { code: -32700, message: "Parse error" },
@@ -85,11 +184,9 @@ export class McpServer {
       this.running = false;
     });
 
-    // Handle process signals
     process.on("SIGINT", () => this.shutdown());
     process.on("SIGTERM", () => this.shutdown());
 
-    // Keep alive
     await new Promise<void>((resolve) => {
       const check = setInterval(() => {
         if (!this.running) {
@@ -100,117 +197,180 @@ export class McpServer {
     });
   }
 
-  /**
-   * Handle a JSON-RPC request.
-   */
-  private async handleRequest(
-    request: JsonRpcRequest,
-  ): Promise<JsonRpcResponse | null> {
-    const { id, method, params } = request;
-
-    // Notifications have no id — JSON-RPC spec: MUST NOT reply
-    if (id === undefined || id === null) return null;
-
-    try {
-      // Notifications have no id — silently ignore
-      if (id === undefined || id === null) {
-        return { jsonrpc: "2.0", id: 0, result: null };
-      }
-
-      switch (method) {
-        case "initialize":
-          return {
-            jsonrpc: "2.0",
-            id,
-            result: {
-              protocolVersion: "2024-11-05",
-              capabilities: {
-                tools: {},
-              },
-              serverInfo: {
-                name: "yats",
-                version: "0.1.0",
-              },
-            },
-          };
-
-        case "tools/list":
-          return {
-            jsonrpc: "2.0",
-            id,
-            result: {
-              tools: this.tools,
-            },
-          };
-
-        case "tools/call": {
-          const toolName = params?.name as string;
-          const toolArgs = (params?.arguments ?? {}) as Record<string, unknown>;
-
-          const handler = this.handlers.get(toolName);
-          if (!handler) {
-            return {
-              jsonrpc: "2.0",
-              id,
-              error: {
-                code: -32601,
-                message: `Unknown tool: ${toolName}`,
-              },
-            };
-          }
-
-          this.logger.info(`Tool call: ${toolName}`);
-          const result = await handler(toolArgs);
-
-          return {
-            jsonrpc: "2.0",
-            id,
-            result,
-          };
-        }
-
-        case "shutdown":
-          this.shutdown();
-          return { jsonrpc: "2.0", id, result: null };
-
-        case "ping":
-          return { jsonrpc: "2.0", id, result: {} };
-
-        default:
-          return {
-            jsonrpc: "2.0",
-            id,
-            error: {
-              code: -32601,
-              message: `Method not found: ${method}`,
-            },
-          };
-      }
-    } catch (err: any) {
-      this.logger.error(`Handler error for ${method}: ${err.message}`);
-      return {
-        jsonrpc: "2.0",
-        id,
-        error: {
-          code: -32603,
-          message: `Internal error: ${err.message}`,
-        },
-      };
-    }
-  }
-
-  /**
-   * Send a JSON-RPC response to stdout.
-   */
-  private sendResponse(response: JsonRpcResponse): void {
+  private sendStdioResponse(response: JsonRpcResponse): void {
     process.stdout.write(JSON.stringify(response) + "\n");
   }
 
-  /**
-   * Graceful shutdown.
-   */
+  // ==========================================================
+  // HTTP + SSE Transport
+  // ==========================================================
+
+  private readonly sessions = new Map<string, SseSession>();
+
+  private async startHttp(port: number): Promise<void> {
+    this.running = true;
+
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
+      // CORS headers for browser-based MCP clients
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+      if (req.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      // Health check
+      if (req.method === "GET" && url.pathname === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          status: this.running ? "ok" : "shutting_down",
+          transport: "http+sse",
+          sessions: this.sessions.size,
+        }));
+        return;
+      }
+
+      // SSE endpoint — client opens this to listen for responses
+      if (req.method === "GET" && url.pathname === "/mcp/sse") {
+        this.handleSseConnect(res);
+        return;
+      }
+
+      // Message endpoint — client POSTs JSON-RPC requests here
+      if (req.method === "POST" && url.pathname === "/mcp/message") {
+        this.handleSseMessage(req, res, url);
+        return;
+      }
+
+      // 404
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+
+    server.on("error", (err) => {
+      this.logger.error(`HTTP server error: ${err.message}`);
+    });
+
+    server.listen(port, () => {
+      this.logger.info(`MCP server listening on http://localhost:${port} (HTTP+SSE)`);
+    });
+
+    process.on("SIGINT", () => this.shutdown());
+    process.on("SIGTERM", () => this.shutdown());
+
+    // Keep alive until shutdown
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (!this.running) {
+          server.close(() => resolve());
+          clearInterval(check);
+        }
+      }, 100);
+    });
+  }
+
+  private handleSseConnect(res: http.ServerResponse): void {
+    const sessionId = crypto.randomUUID();
+
+    // SSE headers
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
+    // First message: the endpoint URL for this session
+    const endpointUrl = `/mcp/message?sessionId=${sessionId}`;
+    res.write(`event: endpoint\ndata: ${endpointUrl}\n\n`);
+
+    this.sessions.set(sessionId, { id: sessionId, res });
+    this.logger.info(`SSE session opened: ${sessionId}`);
+
+    // Clean up on close
+    res.on("close", () => {
+      this.sessions.delete(sessionId);
+      this.logger.info(`SSE session closed: ${sessionId}`);
+    });
+
+    // Keep alive every 30s
+    const keepAlive = setInterval(() => {
+      res.write(": keepalive\n\n");
+    }, 30_000);
+
+    res.on("close", () => clearInterval(keepAlive));
+  }
+
+  private async handleSseMessage(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const sessionId = url.searchParams.get("sessionId");
+    if (!sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "missing sessionId query parameter" }));
+      return;
+    }
+
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "session not found" }));
+      return;
+    }
+
+    // Read request body
+    const body = await this.readBody(req);
+
+    try {
+      const request = JSON.parse(body) as JsonRpcRequest;
+      const response = await this.handleRequest(request);
+
+      // Send response via SSE
+      if (response) {
+        session.res.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
+      }
+    } catch (err: any) {
+      session.res.write(
+        `event: message\ndata: ${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 0,
+          error: { code: -32700, message: "Parse error" },
+        })}\n\n`,
+      );
+    }
+
+    // Acknowledge receipt
+    res.writeHead(202, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ accepted: true }));
+  }
+
+  private readBody(req: http.IncomingMessage): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let data = "";
+      req.on("data", (chunk: string) => (data += chunk));
+      req.on("end", () => resolve(data));
+      req.on("error", reject);
+    });
+  }
+
+  // ==========================================================
+  // Lifecycle
+  // ==========================================================
+
   private shutdown(): void {
     this.logger.info("Shutting down...");
     this.running = false;
+
+    // Close all SSE sessions
+    for (const session of this.sessions.values()) {
+      session.res.end();
+    }
+    this.sessions.clear();
   }
 }

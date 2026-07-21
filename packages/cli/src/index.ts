@@ -139,8 +139,10 @@ program
 
 program
   .command("serve")
-  .description("Start the MCP server (stdio transport)")
-  .action(async () => {
+  .description("Start the MCP server")
+  .option("--http", "Use HTTP+SSE transport instead of stdio")
+  .option("--port <port>", "HTTP port (default 3000)", "3000")
+  .action(async (options: { http?: boolean; port: string }) => {
     try {
       const { indexer, retriever, graphRepo, vectorRepo, embeddings, fileSystem } = await bootstrap();
 
@@ -151,10 +153,14 @@ program
         embeddings,
         fileSystem,
         indexer,
-        repositoriesRoot: process.env.REPOSITORIES_PATH ?? "/repositories",
+        repositoriesRoot: process.env.REPOSITORIES_PATH ?? "/repos",
       });
 
-      await mcpServer.start();
+      if (options.http) {
+        await mcpServer.start({ transport: "http", port: parseInt(options.port, 10) });
+      } else {
+        await mcpServer.start({ transport: "stdio" });
+      }
     } catch (err: any) {
       console.error(`❌ MCP server failed: ${err.message}`);
     } finally {
