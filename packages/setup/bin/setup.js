@@ -165,7 +165,7 @@ function spinner(text) {
   };
 }
 
-// Selector with arrow keys AND number input — works in any terminal
+// Simple numbered selector — works in every terminal, no exceptions
 async function choose(prompt, options) {
   console.log(`  ${prompt}`);
   for (let i = 0; i < options.length; i++) {
@@ -173,46 +173,17 @@ async function choose(prompt, options) {
   }
   console.log("");
 
-  let selected = 0;
-
-  function render() {
-    for (let i = 0; i < options.length + 2; i++) process.stdout.write("\x1b[1A\x1b[2K");
-    console.log(`  ${prompt}`);
-    for (let i = 0; i < options.length; i++) {
-      const marker = i === selected ? `${C}▸${R}` : " ";
-      console.log(`    ${marker} ${B}${i + 1}${R}. ${options[i].label}`);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  while (true) {
+    const answer = await new Promise((resolve) => rl.question(`  ${B}Pick [1-${options.length}]:${R} `, resolve));
+    const num = parseInt(answer.trim(), 10);
+    if (num >= 1 && num <= options.length) {
+      rl.close();
+      console.log("");
+      return options[num - 1].value;
     }
-    console.log("");
+    console.log(`  ${RED}Invalid. Type 1-${options.length}.${R}\n`);
   }
-
-  render();
-  console.log(`  ${D}↑/↓ arrows or type a number, Enter to select${R}`);
-
-  const stdin = process.stdin;
-  const wasRaw = stdin.isRaw;
-  if (!wasRaw) stdin.setRawMode(true);
-
-  return new Promise((resolve) => {
-    let buf = "";
-    const onData = (key) => {
-      if (key === "\u001b[A") { selected = Math.max(0, selected - 1); render(); return; }
-      if (key === "\u001b[B") { selected = Math.min(options.length - 1, selected + 1); render(); return; }
-      if (key >= "0" && key <= "9") { buf += key; return; }
-      if (key === "\r" || key === "\n") {
-        if (buf) {
-          const num = parseInt(buf, 10);
-          if (num >= 1 && num <= options.length) selected = num - 1;
-        }
-        stdin.removeListener("data", onData);
-        if (!wasRaw) stdin.setRawMode(false);
-        console.log("");
-        resolve(options[selected].value);
-        return;
-      }
-      buf = "";
-    };
-    stdin.on("data", onData);
-  });
 }
 
 function divider() {
