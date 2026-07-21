@@ -136,7 +136,7 @@ function header() {
   console.log(`  ╔══════════════════════════════════════════════════╗`);
   console.log(`  ║              ${B}YATS  Setup${R}                        ║`);
   console.log(`  ║     ${D}Yet Another Token Saver${R}                      ║`);
-  console.log(`  ║     ${D}Index your code, talk to your AI${R}             ║`);
+  console.log(`  ║     ${D}by Franco Vinciarelli${R}                        ║`);
   console.log(`  ╚══════════════════════════════════════════════════╝`);
   console.log("");
 }
@@ -159,39 +159,22 @@ function spinner(text) {
   };
 }
 
-// Simple arrow-key selector
+// Numbered option selector — works in any terminal
 async function choose(rl, prompt, options) {
   console.log(`  ${prompt}`);
   for (let i = 0; i < options.length; i++) {
-    const marker = i === 0 ? `${C}${B}▸${R}` : " ";
-    console.log(`    ${marker} ${options[i].label}`);
+    console.log(`    ${B}${i + 1}${R}. ${options[i].label}`);
   }
   console.log("");
-  console.log(`  ${D}↑/↓ to move, Enter to select${R}`);
 
-  let selected = 0;
-  const stdin = process.stdin;
-
-  return new Promise((resolve) => {
-    const onData = (key) => {
-      if (key === "\u001b[A" || key === "\u001b[B") {
-        for (let i = 0; i < options.length + 4; i++) process.stdout.write("\x1b[1A\x1b[2K");
-        selected = key === "\u001b[A" ? Math.max(0, selected - 1) : Math.min(options.length - 1, selected + 1);
-        console.log(`  ${prompt}`);
-        for (let i = 0; i < options.length; i++) {
-          console.log(`    ${i === selected ? `${C}${B}▸${RESET}` : " "} ${options[i].label}`);
-        }
-        console.log("");
-        console.log(`  ${D}↑/↓ to move, Enter to select${R}`);
-      } else if (key === "\r" || key === "\n") {
-        stdin.removeListener("data", onData);
-        stdin.setRawMode(false);
-        resolve(options[selected].value);
-      }
-    };
-    stdin.setRawMode(true);
-    stdin.on("data", onData);
-  });
+  while (true) {
+    const answer = await ask(rl, `  ${B}Enter a number (1-${options.length}):${R} `);
+    const num = parseInt(answer.trim(), 10);
+    if (num >= 1 && num <= options.length) {
+      return options[num - 1].value;
+    }
+    console.log(`  ${RED}Invalid choice. Pick 1-${options.length}.${R}`);
+  }
 }
 
 function divider() {
