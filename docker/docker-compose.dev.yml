@@ -1,0 +1,85 @@
+# ============================================================
+# Development overrides for docker-compose.yml
+# Usage: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up
+# ============================================================
+version: "3.9"
+
+services:
+  # ——— Override Neo4j: expose more ports, no auth for dev ———
+  neo4j:
+    environment:
+      - NEO4J_AUTH=none
+      - NEO4J_server_memory_heap_initial__size=256m
+      - NEO4J_server_memory_heap_max__size=512m
+
+  # ——— Override Qdrant: debug logging ———
+  qdrant:
+    environment:
+      - QDRANT__LOG_LEVEL=debug
+
+  # ——— Development MCP server (from local build) ———
+  mcp-server:
+    build:
+      context: .
+      dockerfile: docker/mcp-server/Dockerfile
+    ports:
+      - "3000:3000"
+      - "9229:9229"   # Node debugger
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - QDRANT_URL=http://qdrant:6334
+      - EMBEDDING_PROVIDER=ollama
+      - OLLAMA_URL=http://ollama:11434
+      - REPOSITORIES_PATH=/repositories
+    volumes:
+      - ./packages:/app/packages:ro
+      - ${HOME}/repos:/repositories:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+  # ——— Development Retriever ———
+  retriever:
+    build:
+      context: .
+      dockerfile: docker/retriever/Dockerfile
+    ports:
+      - "3001:3001"
+      - "9230:9229"
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - QDRANT_URL=http://qdrant:6334
+      - EMBEDDING_PROVIDER=ollama
+      - OLLAMA_URL=http://ollama:11434
+
+  # ——— Development Indexer ———
+  indexer:
+    build:
+      context: .
+      dockerfile: docker/indexer/Dockerfile
+    ports:
+      - "3002:3002"
+      - "9231:9229"
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - QDRANT_URL=http://qdrant:6334
+      - EMBEDDING_PROVIDER=ollama
+      - OLLAMA_URL=http://ollama:11434
+      - REPOSITORIES_PATH=/repositories
+      - INDEXER_CONCURRENCY=2
+    volumes:
+      - ${HOME}/repos:/repositories

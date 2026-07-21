@@ -1,0 +1,17 @@
+{
+  "name": "code-indexer-php-bridge",
+  "description": "PHP analysis bridge using nikic/php-parser + PHPStan",
+  "require": {
+    "php": ">=8.1",
+    "nikic/php-parser": "^5.0",
+    "phpstan/phpstan": "^1.12"
+  },
+  "autoload": {
+    "psr-4": {
+      "CodeIndexer\\PhpBridge\\": "src/"
+    }
+  },
+  "scripts": {
+    "analyze": "php analyzer.php"
+  }
+}

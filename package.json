@@ -1,0 +1,28 @@
+{
+  "name": "code-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Code Intelligence Platform — index repositories, build knowledge graphs, expose MCP tools",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "build:watch": "pnpm -r run build:watch",
+    "clean": "pnpm -r run clean",
+    "lint": "eslint 'packages/*/src/**/*.ts' --fix",
+    "lint:check": "eslint 'packages/*/src/**/*.ts'",
+    "format": "prettier --write 'packages/*/src/**/*.ts'",
+    "format:check": "prettier --check 'packages/*/src/**/*.ts'",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:coverage": "pnpm -r run test:coverage"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

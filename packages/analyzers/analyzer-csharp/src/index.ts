@@ -1,0 +1,1 @@
+// @code-indexer/analyzer-csharp

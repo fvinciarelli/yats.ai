@@ -1,0 +1,11 @@
+export { IndexerService } from "./application/services/indexer.service.js";
+export type { IndexerDependencies } from "./application/services/indexer.service.js";
+export { SymbolDiffer } from "./application/services/symbol-differ.service.js";
+export type { SymbolDelta } from "./application/services/symbol-differ.service.js";
+export { IncrementalIndexerService } from "./application/services/incremental-indexer.service.js";
+export type { IncrementalIndexerDeps } from "./application/services/incremental-indexer.service.js";
+export { FileWalker } from "./infrastructure/file-walker.js";
+export type { WalkOptions, WalkedFile } from "./infrastructure/file-walker.js";
+export { FileWatcherService } from "./infrastructure/file-watcher.js";
+export type { WatchCallback } from "./infrastructure/file-watcher.js";
+export { detectLanguage, getAnalyzerForFile } from "./infrastructure/language-detector.js";

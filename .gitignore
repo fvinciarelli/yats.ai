@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.env
+*.log
+logs/
+data/
+*.tsbuildinfo
+coverage/
+.cache/
+tmp/
+temp/
+.DS_Store
+*.swp
+*.swo
+*~
+# IDE
+.vscode/
+.idea/
+# Docker volumes
+*-storage/
+# OS
+Thumbs.db
