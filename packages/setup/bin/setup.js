@@ -79,7 +79,7 @@ const EMBEDDED_COMPOSE = `services:
     image: yats:local
     # TODO: switch to published image before release
     # image: ghcr.io/fvinciarelli/yats:latest
-    ports: ["\${YATS_PORT:-3000}:3000"]
+    ports: ["__MCP_PORT__:__MCP_PORT__"]
     environment:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
@@ -92,7 +92,7 @@ const EMBEDDED_COMPOSE = `services:
       - MISTRAL_API_KEY=__MISTRAL_KEY__
       - VOYAGE_API_KEY=__VOYAGE_KEY__
       - REPOSITORIES_PATH=/repos
-      - YATS_PORT=3000
+      - YATS_PORT=__MCP_PORT__
       - LOG_LEVEL=info
     volumes:
       - \${REPOS_PATH:-~/.yats/repos}:/repos:ro
@@ -267,7 +267,7 @@ async function checkPort(port) {
 // Compose file generation
 // ============================================================
 
-function generateCompose(provider, ollamaModel, apiKey) {
+function generateCompose(provider, ollamaModel, apiKey, mcpPort) {
   let compose = EMBEDDED_COMPOSE;
 
   if (provider === "ollama") {
@@ -281,7 +281,7 @@ function generateCompose(provider, ollamaModel, apiKey) {
     .replace(/__OLLAMA_MODEL__/g, ollamaModel)
     .replace(/__OPENAI_KEY__/g, provider === "openai" ? apiKey : "")
     .replace(/__MISTRAL_KEY__/g, provider === "mistral" ? apiKey : "")
-    .replace(/__VOYAGE_KEY__/g, provider === "voyage" ? apiKey : "");
+    .replace(/__MCP_PORT__/g, String(mcpPort))
 
   return compose;
 }
@@ -386,6 +386,26 @@ async function main() {
   rl3.close();
   console.log("");
 
+  // Port selection
+  let mcpPort = 3000;
+  {
+    const rlPort = createInterface({ input: process.stdin, output: process.stdout });
+    const inUse = await checkPort(mcpPort);
+    const suggested = inUse ? 3001 : mcpPort;
+    const hint = inUse ? ` ${Y}(default 3000 is in use)${R}` : "";
+    const answer = await ask(rlPort, `  ${B}MCP server port${R} [${suggested}]:${hint} `);
+    const trimmed = answer.trim();
+    if (trimmed) {
+      const num = parseInt(trimmed, 10);
+      if (num >= 1024 && num <= 65535) mcpPort = num;
+    } else {
+      mcpPort = suggested;
+    }
+    rlPort.close();
+  }
+  console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
+  console.log("");
+
   // Step 5: Confirm
   step(`Step ${pathsToIndex.length ? "5" : "4"} — Confirm`);
   const providerName = provider === "ollama"
@@ -394,6 +414,7 @@ async function main() {
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │                                                      │`);
   console.log(`  │  ${B}Provider:${R}     ${providerName.padEnd(39)}│`);
+  console.log(`  │  ${B}Port:${R}         ${String(mcpPort).padEnd(39)}│`);
   if (pathsToIndex.length) {
     console.log(`  │  ${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)").padEnd(39)}│`);
   }
@@ -423,11 +444,11 @@ async function main() {
   mkdirSync(REPOS_DIR, { recursive: true });
 
   // Generate and write docker-compose
-  const compose = generateCompose(provider, ollamaModel, apiKey);
+  const compose = generateCompose(provider, ollamaModel, apiKey, mcpPort);
   writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
-  const mcpConfig = { mcpServers: { yats: { url: "http://localhost:3000/mcp/sse" } } };
+  const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp/sse` } } };
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
   // Start services
@@ -451,7 +472,7 @@ async function main() {
   }
 
   const sServer = spinner("Starting YATS server...");
-  const yatsOk = await waitForHealth("http://localhost:3000/health", 30, 2000);
+  const yatsOk = await waitForHealth(`http://localhost:${mcpPort}/health`, 30, 2000);
   sServer.done(yatsOk);
 
   if (!yatsOk) {
@@ -468,7 +489,7 @@ async function main() {
     try {
       for (const dir of pathsToIndex) {
         const repoName = dir.split("/").pop() || dir;
-        await fetch(`http://localhost:3000/index`, {
+        await fetch(`http://localhost:${mcpPort}/index`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ repo: repoName, path: dir }),
@@ -492,7 +513,7 @@ async function main() {
   console.log(`  │  {                                                   │`);
   console.log(`  │    "mcpServers": {                                   │`);
   console.log(`  │      "yats": {                                       │`);
-  console.log(`  │        "url": "http://localhost:3000/mcp/sse"         │`);
+  console.log(`  │        "url": "http://localhost:${mcpPort}/mcp/sse"         │`);
   console.log(`  │      }                                               │`);
   console.log(`  │    }                                                 │`);
   console.log(`  │  }                                                   │`);
