@@ -146,10 +146,10 @@ RUN chmod +x /entrypoint.sh
 
 USER yats
 
-EXPOSE 3000
+EXPOSE 5555
 
 ENV NODE_ENV=production
-ENV YATS_PORT=3000
+ENV YATS_PORT=5555
 ENV REPOSITORIES_PATH=/repos
 ENV YATS_GO_BRIDGE=/usr/local/bin/yats-go-bridge
 ENV YATS_CSHARP_BRIDGE=/usr/local/lib/yats-csharp-bridge

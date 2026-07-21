@@ -148,7 +148,7 @@ program
   .command("serve")
   .description("Start the MCP server")
   .option("--http", "Use HTTP+SSE transport instead of stdio")
-  .option("--port <port>", "HTTP port (default 3000)", "3000")
+  .option("--port <port>", "HTTP port (default 5555)", "5555")
   .action(async (options: { http?: boolean; port: string }) => {
     try {
       const { indexer, retriever, graphRepo, vectorRepo, embeddings, fileSystem } = await bootstrap();

@@ -33,7 +33,7 @@ fi
 
 echo ""
 echo "  Starting YATS MCP server..."
-echo "  Transport: HTTP+SSE on port ${YATS_PORT:-3000}"
+echo "  Transport: HTTP+SSE on port ${YATS_PORT:-5555}"
 echo ""
 
 # Start the MCP server in HTTP mode

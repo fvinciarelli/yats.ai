@@ -62,13 +62,13 @@ export class McpServer {
    * Start the MCP server.
    * 
    * @param options.transport — "stdio" (default) or "http"
-   * @param options.port — HTTP port (default 3000, only for http transport)
+   * @param options.port — HTTP port (default 5555, only for http transport)
    */
   async start(options?: { transport?: "stdio" | "http"; port?: number }): Promise<void> {
     const transport = options?.transport ?? "stdio";
 
     if (transport === "http") {
-      return this.startHttp(options?.port ?? 3000);
+      return this.startHttp(options?.port ?? 5555);
     }
     return this.startStdio();
   }

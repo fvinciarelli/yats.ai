@@ -387,12 +387,12 @@ async function main() {
   console.log("");
 
   // Port selection
-  let mcpPort = 3000;
+  let mcpPort = 5555;
   {
     const rlPort = createInterface({ input: process.stdin, output: process.stdout });
     const inUse = await checkPort(mcpPort);
-    const suggested = inUse ? 3001 : mcpPort;
-    const hint = inUse ? ` ${Y}(default 3000 is in use)${R}` : "";
+    const suggested = inUse ? 5556 : mcpPort;
+    const hint = inUse ? ` ${Y}(default 5555 is in use)${R}` : "";
     const answer = await ask(rlPort, `  ${B}MCP server port${R} [${suggested}]:${hint} `);
     const trimmed = answer.trim();
     if (trimmed) {
