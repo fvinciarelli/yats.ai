@@ -77,7 +77,9 @@ services:
     restart: unless-stopped
   __OLLAMA_PLACEHOLDER__
   yats:
-    image: ghcr.io/fvinciarelli/yats:latest
+    image: yats:local
+    # TODO: switch to published image before release
+    # image: ghcr.io/fvinciarelli/yats:latest
     ports: ["\${YATS_PORT:-3000}:3000"]
     environment:
       - NEO4J_URI=bolt://neo4j:7687
