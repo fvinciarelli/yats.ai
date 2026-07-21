@@ -372,7 +372,14 @@ async function main() {
     : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │                                                      │`);
+  console.log(`  │  ${B}What will happen:${R}                                    │`);
+  console.log(`  │                                                      │`);
+  console.log(`  │  1. Pull Docker images (Neo4j, Qdrant, YATS)        │`);
+  console.log(`  │  2. Start services in the background                 │`);
+  console.log(`  │  3. YATS MCP server on ${C}http://localhost:3000/mcp/sse${R}   │`);
+  console.log(`  │                                                      │`);
   console.log(`  │  Provider:     ${providerName.padEnd(39)}│`);
+  console.log(`  │  API calls:    ${(provider === "ollama" ? "None (runs locally)" : `To ${provider} API`).padEnd(39)}│`);
   console.log(`  │  Disk needed:  ${(provider === "ollama" ? "~3GB" : "~1GB").padEnd(39)}│`);
   console.log(`  │                                                      │`);
   console.log(`  └──────────────────────────────────────────────────────┘`);
