@@ -343,6 +343,19 @@ async function main() {
   console.log(`  ${G}✓${R} Docker found`);
   console.log("");
 
+  // Check for existing YATS containers BEFORE the wizard
+  const existingContainers = await checkYatsRunning();
+  if (existingContainers) {
+    console.log(`  ${Y}YATS containers are already running.${R}`);
+    console.log("");
+    console.log(`  To start fresh, run this first ${B}(destroys all indexed data):${R}`);
+    console.log(`  ${C}docker compose -f ~/.yats/docker-compose.yml down -v${R}`);
+    console.log("");
+    console.log(`  Then re-run ${B}npx yats-setup${R}`);
+    console.log("");
+    process.exit(0);
+  }
+
   // Step 1: Embedding provider
   step("Step 1 — Embedding provider");
 
@@ -448,19 +461,6 @@ async function main() {
   // Install
   console.log("");
   step(`${D}Installing${R}`);
-
-  // Check for existing YATS containers
-  const existingContainers = await checkYatsRunning();
-  if (existingContainers) {
-    console.log(`  ${Y}YATS containers are already running.${R}`);
-    console.log("");
-    console.log(`  To start fresh, run this first ${B}(destroys all indexed data):${R}`);
-    console.log(`  ${C}docker compose -f ~/.yats/docker-compose.yml down -v${R}`);
-    console.log("");
-    console.log(`  Then re-run ${B}npx yats-setup${R}`);
-    console.log("");
-    process.exit(0);
-  }
 
   // Create directories
   mkdirSync(YATS_DIR, { recursive: true });
