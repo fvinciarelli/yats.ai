@@ -369,11 +369,12 @@ async function main() {
   console.log(`  ${D}Indexing happens automatically on first search.${R}`);
   console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
   console.log("");
+  console.log(`  ${D}Tip: type a path or drag-n-drop a folder from your file manager.${R}`);
 
   const rl3 = createInterface({ input: process.stdin, output: process.stdout });
   const pathsToIndex = [];
   while (true) {
-    const p = await ask(rl3, `  ${B}Directory path (or Enter to skip):${R} `);
+    const p = await ask(rl3, `  ${B}Directory path (Enter to skip):${R} `);
     const trimmed = p.trim();
     if (!trimmed) break;
     if (existsSync(trimmed)) {
@@ -388,6 +389,9 @@ async function main() {
 
   // Step 5: Confirm
   step(`Step ${pathsToIndex.length ? "5" : "4"} — Confirm`);
+  const providerName = provider === "ollama"
+    ? `Ollama (${ollamaModel})`
+    : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │                                                      │`);
   console.log(`  │  ${B}Provider:${R}     ${providerName.padEnd(39)}│`);
