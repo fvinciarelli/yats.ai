@@ -1,1 +1,1 @@
-// @yats/analyzer-csharp
+export { CSharpAnalyzer } from "./csharp-analyzer.js";

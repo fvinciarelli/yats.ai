@@ -12,6 +12,8 @@ import type {
 } from "@yats/shared";
 import { AnalyzerFactory } from "@yats/analyzer-interface";
 import { TypeScriptAnalyzer } from "@yats/analyzer-typescript";
+import { GoAnalyzer } from "@yats/analyzer-go";
+import { CSharpAnalyzer } from "@yats/analyzer-csharp";
 import { IndexerService } from "@yats/indexing";
 import { RetrieverService } from "@yats/retrieval";
 import { McpServer } from "@yats/mcp-server";
@@ -32,7 +34,9 @@ async function bootstrap() {
   // Register analyzers
   const analyzerFactory = new AnalyzerFactory();
   analyzerFactory.register(new TypeScriptAnalyzer());
-  // Future: register C#, PHP, Python analyzers
+  analyzerFactory.register(new GoAnalyzer());
+  analyzerFactory.register(new CSharpAnalyzer());
+  // Future: register PHP, Python analyzers
 
   // Initialize connections
   await initializeConnections();

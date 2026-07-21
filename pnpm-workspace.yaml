@@ -11,4 +11,5 @@ packages:
   - "packages/analyzers/analyzer-php"
   - "packages/analyzers/analyzer-python"
   - "packages/analyzers/analyzer-treesitter"
+  - "packages/analyzers/analyzer-go"
   - "packages/setup"

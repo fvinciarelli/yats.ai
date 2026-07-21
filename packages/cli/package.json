@@ -25,6 +25,8 @@
   "dependencies": {
     "@yats/analyzer-interface": "workspace:^",
     "@yats/analyzer-typescript": "workspace:^",
+    "@yats/analyzer-go": "workspace:^",
+    "@yats/analyzer-csharp": "workspace:^",
     "@yats/indexing": "workspace:^",
     "@yats/infra": "workspace:^",
     "@yats/mcp-server": "workspace:^",

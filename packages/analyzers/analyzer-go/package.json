@@ -1,5 +1,5 @@
 {
-  "name": "@yats/analyzer-csharp",
+  "name": "@yats/analyzer-go",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,11 +13,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:watch": "tsc --watch",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/**/*.test.ts",
-    "test:coverage": "echo 'TODO'"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@yats/analyzer-interface": "workspace:^",
@@ -25,7 +22,6 @@
   },
   "devDependencies": {
     "typescript": "^5.7.0",
-    "tsx": "^4.19.0",
     "@types/node": "^22.0.0"
   }
 }
