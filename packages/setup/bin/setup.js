@@ -364,30 +364,45 @@ async function main() {
     console.log("");
   }
 
-  // Step 3: Confirm
-  step("Step 3 — Confirm");
+  // Optional: pre-index directories
+  step("Step 4 — Pre-index (optional)");
+  console.log(`  ${D}Indexing happens automatically on first search.${R}`);
+  console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
+  console.log("");
 
-  const providerName = provider === "ollama"
-    ? `Ollama (${ollamaModel})`
-    : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
+  const rl3 = createInterface({ input: process.stdin, output: process.stdout });
+  const pathsToIndex = [];
+  while (true) {
+    const p = await ask(rl3, `  ${B}Directory path (or Enter to skip):${R} `);
+    const trimmed = p.trim();
+    if (!trimmed) break;
+    if (existsSync(trimmed)) {
+      pathsToIndex.push(trimmed);
+      console.log(`  ${G}✓${R} Added: ${trimmed}`);
+    } else {
+      console.log(`  ${RED}✗${R} Not found: ${trimmed}`);
+    }
+  }
+  rl3.close();
+  console.log("");
+
+  // Step 5: Confirm
+  step(`Step ${pathsToIndex.length ? "5" : "4"} — Confirm`);
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │                                                      │`);
-  console.log(`  │  ${B}What will happen:${R}                                    │`);
-  console.log(`  │                                                      │`);
-  console.log(`  │  1. Pull Docker images (Neo4j, Qdrant, YATS)        │`);
-  console.log(`  │  2. Start services in the background                 │`);
-  console.log(`  │  3. YATS MCP server on ${C}http://localhost:3000/mcp/sse${R}   │`);
-  console.log(`  │                                                      │`);
-  console.log(`  │  Provider:     ${providerName.padEnd(39)}│`);
-  console.log(`  │  API calls:    ${(provider === "ollama" ? "None (runs locally)" : `To ${provider} API`).padEnd(39)}│`);
-  console.log(`  │  Disk needed:  ${(provider === "ollama" ? "~3GB" : "~1GB").padEnd(39)}│`);
+  console.log(`  │  ${B}Provider:${R}     ${providerName.padEnd(39)}│`);
+  if (pathsToIndex.length) {
+    console.log(`  │  ${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)").padEnd(39)}│`);
+  }
+  console.log(`  │  ${B}API calls:${R}    ${(provider === "ollama" ? "None (runs locally)" : `To ${provider} API`).padEnd(39)}│`);
+  console.log(`  │  ${B}Disk needed:${R}  ${(provider === "ollama" ? "~3GB" : "~1GB").padEnd(39)}│`);
   console.log(`  │                                                      │`);
   console.log(`  └──────────────────────────────────────────────────────┘`);
   console.log("");
 
   const proceed = await (() => {
-    const rl3 = createInterface({ input: process.stdin, output: process.stdout });
-    return ask(rl3, `  ${B}Proceed? [Y/n]${R} `).then((a) => { rl3.close(); return a; });
+    const rl4 = createInterface({ input: process.stdin, output: process.stdout });
+    return ask(rl4, `  ${B}Proceed? [Y/n]${R} `).then((a) => { rl4.close(); return a; });
   })();
   if (proceed.toLowerCase() === "n") {
     console.log("");
@@ -396,9 +411,9 @@ async function main() {
     process.exit(0);
   }
 
-  // Step 4: Install
+  // Install
   console.log("");
-  step("Step 4 — Installing");
+  step(`${D}Installing${R}`);
 
   // Create directories
   mkdirSync(YATS_DIR, { recursive: true });
@@ -441,6 +456,26 @@ async function main() {
     console.log(`  ${Y}⚠ Server still warming up.${R} It'll be ready shortly.`);
     console.log(`  Check: ${C}docker compose -f ${COMPOSE_FILE} logs yats${R}`);
     console.log("");
+  }
+
+  // Pre-index directories if user added them
+  if (pathsToIndex.length > 0 && yatsOk) {
+    console.log("");
+    const sIndex = spinner(`Pre-indexing ${pathsToIndex.length} directorie(s)...`);
+    try {
+      for (const dir of pathsToIndex) {
+        const repoName = dir.split("/").pop() || dir;
+        await fetch(`http://localhost:3000/index`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: repoName, path: dir }),
+        });
+      }
+      sIndex.done(true);
+    } catch {
+      sIndex.done(false);
+      console.log(`  ${Y}Index endpoint not ready yet. Repos will be indexed on first search.${R}`);
+    }
   }
 
   // Done
