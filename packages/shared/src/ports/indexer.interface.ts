@@ -14,4 +14,8 @@ export interface Indexer {
   removeFile(repositoryName: string, filePath: string): Promise<void>;
   incrementalIndex(repositoryPath: string, sinceCommit: string): Promise<IndexResult>;
   indexDocumentation(repositoryPath: string): Promise<number>;
+  ensureIndexed(repositoryPath: string): Promise<{
+    status: "indexed" | "reindexed" | "fresh";
+    result?: IndexResult;
+  }>;
 }

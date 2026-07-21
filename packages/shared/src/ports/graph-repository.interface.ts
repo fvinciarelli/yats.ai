@@ -51,4 +51,6 @@ export interface GraphRepository {
   upsertRepositoryMetadata(name: string, rootPath: string): Promise<void>;
   listRepositories(): Promise<RepositoryInfo[]>;
   findRepositoryByPath(rootPath: string): Promise<RepositoryInfo | null>;
+  getLastIndexedCommit(name: string): Promise<string | null>;
+  setLastIndexedCommit(name: string, commit: string): Promise<void>;
 }

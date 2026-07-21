@@ -440,6 +440,44 @@ async function resolveRepo(
   return null;
 }
 
+/**
+ * Resolve a repo and auto-index if it hasn't been indexed yet.
+ * This is the main entry point for all search/query tools — it ensures
+ * the repo is indexed before the tool does its work.
+ */
+async function ensureRepoIndexed(
+  args: Record<string, unknown>,
+  deps: McpDependencies,
+): Promise<{ name: string; rootPath: string } | ToolResult> {
+  const repoPath = args.path as string | undefined;
+  const repoName = args.repository as string | undefined;
+
+  // Try to resolve from already-indexed repos
+  const repo = await resolveRepo(repoPath, repoName, deps.graphRepository);
+  if (repo) {
+    // Already indexed — but check if it's stale and update if needed
+    if (repoPath) {
+      await deps.indexer.ensureIndexed(repoPath);
+    }
+    return repo;
+  }
+
+  // Not indexed — if we have a path, index it now automatically
+  if (repoPath) {
+    const { status } = await deps.indexer.ensureIndexed(repoPath);
+    if (status === "indexed" || status === "reindexed") {
+      const repo = await resolveRepo(repoPath, repoName, deps.graphRepository);
+      if (repo) return repo;
+    }
+    return {
+      content: [{ type: "text", text: `Indexing failed for "${repoPath}".` }],
+      isError: true,
+    };
+  }
+
+  return notIndexed(repoName as string);
+}
+
 /** Return a helpful "not indexed" message */
 function notIndexed(hint?: string): ToolResult {
   const name = hint || "this directory";
@@ -460,23 +498,12 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   const logger = createLogger("mcp:tools");
 
   handlers.set("search_code", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) {
-      const hint = args.path || args.repository || "this directory";
-      return {
-        content: [{
-          type: "text",
-          text: `Repository "${hint}" is not indexed yet. Call index_repository(path="${hint}") first, then search again.`,
-        }],
-      };
-    }
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
     const query: RetrievalQuery = {
       query: args.query as string,
-      repository: repo.name,
+      repository: resolved.name,
       options: {
         maxVectorHits: 20,
         maxTotalResults: (args.limit as number) ?? 10,
@@ -490,30 +517,24 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("search_documentation", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.path ?? args.repository) as string);
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
     const result = await deps.embeddings.embed(args.query as string);
     const hits = await deps.vectorRepository.search(CollectionName.DOCUMENTATION, result, {
       limit: (args.limit as number) ?? 10,
     });
     return {
-      content: [{ type: "text", text: JSON.stringify(hits.filter(h => h.payload.repository === repo.name), null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(hits.filter(h => h.payload.repository === resolved.name), null, 2) }],
     };
   });
 
   handlers.set("find_symbol", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.path ?? args.repository) as string);
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
     const symbols = await deps.graphRepository.findSymbolByName(
-      repo.name,
+      resolved.name,
       args.name as string,
       args.kind as SymbolKind | undefined,
     );
@@ -571,25 +592,19 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("find_routes", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.path ?? args.repository) as string);
-    const routes = await deps.graphRepository.findRoutes(repo.name);
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
+    const routes = await deps.graphRepository.findRoutes(resolved.name);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(routes), null, 2) }] };
   });
 
   handlers.set("find_configuration", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.path ?? args.repository) as string);
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
     const configs = await deps.graphRepository.findConfiguration(
-      repo.name,
+      resolved.name,
       args.key as string | undefined,
     );
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(configs), null, 2) }] };
@@ -618,14 +633,11 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("list_symbols", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.path ?? args.repository) as string);
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
     const symbols = await deps.graphRepository.listSymbols(
-      repo.name,
+      resolved.name,
       args.kind as SymbolKind | undefined,
       (args.limit as number) ?? 50,
       (args.offset as number) ?? 0,
@@ -634,33 +646,27 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("repository_summary", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.path ?? args.repository) as string);
-    const summary = await deps.graphRepository.repositorySummary(repo.name);
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
+    const summary = await deps.graphRepository.repositorySummary(resolved.name);
     return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
   });
 
   handlers.set("architecture_summary", async (args) => {
-    const repo = await resolveRepo(
-      args.path as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.path ?? args.repository) as string);
+    const resolved = await ensureRepoIndexed(args, deps);
+    if ("content" in resolved) return resolved;
+
     const controllers = await deps.graphRepository.listSymbols(
-      repo.name, SymbolKind.CONTROLLER, 20, 0,
+      resolved.name, SymbolKind.CONTROLLER, 20, 0,
     );
     const services = await deps.graphRepository.listSymbols(
-      repo.name, SymbolKind.SERVICE, 20, 0,
+      resolved.name, SymbolKind.SERVICE, 20, 0,
     );
     const entities = await deps.graphRepository.listSymbols(
-      repo.name, SymbolKind.ENTITY, 20, 0,
+      resolved.name, SymbolKind.ENTITY, 20, 0,
     );
-    const routes = await deps.graphRepository.findRoutes(repo.name);
+    const routes = await deps.graphRepository.findRoutes(resolved.name);
 
     return {
       content: [{
@@ -697,15 +703,13 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
   });
 
-  // File operations
+  // File operations — use cwd/repo_path as path for ensureRepoIndexed
   handlers.set("read_file", async (args) => {
-    const repo = await resolveRepo(
-      (args.cwd ?? args.repo_path) as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.cwd ?? args.repo_path ?? args.repository) as string);
-    const fullPath = path.join(repo.rootPath, args.path as string);
+    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
+    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
+    if ("content" in resolved) return resolved;
+
+    const fullPath = path.join(resolved.rootPath, args.path as string);
     let content = await deps.fileSystem.readFile(fullPath);
 
     const startLine = args.startLine as number | undefined;
@@ -722,25 +726,21 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("write_file", async (args) => {
-    const repo = await resolveRepo(
-      (args.cwd ?? args.repo_path) as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.cwd ?? args.repo_path ?? args.repository) as string);
-    const fullPath = path.join(repo.rootPath, args.path as string);
+    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
+    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
+    if ("content" in resolved) return resolved;
+
+    const fullPath = path.join(resolved.rootPath, args.path as string);
     await deps.fileSystem.writeFile(fullPath, args.content as string);
     return { content: [{ type: "text", text: `File written: ${args.path}` }] };
   });
 
   handlers.set("update_file", async (args) => {
-    const repo = await resolveRepo(
-      (args.cwd ?? args.repo_path) as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.cwd ?? args.repo_path ?? args.repository) as string);
-    const fullPath = path.join(repo.rootPath, args.path as string);
+    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
+    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
+    if ("content" in resolved) return resolved;
+
+    const fullPath = path.join(resolved.rootPath, args.path as string);
     await deps.fileSystem.updateFile(
       fullPath,
       (args.edits as Array<{ oldText: string; newText: string }>),
@@ -749,25 +749,21 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("delete_file", async (args) => {
-    const repo = await resolveRepo(
-      (args.cwd ?? args.repo_path) as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.cwd ?? args.repo_path ?? args.repository) as string);
-    const fullPath = path.join(repo.rootPath, args.path as string);
+    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
+    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
+    if ("content" in resolved) return resolved;
+
+    const fullPath = path.join(resolved.rootPath, args.path as string);
     await deps.fileSystem.deleteFile(fullPath);
     return { content: [{ type: "text", text: `File deleted: ${args.path}` }] };
   });
 
   handlers.set("create_file", async (args) => {
-    const repo = await resolveRepo(
-      (args.cwd ?? args.repo_path) as string | undefined,
-      args.repository as string | undefined,
-      deps.graphRepository,
-    );
-    if (!repo) return notIndexed((args.cwd ?? args.repo_path ?? args.repository) as string);
-    const fullPath = path.join(repo.rootPath, args.path as string);
+    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
+    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
+    if ("content" in resolved) return resolved;
+
+    const fullPath = path.join(resolved.rootPath, args.path as string);
     await deps.fileSystem.createFile(fullPath, args.content as string);
     return { content: [{ type: "text", text: `File created: ${args.path}` }] };
   });
@@ -782,9 +778,12 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const repoPath = args.path as string;
     if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
 
-    const result = await deps.indexer.indexRepository(repoPath);
+    const { status, result } = await deps.indexer.ensureIndexed(repoPath);
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{
+        type: "text",
+        text: JSON.stringify({ status, ...(result ?? {}) }, null, 2),
+      }],
     };
   });
 

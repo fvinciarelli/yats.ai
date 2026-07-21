@@ -8,6 +8,7 @@ import type {
   VectorRepository,
   EmbeddingGenerator,
   FileSystem,
+  GitAdapter,
 } from "@yats/shared";
 import { AnalyzerFactory } from "@yats/analyzer-interface";
 import { TypeScriptAnalyzer } from "@yats/analyzer-typescript";
@@ -41,6 +42,7 @@ async function bootstrap() {
   const vectorRepo = container.resolve(TOKENS.VECTOR_REPOSITORY) as VectorRepository;
   const embeddings = container.resolve(TOKENS.EMBEDDING_GENERATOR) as EmbeddingGenerator;
   const fileSystem = container.resolve(TOKENS.FILE_SYSTEM) as FileSystem;
+  const gitAdapter = container.resolve(TOKENS.GIT_ADAPTER) as GitAdapter;
 
   // Create services
   const indexer = new IndexerService({
@@ -49,6 +51,7 @@ async function bootstrap() {
     embeddingGenerator: embeddings,
     fileSystem,
     analyzerFactory,
+    gitAdapter,
   });
 
   const retriever = new RetrieverService(graphRepo, vectorRepo, embeddings);

@@ -546,6 +546,21 @@ export class Neo4jGraphRepository implements GraphRepository {
     return results.length > 0 ? { name: (results[0] as any).name, rootPath: (results[0] as any).rootPath } : null;
   }
 
+  async getLastIndexedCommit(name: string): Promise<string | null> {
+    const results = await this.connection.read<{commit: string | null}>(
+      `MATCH (r:Repository {name: $name}) RETURN r.lastIndexedCommit AS commit`,
+      { name },
+    );
+    return (results[0] as any)?.commit ?? null;
+  }
+
+  async setLastIndexedCommit(name: string, commit: string): Promise<void> {
+    await this.connection.write(
+      `MATCH (r:Repository {name: $name}) SET r.lastIndexedCommit = $commit, r.updatedAt = $updatedAt`,
+      { name, commit, updatedAt: new Date().toISOString() },
+    );
+  }
+
   // ============================================================
   // Helpers
   // ============================================================

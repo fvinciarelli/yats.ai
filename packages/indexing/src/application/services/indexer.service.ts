@@ -8,6 +8,7 @@ import type {
   EmbeddingGenerator,
   SymbolStore,
   FileSystem,
+  GitAdapter,
   Symbol,
   Relationship,
 } from "@yats/shared";
@@ -27,6 +28,7 @@ export interface IndexerDependencies {
   embeddingGenerator: EmbeddingGenerator;
   fileSystem: FileSystem;
   analyzerFactory: AnalyzerFactory;
+  gitAdapter?: GitAdapter;
 }
 
 export class IndexerService implements Indexer {
@@ -57,6 +59,16 @@ export class IndexerService implements Indexer {
       repoName,
       repositoryPath,
     );
+
+    // 0b. Capture current git commit for future incremental indexing
+    let currentCommit: string | null = null;
+    if (this.deps.gitAdapter) {
+      try {
+        currentCommit = await this.deps.gitAdapter.getCurrentCommit(repositoryPath);
+      } catch {
+        // Not a git repo — ignore
+      }
+    }
 
     // 1. Walk files
     const walker = new FileWalker();
@@ -165,6 +177,15 @@ export class IndexerService implements Indexer {
     }
 
     const duration = Date.now() - startTime;
+
+    // Save last indexed commit for future incremental indexing
+    if (currentCommit) {
+      await this.deps.graphRepository.setLastIndexedCommit(
+        repoName,
+        currentCommit,
+      );
+    }
+
     this.logger.info(
       `Indexed ${repoName}: ${symbols.length} symbols, ${symbolStore.getRelationships().length} relationships, ${docsIndexed} docs in ${duration}ms`,
     );
@@ -178,6 +199,61 @@ export class IndexerService implements Indexer {
       errors: totalErrors,
       duration,
     };
+  }
+
+  /**
+   * Ensure a repository is indexed before any search operation.
+   * 
+   * @returns status: "indexed" (was missing, just indexed), 
+   *                  "reindexed" (was stale, just updated),
+   *                  "fresh" (already up to date)
+   */
+  async ensureIndexed(repositoryPath: string): Promise<{
+    status: "indexed" | "reindexed" | "fresh";
+    result?: IndexResult;
+  }> {
+    const repoName = this.getRepoName(repositoryPath);
+
+    // Check if repository exists in the graph
+    const repos = await this.deps.graphRepository.listRepositories();
+    const exists = repos.some((r) => r.name === repoName);
+
+    if (!exists) {
+      this.logger.info(`Repository "${repoName}" not indexed yet — full indexing...`);
+      const result = await this.indexRepository(repositoryPath);
+      return { status: "indexed", result };
+    }
+
+    // Try git-based change detection
+    if (this.deps.gitAdapter) {
+      try {
+        const currentCommit = await this.deps.gitAdapter.getCurrentCommit(
+          repositoryPath,
+        );
+        const lastCommit = await this.deps.graphRepository.getLastIndexedCommit(
+          repoName,
+        );
+
+        if (lastCommit && currentCommit !== lastCommit) {
+          this.logger.info(
+            `Repository "${repoName}" has changes (${lastCommit.slice(0, 7)} → ${currentCommit.slice(0, 7)}) — incremental indexing...`,
+          );
+          const result = await this.incrementalIndex(
+            repositoryPath,
+            lastCommit,
+          );
+          return { status: "reindexed", result };
+        }
+      } catch {
+        // Git not available or error reading commits — fall through to fresh
+        this.logger.debug(
+          `Could not detect git changes for "${repoName}", assuming fresh`,
+        );
+        return { status: "fresh" };
+      }
+    }
+
+    return { status: "fresh" };
   }
 
   // ============================================================
