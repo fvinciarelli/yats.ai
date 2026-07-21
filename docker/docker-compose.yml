@@ -43,16 +43,15 @@ services:
       - "6334:6334"
     volumes:
       - qdrant-storage:/qdrant/storage
-      - ./qdrant/config.yaml:/qdrant/config/production.yaml:ro
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
       - QDRANT__SERVICE__HTTP_PORT=6333
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 5s
     restart: unless-stopped
 
   # ============================================
