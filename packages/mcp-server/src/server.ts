@@ -212,7 +212,7 @@ export class McpServer {
   private async startHttp(port: number): Promise<void> {
     this.running = true;
 
-    const server = http.createServer((req, res) => {
+    const server = http.createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
       // CORS headers for browser-based MCP clients
@@ -234,6 +234,36 @@ export class McpServer {
           transport: "http+sse",
           sessions: this.sessions.size,
         }));
+        return;
+      }
+
+      // Streamable HTTP — MCP transport used by Copilot, VS Code
+      if (url.pathname === "/mcp") {
+        if (req.method === "GET" || req.method === "DELETE") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "ok" }));
+          return;
+        }
+        if (req.method === "POST") {
+          const body = await this.readBody(req);
+          try {
+            const request = JSON.parse(body) as JsonRpcRequest;
+            const response = await this.handleRequest(request);
+            if (response) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(response));
+            } else {
+              res.writeHead(202);
+              res.end();
+            }
+          } catch {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ jsonrpc: "2.0", id: 0, error: { code: -32700, message: "Parse error" } }));
+          }
+          return;
+        }
+        res.writeHead(405);
+        res.end();
         return;
       }
 
