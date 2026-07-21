@@ -68,11 +68,11 @@ const EMBEDDED_COMPOSE = `services:
       - QDRANT__SERVICE__GRPC_PORT=6334
       - QDRANT__SERVICE__HTTP_PORT=6333
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 5s
     restart: unless-stopped
   __OLLAMA_PLACEHOLDER__
   yats:
@@ -263,6 +263,16 @@ async function checkPort(port) {
   });
 }
 
+async function checkYatsRunning() {
+  return new Promise((resolve) => {
+    const proc = spawn("docker", ["ps", "--format", "{{.Names}}", "--filter", "name=yats"], { stdio: "pipe" });
+    let out = "";
+    proc.stdout.on("data", (d) => (out += d));
+    proc.on("close", () => resolve(out.trim().length > 0));
+    proc.on("error", () => resolve(false));
+  });
+}
+
 // ============================================================
 // Compose file generation
 // ============================================================
@@ -438,6 +448,19 @@ async function main() {
   // Install
   console.log("");
   step(`${D}Installing${R}`);
+
+  // Check for existing YATS containers
+  const existingContainers = await checkYatsRunning();
+  if (existingContainers) {
+    console.log(`  ${Y}YATS containers are already running.${R}`);
+    console.log("");
+    console.log(`  To start fresh, run this first ${B}(destroys all indexed data):${R}`);
+    console.log(`  ${C}docker compose -f ~/.yats/docker-compose.yml down -v${R}`);
+    console.log("");
+    console.log(`  Then re-run ${B}npx yats-setup${R}`);
+    console.log("");
+    process.exit(0);
+  }
 
   // Create directories
   mkdirSync(YATS_DIR, { recursive: true });
