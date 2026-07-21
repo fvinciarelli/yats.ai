@@ -281,21 +281,16 @@ export class IndexerService implements Indexer {
 
     const result = await analyzer.analyze(filePath, content, repositoryName);
 
-    // Enrich symbols with full source snippets from the content we already have
-    const lines = content.split("\n");
-    for (const sym of result.symbols) {
-      const start = Math.max(0, sym.location.startLine - 1);
-      const end = Math.min(lines.length, sym.location.endLine + 10); // +10 lines after
-      sym.sourceSnippet = lines.slice(start, end).join("\n");
-      if (!sym.contentHash) sym.contentHash = hashContent(sym.sourceSnippet);
-    }
-
     // Remove old symbols for this file
     // (implemented via Neo4j query)
     await this.removeFileSymbols(repositoryName, filePath);
 
     // Store new symbols
     if (result.symbols.length > 0) {
+      for (const sym of result.symbols) {
+        if (!sym.contentHash) sym.contentHash = hashContent(sym.sourceSnippet || "");
+      }
+
       const texts = result.symbols.map((s) => this.buildEmbeddingText(s));
       const vectors = await this.deps.embeddingGenerator.embedBatch(texts);
 
