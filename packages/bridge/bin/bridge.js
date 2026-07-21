@@ -36,7 +36,7 @@ async function getSession() {
     if (match) {
       const endpoint = match[1];
       sessionId = new URL(endpoint, baseUrl).searchParams.get("sessionId");
-      sseBuffer = sseBuffer.slice(match.index! + match[0].length);
+      sseBuffer = sseBuffer.slice(match.index + match[0].length);
       break;
     }
   }
@@ -95,4 +95,7 @@ process.stdin.on("data", async (chunk) => {
   }
 });
 
-process.stdin.on("end", () => process.exit(0));
+process.stdin.on("end", () => {
+  // Keep process alive briefly for pending SSE responses
+  setTimeout(() => process.exit(0), 2000);
+});
