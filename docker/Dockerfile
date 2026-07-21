@@ -90,13 +90,14 @@ COPY packages/analyzers/analyzer-treesitter/src packages/analyzers/analyzer-tree
 COPY packages/analyzers/analyzer-treesitter/tsconfig.json packages/analyzers/analyzer-treesitter/
 
 RUN pnpm build
-ENV CI=true
-RUN pnpm install --frozen-lockfile --prod
 
 # ============================================================
 # Stage 3: Runtime
 # ============================================================
 FROM node:22-alpine
+
+# curl needed for entrypoint health checks
+RUN apk add --no-cache curl
 
 # Optional: install PHP and Python runtimes for bridge scripts
 ARG INCLUDE_PHP=false
@@ -114,21 +115,8 @@ RUN addgroup -S yats && adduser -S yats -G yats
 
 WORKDIR /app
 
-# Copy Node.js built artifacts
-COPY --from=node-builder /app/node_modules ./node_modules
-COPY --from=node-builder /app/packages/shared/dist ./packages/shared/dist
-COPY --from=node-builder /app/packages/infra/dist ./packages/infra/dist
-COPY --from=node-builder /app/packages/indexing/dist ./packages/indexing/dist
-COPY --from=node-builder /app/packages/retrieval/dist ./packages/retrieval/dist
-COPY --from=node-builder /app/packages/mcp-server/dist ./packages/mcp-server/dist
-COPY --from=node-builder /app/packages/cli/dist ./packages/cli/dist
-COPY --from=node-builder /app/packages/analyzers/analyzer-interface/dist ./packages/analyzers/analyzer-interface/dist
-COPY --from=node-builder /app/packages/analyzers/analyzer-typescript/dist ./packages/analyzers/analyzer-typescript/dist
-COPY --from=node-builder /app/packages/analyzers/analyzer-go/dist ./packages/analyzers/analyzer-go/dist
-COPY --from=node-builder /app/packages/analyzers/analyzer-php/dist ./packages/analyzers/analyzer-php/dist
-COPY --from=node-builder /app/packages/analyzers/analyzer-python/dist ./packages/analyzers/analyzer-python/dist
-COPY --from=node-builder /app/packages/analyzers/analyzer-csharp/dist ./packages/analyzers/analyzer-csharp/dist
-COPY --from=node-builder /app/packages/analyzers/analyzer-treesitter/dist ./packages/analyzers/analyzer-treesitter/dist
+# Copy the entire app from builder (preserves pnpm workspace symlinks and nested node_modules)
+COPY --from=node-builder /app /app
 COPY --from=node-builder /app/pnpm-workspace.yaml ./
 COPY --from=node-builder /app/package.json ./
 
