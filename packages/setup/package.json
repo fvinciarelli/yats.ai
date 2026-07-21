@@ -1,0 +1,21 @@
+{
+  "name": "yats-setup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "YATS — Yet Another Token Saver. One-command setup wizard.",
+  "type": "module",
+  "bin": {
+    "yats-setup": "./bin/setup.js"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "scripts": {
+    "start": "node bin/setup.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
