@@ -83,6 +83,11 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        INCLUDE_GO: "${INCLUDE_GO:-true}"
+        INCLUDE_CSHARP: "${INCLUDE_CSHARP:-true}"
+        INCLUDE_PYTHON: "${INCLUDE_PYTHON:-false}"
+        INCLUDE_PHP: "${INCLUDE_PHP:-false}"
     image: yats:local
     ports:
       - "${YATS_PORT:-3000}:3000"

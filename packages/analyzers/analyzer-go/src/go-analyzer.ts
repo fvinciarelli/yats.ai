@@ -81,15 +81,18 @@ export class GoAnalyzer extends AbstractAnalyzer {
     filePath: string,
     repositoryName: string,
   ): Promise<AnalysisResult> {
+    // In Docker: use pre-compiled binary. In dev: use "go run".
+    const bridgeBin = process.env.YATS_GO_BRIDGE;
+    const fs = await import("node:fs");
+
+    const useBinary = bridgeBin && fs.existsSync(bridgeBin) && fs.statSync(bridgeBin).size > 0;
+    const cmd = useBinary ? bridgeBin : "go";
+    const args = useBinary
+      ? ["--file", filePath, "--repo", repositoryName]
+      : ["run", this.bridgePath, "--file", filePath, "--repo", repositoryName];
+
     return new Promise((resolve, reject) => {
-      const proc = spawn("go", [
-        "run",
-        this.bridgePath,
-        "--file",
-        filePath,
-        "--repo",
-        repositoryName,
-      ], {
+      const proc = spawn(cmd, args, {
         timeout: 30000,
         stdio: ["pipe", "pipe", "pipe"],
       });

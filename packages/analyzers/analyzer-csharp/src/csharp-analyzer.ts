@@ -81,17 +81,20 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
     filePath: string,
     repositoryName: string,
   ): Promise<AnalysisResult> {
+    // In Docker: use pre-compiled binary. In dev: use "dotnet run".
+    const bridgeBin = process.env.YATS_CSHARP_BRIDGE
+      ? `${process.env.YATS_CSHARP_BRIDGE}/RoslynAnalyzer`
+      : null;
+    const fs = await import("node:fs");
+
+    const useBinary = bridgeBin && fs.existsSync(bridgeBin) && fs.statSync(bridgeBin).size > 0;
+    const cmd = useBinary ? bridgeBin! : "dotnet";
+    const args = useBinary
+      ? ["--file", filePath, "--repo", repositoryName]
+      : ["run", "--project", this.bridgeDir, "--", "--file", filePath, "--repo", repositoryName];
+
     return new Promise((resolve, reject) => {
-      const proc = spawn("dotnet", [
-        "run",
-        "--project",
-        this.bridgeDir,
-        "--",
-        "--file",
-        filePath,
-        "--repo",
-        repositoryName,
-      ], {
+      const proc = spawn(cmd, args, {
         timeout: 60000,
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -108,13 +111,13 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
           return;
         }
         try {
-          // Strip build output from dotnet run (first lines before {)
-          const jsonStart = stdout.indexOf("{");
+          // With self-contained binary there's no build output
+          const jsonStart = useBinary ? 0 : stdout.indexOf("{");
           if (jsonStart === -1) {
             reject(new Error("C# bridge produced no valid JSON output"));
             return;
           }
-          const json = stdout.slice(jsonStart);
+          const json = useBinary ? stdout : stdout.slice(jsonStart);
           const result = JSON.parse(json) as CSharpBridgeResult;
           resolve({
             symbols: this.normalizeSymbols(result.symbols),
