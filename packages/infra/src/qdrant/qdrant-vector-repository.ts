@@ -148,7 +148,6 @@ export class QdrantVectorRepository implements VectorRepository {
     const results = await this.client.search(collection, {
       vector: queryVector,
       limit: limit + offset,
-      score_threshold: scoreThreshold,
       with_payload: true,
     });
 
@@ -214,7 +213,6 @@ export class QdrantVectorRepository implements VectorRepository {
       vector: queryVector,
       filter,
       limit: limit + offset,
-      score_threshold: scoreThreshold,
       with_payload: true,
     });
 

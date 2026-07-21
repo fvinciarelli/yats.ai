@@ -63,7 +63,14 @@ export class QdrantConnection {
     ]) {
       const config = getCollectionConfig(collectionName, vectorSizeOverride);
 
-      const exists = await client.collectionExists(collectionName);
+      let exists = false;
+      try {
+        const result = await client.collectionExists(collectionName);
+        exists = (result as any)?.exists ?? false;
+      } catch {
+        // collectionExists throws if collection doesn't exist
+        exists = false;
+      }
       if (!exists) {
         this.logger.info(
           `Creating collection "${collectionName}" (${config.vectorSize}d, ${config.distance})...`,
