@@ -12,4 +12,5 @@ packages:
   - "packages/analyzers/analyzer-python"
   - "packages/analyzers/analyzer-treesitter"
   - "packages/analyzers/analyzer-go"
+  - "packages/bridge"
   - "packages/setup"

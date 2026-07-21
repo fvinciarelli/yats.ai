@@ -1,0 +1,16 @@
+{
+  "name": "yats-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "YATS MCP stdio ↔ HTTP bridge — for agents that only support stdio (Copilot, Claude Desktop)",
+  "type": "module",
+  "bin": {
+    "yats-bridge": "./bin/bridge.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
