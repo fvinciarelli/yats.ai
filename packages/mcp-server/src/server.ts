@@ -44,12 +44,14 @@ export class McpServer {
   private readonly tools: ToolDefinition[];
   private readonly handlers: Map<string, ToolHandler>;
   private readonly logger: Logger;
+  private readonly indexer: McpDependencies["indexer"];
   private running = false;
 
   constructor(deps: McpDependencies) {
     this.logger = createLogger("mcp:server");
     this.tools = getAllToolDefinitions();
     this.handlers = createToolHandlers(deps);
+    this.indexer = deps.indexer;
   }
 
   // ==========================================================
@@ -247,6 +249,12 @@ export class McpServer {
         return;
       }
 
+      // Index endpoint — trigger indexing directly (used by setup wizard)
+      if (req.method === "POST" && url.pathname === "/index") {
+        this.handleIndex(req, res);
+        return;
+      }
+
       // 404
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "not found" }));
@@ -348,6 +356,27 @@ export class McpServer {
     // Acknowledge receipt
     res.writeHead(202, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ accepted: true }));
+  }
+
+  private async handleIndex(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = await this.readBody(req);
+    try {
+      const { path: repoPath } = JSON.parse(body);
+      if (!repoPath) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "path is required" }));
+        return;
+      }
+      const result = await this.indexer.ensureIndexed(repoPath);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
   }
 
   private readBody(req: http.IncomingMessage): Promise<string> {
