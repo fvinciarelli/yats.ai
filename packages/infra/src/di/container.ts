@@ -13,6 +13,8 @@ import { QdrantVectorRepository } from "../qdrant/qdrant-vector-repository.js";
 // Embeddings
 import { OllamaEmbeddingGenerator } from "../embeddings/ollama-embedding-generator.js";
 import { OpenAIEmbeddingGenerator } from "../embeddings/openai-embedding-generator.js";
+import { MistralEmbeddingGenerator } from "../embeddings/mistral-embedding-generator.js";
+import { VoyageEmbeddingGenerator } from "../embeddings/voyage-embedding-generator.js";
 
 // Storage & Git
 import { LocalFileSystem } from "../storage/local-file-system.js";
@@ -80,11 +82,20 @@ container.register(TOKENS.VECTOR_REPOSITORY, {
 container.register(TOKENS.EMBEDDING_GENERATOR, {
   useFactory: () => {
     const provider = process.env.EMBEDDING_PROVIDER ?? "ollama";
-    const openaiKey = process.env.OPENAI_API_KEY;
 
-    if (provider === "openai" && openaiKey) {
+    if (provider === "openai" && process.env.OPENAI_API_KEY) {
       logger.info("Using OpenAI for embeddings (text-embedding-3-small)");
-      return new OpenAIEmbeddingGenerator({ apiKey: openaiKey });
+      return new OpenAIEmbeddingGenerator({ apiKey: process.env.OPENAI_API_KEY });
+    }
+
+    if (provider === "mistral" && process.env.MISTRAL_API_KEY) {
+      logger.info("Using Mistral for embeddings (mistral-embed)");
+      return new MistralEmbeddingGenerator({ apiKey: process.env.MISTRAL_API_KEY });
+    }
+
+    if (provider === "voyage" && process.env.VOYAGE_API_KEY) {
+      logger.info("Using Voyage AI for embeddings (voyage-code-2)");
+      return new VoyageEmbeddingGenerator({ apiKey: process.env.VOYAGE_API_KEY });
     }
 
     logger.info("Using Ollama for embeddings (nomic-embed-text)");

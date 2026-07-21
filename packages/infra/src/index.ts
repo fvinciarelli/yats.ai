@@ -17,6 +17,10 @@ export { OllamaEmbeddingGenerator } from "./embeddings/ollama-embedding-generato
 export type { OllamaConfig } from "./embeddings/ollama-embedding-generator.js";
 export { OpenAIEmbeddingGenerator } from "./embeddings/openai-embedding-generator.js";
 export type { OpenAIConfig } from "./embeddings/openai-embedding-generator.js";
+export { MistralEmbeddingGenerator } from "./embeddings/mistral-embedding-generator.js";
+export type { MistralConfig } from "./embeddings/mistral-embedding-generator.js";
+export { VoyageEmbeddingGenerator } from "./embeddings/voyage-embedding-generator.js";
+export type { VoyageConfig } from "./embeddings/voyage-embedding-generator.js";
 
 // Storage
 export { LocalFileSystem } from "./storage/local-file-system.js";

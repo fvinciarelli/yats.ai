@@ -88,6 +88,8 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - OLLAMA_MODEL=__OLLAMA_MODEL__
       - OPENAI_API_KEY=__OPENAI_KEY__
+      - MISTRAL_API_KEY=__MISTRAL_KEY__
+      - VOYAGE_API_KEY=__VOYAGE_KEY__
       - REPOSITORIES_PATH=/repos
       - YATS_PORT=3000
       - LOG_LEVEL=info
@@ -232,7 +234,9 @@ function generateCompose(provider, ollamaModel, apiKey) {
   compose = compose
     .replace(/__PROVIDER__/g, provider)
     .replace(/__OLLAMA_MODEL__/g, ollamaModel)
-    .replace(/__OPENAI_KEY__/g, apiKey || "");
+    .replace(/__OPENAI_KEY__/g, provider === "openai" ? apiKey : "")
+    .replace(/__MISTRAL_KEY__/g, provider === "mistral" ? apiKey : "")
+    .replace(/__VOYAGE_KEY__/g, provider === "voyage" ? apiKey : "");
 
   return compose;
 }
@@ -292,6 +296,8 @@ async function main() {
   const provider = await choose(rl, "How should I generate embeddings for your code?", [
     { label: "Ollama (local, private, included) — recommended", value: "ollama" },
     { label: "OpenAI (cloud, needs API key)", value: "openai" },
+    { label: "Mistral (cloud, needs API key)", value: "mistral" },
+    { label: "Voyage AI (cloud, optimized for code, needs API key)", value: "voyage" },
   ]);
 
   let apiKey = "";
@@ -304,8 +310,9 @@ async function main() {
       { label: "mxbai-embed-large (1024d, more accurate, ~669MB)", value: "mxbai-embed-large" },
     ]);
   } else {
-    step("Step 2 — OpenAI API key");
-    apiKey = await ask(rl, `  ${B}Your OpenAI API key:${R} `);
+    const providerNames = { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
+    step(`Step 2 — ${providerNames[provider]} API key`);
+    apiKey = await ask(rl, `  ${B}Your ${providerNames[provider]} API key:${R} `);
     console.log("");
     console.log(`  ${Y}⚠${R}  This is a paid service — you may be charged for API usage.`);
     console.log("");
@@ -314,7 +321,9 @@ async function main() {
   // Step 3: Confirm
   step("Step 3 — Confirm");
 
-  const providerName = provider === "ollama" ? `Ollama (${ollamaModel})` : "OpenAI";
+  const providerName = provider === "ollama"
+    ? `Ollama (${ollamaModel})`
+    : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │                                                      │`);
   console.log(`  │  Provider:     ${providerName.padEnd(39)}│`);
