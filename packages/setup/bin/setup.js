@@ -194,7 +194,28 @@ async function choose(prompt, options) {
 
   const stdin = process.stdin;
   return new Promise((resolve) => {
-    try { stdin.setRawMode(true); } catch {}
+    let rawOk = true;
+    try { stdin.setRawMode(true); } catch { rawOk = false; }
+
+    if (!rawOk) {
+      // Fallback to plain readline (piped stdin, no TTY)
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const ask = () => {
+        rl.question(`  ${B}Pick [1-${options.length}]:${R} `, (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= options.length) {
+            rl.close();
+            console.log("");
+            resolve(options[num - 1].value);
+          } else {
+            console.log(`  ${RED}Invalid. Type 1-${options.length}.${R}\n`);
+            ask();
+          }
+        });
+      };
+      ask();
+      return;
+    }
 
     const onData = (key) => {
       const k = key.toString();
