@@ -54,11 +54,6 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     REPOSITORY_SUMMARY,
     ARCHITECTURE_SUMMARY,
     SEARCH_SIMILAR,
-    READ_FILE,
-    WRITE_FILE,
-    UPDATE_FILE,
-    DELETE_FILE,
-    CREATE_FILE,
     LIST_REPOSITORIES,
     INDEX_REPOSITORY,
   ];
@@ -702,71 +697,6 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     }
 
     return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-  });
-
-  // File operations — use cwd/repo_path as path for ensureRepoIndexed
-  handlers.set("read_file", async (args) => {
-    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
-    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
-    if ("content" in resolved) return resolved;
-
-    const fullPath = path.join(resolved.rootPath, args.path as string);
-    let content = await deps.fileSystem.readFile(fullPath);
-
-    const startLine = args.startLine as number | undefined;
-    const endLine = args.endLine as number | undefined;
-
-    if (startLine || endLine) {
-      const lines = content.split("\n");
-      const start = (startLine ?? 1) - 1;
-      const end = endLine ?? lines.length;
-      content = lines.slice(start, end).join("\n");
-    }
-
-    return { content: [{ type: "text", text: content }] };
-  });
-
-  handlers.set("write_file", async (args) => {
-    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
-    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
-    if ("content" in resolved) return resolved;
-
-    const fullPath = path.join(resolved.rootPath, args.path as string);
-    await deps.fileSystem.writeFile(fullPath, args.content as string);
-    return { content: [{ type: "text", text: `File written: ${args.path}` }] };
-  });
-
-  handlers.set("update_file", async (args) => {
-    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
-    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
-    if ("content" in resolved) return resolved;
-
-    const fullPath = path.join(resolved.rootPath, args.path as string);
-    await deps.fileSystem.updateFile(
-      fullPath,
-      (args.edits as Array<{ oldText: string; newText: string }>),
-    );
-    return { content: [{ type: "text", text: `File updated: ${args.path}` }] };
-  });
-
-  handlers.set("delete_file", async (args) => {
-    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
-    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
-    if ("content" in resolved) return resolved;
-
-    const fullPath = path.join(resolved.rootPath, args.path as string);
-    await deps.fileSystem.deleteFile(fullPath);
-    return { content: [{ type: "text", text: `File deleted: ${args.path}` }] };
-  });
-
-  handlers.set("create_file", async (args) => {
-    const repoPath = (args.cwd ?? args.repo_path) as string | undefined;
-    const resolved = await ensureRepoIndexed({ path: repoPath, repository: args.repository }, deps);
-    if ("content" in resolved) return resolved;
-
-    const fullPath = path.join(resolved.rootPath, args.path as string);
-    await deps.fileSystem.createFile(fullPath, args.content as string);
-    return { content: [{ type: "text", text: `File created: ${args.path}` }] };
   });
 
   // Repository management
