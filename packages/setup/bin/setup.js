@@ -132,12 +132,18 @@ const OLLAMA_SERVICE = `  ollama:
 // ============================================================
 
 function header() {
+  const W = 48; // inner width
+  const pad = (s) => {
+    const visible = s.replace(/\x1b\[[0-9;]*m/g, "").length;
+    return s + " ".repeat(Math.max(0, W - visible));
+  };
   console.log("");
-  console.log(`  ╔══════════════════════════════════════════════════╗`);
-  console.log(`  ║              ${B}YATS  Setup${R}                        ║`);
-  console.log(`  ║     ${D}Yet Another Token Saver${R}                      ║`);
-  console.log(`  ║     ${D}by Franco Vinciarelli${R}                        ║`);
-  console.log(`  ╚══════════════════════════════════════════════════╝`);
+  console.log(`  ╔${"═".repeat(W + 2)}╗`);
+  console.log(`  ║ ${pad(`${B}YATS  Setup${R}`)} ║`);
+  console.log(`  ║ ${" ".repeat(W)} ║`);
+  console.log(`  ║ ${pad(`${D}Yet Another Token Saver${R}`)} ║`);
+  console.log(`  ║ ${pad(`${D}by Franco Vinciarelli${R}`)} ║`);
+  console.log(`  ╚${"═".repeat(W + 2)}╝`);
   console.log("");
 }
 
@@ -159,22 +165,54 @@ function spinner(text) {
   };
 }
 
-// Numbered option selector — works in any terminal
-async function choose(rl, prompt, options) {
+// Selector with arrow keys AND number input — works in any terminal
+async function choose(prompt, options) {
   console.log(`  ${prompt}`);
   for (let i = 0; i < options.length; i++) {
     console.log(`    ${B}${i + 1}${R}. ${options[i].label}`);
   }
   console.log("");
 
-  while (true) {
-    const answer = await ask(rl, `  ${B}Enter a number (1-${options.length}):${R} `);
-    const num = parseInt(answer.trim(), 10);
-    if (num >= 1 && num <= options.length) {
-      return options[num - 1].value;
+  let selected = 0;
+
+  function render() {
+    for (let i = 0; i < options.length + 2; i++) process.stdout.write("\x1b[1A\x1b[2K");
+    console.log(`  ${prompt}`);
+    for (let i = 0; i < options.length; i++) {
+      const marker = i === selected ? `${C}▸${R}` : " ";
+      console.log(`    ${marker} ${B}${i + 1}${R}. ${options[i].label}`);
     }
-    console.log(`  ${RED}Invalid choice. Pick 1-${options.length}.${R}`);
+    console.log("");
   }
+
+  render();
+  console.log(`  ${D}↑/↓ arrows or type a number, Enter to select${R}`);
+
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw;
+  if (!wasRaw) stdin.setRawMode(true);
+
+  return new Promise((resolve) => {
+    let buf = "";
+    const onData = (key) => {
+      if (key === "\u001b[A") { selected = Math.max(0, selected - 1); render(); return; }
+      if (key === "\u001b[B") { selected = Math.min(options.length - 1, selected + 1); render(); return; }
+      if (key >= "0" && key <= "9") { buf += key; return; }
+      if (key === "\r" || key === "\n") {
+        if (buf) {
+          const num = parseInt(buf, 10);
+          if (num >= 1 && num <= options.length) selected = num - 1;
+        }
+        stdin.removeListener("data", onData);
+        if (!wasRaw) stdin.setRawMode(false);
+        console.log("");
+        resolve(options[selected].value);
+        return;
+      }
+      buf = "";
+    };
+    stdin.on("data", onData);
+  });
 }
 
 function divider() {
@@ -273,12 +311,10 @@ async function main() {
   console.log(`  ${G}✓${R} Docker found`);
   console.log("");
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-
   // Step 1: Embedding provider
   step("Step 1 — Embedding provider");
 
-  const provider = await choose(rl, "How should I generate embeddings for your code?", [
+  const provider = await choose("How should I generate embeddings for your code?", [
     { label: "Ollama (local, private, included) — recommended", value: "ollama" },
     { label: "OpenAI (cloud, needs API key)", value: "openai" },
     { label: "Mistral (cloud, needs API key)", value: "mistral" },
@@ -290,14 +326,16 @@ async function main() {
 
   if (provider === "ollama") {
     step("Step 2 — Ollama model");
-    ollamaModel = await choose(rl, "Which model?", [
+    ollamaModel = await choose("Which model?", [
       { label: "nomic-embed-text (768d, fast, ~274MB)", value: "nomic-embed-text" },
       { label: "mxbai-embed-large (1024d, more accurate, ~669MB)", value: "mxbai-embed-large" },
     ]);
   } else {
     const providerNames = { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
     step(`Step 2 — ${providerNames[provider]} API key`);
-    apiKey = await ask(rl, `  ${B}Your ${providerNames[provider]} API key:${R} `);
+    const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+    apiKey = await ask(rl2, `  ${B}Your ${providerNames[provider]} API key:${R} `);
+    rl2.close();
     console.log("");
     console.log(`  ${Y}⚠${R}  This is a paid service — you may be charged for API usage.`);
     console.log("");
@@ -317,16 +355,16 @@ async function main() {
   console.log(`  └──────────────────────────────────────────────────────┘`);
   console.log("");
 
-  const proceed = await ask(rl, `  ${B}Proceed? [Y/n]${R} `);
+  const proceed = await (() => {
+    const rl3 = createInterface({ input: process.stdin, output: process.stdout });
+    return ask(rl3, `  ${B}Proceed? [Y/n]${R} `).then((a) => { rl3.close(); return a; });
+  })();
   if (proceed.toLowerCase() === "n") {
     console.log("");
     console.log(`  Setup cancelled. Run ${B}npx yats-setup${R} anytime to try again.`);
     console.log("");
-    rl.close();
     process.exit(0);
   }
-
-  rl.close();
 
   // Step 4: Install
   console.log("");
