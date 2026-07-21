@@ -265,6 +265,14 @@ export class IndexerService implements Indexer {
     filePath: string,
   ): Promise<void> {
     const content = await this.deps.fileSystem.readFile(filePath);
+    return this.indexFileContent(repositoryName, filePath, content);
+  }
+
+  async indexFileContent(
+    repositoryName: string,
+    filePath: string,
+    content: string,
+  ): Promise<void> {
     const language = detectLanguage(filePath, content);
     if (!language) return;
 

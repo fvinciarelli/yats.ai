@@ -11,6 +11,7 @@ export interface IndexResult {
 export interface Indexer {
   indexRepository(repositoryPath: string): Promise<IndexResult>;
   indexFile(repositoryName: string, filePath: string): Promise<void>;
+  indexFileContent(repositoryName: string, filePath: string, content: string): Promise<void>;
   removeFile(repositoryName: string, filePath: string): Promise<void>;
   incrementalIndex(repositoryPath: string, sinceCommit: string): Promise<IndexResult>;
   indexDocumentation(repositoryPath: string): Promise<number>;

@@ -285,6 +285,12 @@ export class McpServer {
         return;
       }
 
+      // Index file endpoint — receive single file from thin CLI
+      if (req.method === "POST" && url.pathname === "/index/file") {
+        this.handleIndexFile(req, res);
+        return;
+      }
+
       // 404
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "not found" }));
@@ -403,6 +409,27 @@ export class McpServer {
       const result = await this.indexer.ensureIndexed(repoPath);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleIndexFile(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = await this.readBody(req);
+    try {
+      const { repoName, filePath, content } = JSON.parse(body);
+      if (!repoName || !filePath || content === undefined) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "repoName, filePath, and content are required" }));
+        return;
+      }
+      await this.indexer.indexFileContent(repoName, filePath, content);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, file: filePath }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));

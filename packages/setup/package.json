@@ -1,11 +1,11 @@
 {
-  "name": "yats-setup",
+  "name": "yats",
   "version": "0.1.0",
   "private": true,
-  "description": "YATS — Yet Another Token Saver. One-command setup wizard.",
+  "description": "YATS — Yet Another Token Saver. One-command setup, indexing, and MCP bridge.",
   "type": "module",
   "bin": {
-    "yats-setup": "./bin/setup.js"
+    "yats": "./bin/setup.js"
   },
   "files": [
     "bin/",

@@ -478,13 +478,14 @@ async function ensureRepoIndexed(
   return notIndexed(repoName as string);
 }
 
-/** Return a helpful "not indexed" message */
+/** Return a helpful "not indexed" message with the exact command */
 function notIndexed(hint?: string): ToolResult {
-  const name = hint || "this directory";
+  const name = hint || "this repository";
+  const cmd = `npx yats index ${name}`;
   return {
     content: [{
       type: "text",
-      text: `Repository "${name}" is not indexed yet. Call index_repository(path="${name}") first.`,
+      text: `Repository "${name}" is not indexed yet.\n\nRun this command to index it:\n  ${cmd}\n\nThen ask me again.`,
     }],
   };
 }
