@@ -165,7 +165,7 @@ function spinner(text) {
   };
 }
 
-// Simple numbered selector — works in every terminal, no exceptions
+// Selector: arrow keys to move + type a number + Enter to pick
 async function choose(prompt, options) {
   console.log(`  ${prompt}`);
   for (let i = 0; i < options.length; i++) {
@@ -173,17 +173,48 @@ async function choose(prompt, options) {
   }
   console.log("");
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  while (true) {
-    const answer = await new Promise((resolve) => rl.question(`  ${B}Pick [1-${options.length}]:${R} `, resolve));
-    const num = parseInt(answer.trim(), 10);
-    if (num >= 1 && num <= options.length) {
-      rl.close();
-      console.log("");
-      return options[num - 1].value;
+  let selected = 0;
+  let buf = "";
+
+  const render = () => {
+    // move up to the prompt line and clear everything below
+    const lines = options.length + 3;
+    for (let i = 0; i < lines; i++) process.stdout.write("\x1b[1A\x1b[2K");
+    console.log(`  ${prompt}`);
+    for (let i = 0; i < options.length; i++) {
+      const arrow = i === selected ? `${C}▸${R}` : " ";
+      console.log(`    ${arrow} ${B}${i + 1}${R}. ${options[i].label}`);
     }
-    console.log(`  ${RED}Invalid. Type 1-${options.length}.${R}\n`);
-  }
+    console.log("");
+    const hint = buf ? `  ${D}Selected: ${buf}. Press Enter to confirm, ↑/↓ to change${R}` : `  ${D}↑/↓ to move, or type a number, Enter to select${R}`;
+    console.log(hint);
+  };
+
+  render();
+
+  const stdin = process.stdin;
+  return new Promise((resolve) => {
+    try { stdin.setRawMode(true); } catch {}
+
+    const onData = (key) => {
+      const k = key.toString();
+      if (k === "\u001b[A" || k === "\u001bOA") { selected = Math.max(0, selected - 1); buf = ""; render(); return; }
+      if (k === "\u001b[B" || k === "\u001bOB") { selected = Math.min(options.length - 1, selected + 1); buf = ""; render(); return; }
+      if (k >= "0" && k <= "9") { buf += k; render(); return; }
+      if (k === "\r" || k === "\n") {
+        if (buf) { const n = parseInt(buf, 10); if (n >= 1 && n <= options.length) selected = n - 1; }
+        stdin.removeListener("data", onData);
+        try { stdin.setRawMode(false); } catch {}
+        console.log("");
+        resolve(options[selected].value);
+        return;
+      }
+      if (k === "\u0003") { try { stdin.setRawMode(false); } catch {} process.exit(0); }
+      buf = "";
+    };
+    stdin.resume();
+    stdin.on("data", onData);
+  });
 }
 
 function divider() {
