@@ -37,11 +37,10 @@ const C = "\x1b[36m";
 const RED = "\x1b[31m";
 
 // Minimal embedded docker-compose as fallback
-const EMBEDDED_COMPOSE = `version: "3.9"
-services:
+const EMBEDDED_COMPOSE = `services:
   neo4j:
     image: neo4j:5.26-community
-    ports: ["7474:7474", "7687:7687"]
+    expose: ["7474", "7687"]
     environment:
       - NEO4J_AUTH=neo4j/\${NEO4J_PASSWORD:-password}
       - NEO4J_apoc_export_file_enabled=true
@@ -62,7 +61,7 @@ services:
     restart: unless-stopped
   qdrant:
     image: qdrant/qdrant:latest
-    ports: ["6333:6333", "6334:6334"]
+    expose: ["6333", "6334"]
     volumes:
       - qdrant-storage:/qdrant/storage
     environment:
@@ -111,7 +110,7 @@ volumes:
 
 const OLLAMA_SERVICE = `  ollama:
     image: ollama/ollama:latest
-    ports: ["11434:11434"]
+    expose: ["11434"]
     volumes:
       - ollama-models:/root/.ollama
     environment:
