@@ -1,98 +1,267 @@
 #!/usr/bin/env node
+/**
+ * YATS Setup — One-command wizard to get YATS running on your machine.
+ *
+ * Usage:
+ *   npx yats-setup
+ *   curl -fsSL https://get.yats.site | bash
+ *
+ * Requirements: Docker (with compose plugin)
+ */
+
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { homedir, platform } from "node:os";
-import { join, dirname } from "node:path";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
-import * as readline from "node:readline";
 
 // ============================================================
-// YATS Setup Wizard
+// Constants
 // ============================================================
 
+const YATS_VERSION = "0.1.0";
 const YATS_DIR = join(homedir(), ".yats");
-const YATS_ENV = join(YATS_DIR, ".env");
-const YATS_CONFIG = join(YATS_DIR, "mcp-config.json");
 const REPOS_DIR = join(YATS_DIR, "repos");
+const COMPOSE_FILE = join(YATS_DIR, "docker-compose.yml");
+const MCP_CONFIG_FILE = join(YATS_DIR, "mcp-config.json");
 
-const DOCKER_COMPOSE_DIR = join(
-  dirname(new URL(import.meta.url).pathname),
-  "..",
-  "..",
-  "..",
-  "docker",
-);
+const GITHUB_COMPOSE_URL =
+  "https://raw.githubusercontent.com/fvinciarelli/yats/main/docker/docker-compose.yml";
 
-const BOLD = "\x1b[1m";
-const DIM = "\x1b[2m";
-const RESET = "\x1b[0m";
-const GREEN = "\x1b[32m";
-const YELLOW = "\x1b[33m";
-const CYAN = "\x1b[36m";
+const B = "\x1b[1m";
+const D = "\x1b[2m";
+const R = "\x1b[0m";
+const G = "\x1b[32m";
+const Y = "\x1b[33m";
+const C = "\x1b[36m";
 const RED = "\x1b[31m";
 
-function print(s) {
-  process.stdout.write(s);
-}
+// Minimal embedded docker-compose as fallback
+const EMBEDDED_COMPOSE = `version: "3.9"
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    ports: ["7474:7474", "7687:7687"]
+    environment:
+      - NEO4J_AUTH=neo4j/\${NEO4J_PASSWORD:-password}
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=1g
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | cypher-shell -u neo4j -p \${NEO4J_PASSWORD:-password} 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333", "6334:6334"]
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+  __OLLAMA_PLACEHOLDER__
+  yats:
+    image: ghcr.io/fvinciarelli/yats:latest
+    ports: ["\${YATS_PORT:-3000}:3000"]
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=\${NEO4J_PASSWORD:-password}
+      - QDRANT_URL=http://qdrant:6333
+      - EMBEDDING_PROVIDER=__PROVIDER__
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=__OLLAMA_MODEL__
+      - OPENAI_API_KEY=__OPENAI_KEY__
+      - REPOSITORIES_PATH=/repos
+      - YATS_PORT=3000
+      - LOG_LEVEL=info
+    volumes:
+      - \${REPOS_PATH:-~/.yats/repos}:/repos:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  neo4j-data:
+  neo4j-logs:
+  qdrant-storage:
+`;
+
+const OLLAMA_SERVICE = `  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 5
+        ollama pull __OLLAMA_MODEL__ 2>/dev/null || true
+        wait
+  ollama-models:
+`;
+
+// ============================================================
+// UI helpers
+// ============================================================
 
 function header() {
   console.log("");
   console.log(`  ╔══════════════════════════════════════════════════╗`);
-  console.log(`  ║              ${BOLD}YATS  Setup${RESET}                        ║`);
-  console.log(`  ║     ${DIM}Yet Another Token Saver${RESET}                      ║`);
-  console.log(`  ║     ${DIM}Index your code, talk to your AI${RESET}             ║`);
+  console.log(`  ║              ${B}YATS  Setup${R}                        ║`);
+  console.log(`  ║     ${D}Yet Another Token Saver${R}                      ║`);
+  console.log(`  ║     ${D}Index your code, talk to your AI${R}             ║`);
   console.log(`  ╚══════════════════════════════════════════════════╝`);
   console.log("");
 }
 
-async function ask(rl, question) {
-  return new Promise((resolve) => {
-    rl.question(question, resolve);
-  });
-}
-
-async function step(title) {
-  console.log(`  ${BOLD}${title}${RESET}`);
+function step(title) {
+  console.log(`  ${B}${title}${R}`);
   console.log("");
 }
 
+async function ask(rl, question) {
+  return new Promise((resolve) => rl.question(question, resolve));
+}
+
+function spinner(text) {
+  process.stdout.write(`  ${D}${text}${R}`);
+  return {
+    done: (ok = true) => {
+      process.stdout.write(`\r  ${ok ? `${G}✓${R}` : `${RED}✗${R}`} ${text}\n`);
+    },
+  };
+}
+
+// Simple arrow-key selector
 async function choose(rl, prompt, options) {
   console.log(`  ${prompt}`);
   for (let i = 0; i < options.length; i++) {
-    const marker = i === 0 ? `${CYAN}${BOLD}▸${RESET}` : " ";
-    console.log(`    ${marker} ${options[i].label}${i < options.length - 1 ? "" : ""}`);
+    const marker = i === 0 ? `${C}${B}▸${R}` : " ";
+    console.log(`    ${marker} ${options[i].label}`);
   }
   console.log("");
-  console.log(`  ${DIM}Use ↑/↓ arrows, Enter to select${RESET}`);
+  console.log(`  ${D}↑/↓ to move, Enter to select${R}`);
 
   let selected = 0;
   const stdin = process.stdin;
 
   return new Promise((resolve) => {
-    function onData(key) {
+    const onData = (key) => {
       if (key === "\u001b[A" || key === "\u001b[B") {
-        // Clear lines
-        for (let i = 0; i < options.length + 4; i++) {
-          process.stdout.write("\x1b[1A\x1b[2K");
-        }
-        if (key === "\u001b[A") selected = Math.max(0, selected - 1);
-        else selected = Math.min(options.length - 1, selected + 1);
+        for (let i = 0; i < options.length + 4; i++) process.stdout.write("\x1b[1A\x1b[2K");
+        selected = key === "\u001b[A" ? Math.max(0, selected - 1) : Math.min(options.length - 1, selected + 1);
         console.log(`  ${prompt}`);
         for (let i = 0; i < options.length; i++) {
-          const marker = i === selected ? `${CYAN}${BOLD}▸${RESET}` : " ";
-          console.log(`    ${marker} ${options[i].label}`);
+          console.log(`    ${i === selected ? `${C}${B}▸${RESET}` : " "} ${options[i].label}`);
         }
         console.log("");
-        console.log(`  ${DIM}Use ↑/↓ arrows, Enter to select${RESET}`);
+        console.log(`  ${D}↑/↓ to move, Enter to select${R}`);
       } else if (key === "\r" || key === "\n") {
         stdin.removeListener("data", onData);
         stdin.setRawMode(false);
         resolve(options[selected].value);
       }
-    }
+    };
     stdin.setRawMode(true);
     stdin.on("data", onData);
   });
+}
+
+function divider() {
+  console.log(`  ───────────────────────────────────────────────────────`);
+}
+
+// ============================================================
+// System checks
+// ============================================================
+
+async function checkDocker() {
+  return new Promise((resolve) => {
+    const proc = spawn("docker", ["info"], { stdio: "ignore" });
+    proc.on("close", (code) => resolve(code === 0));
+    proc.on("error", () => resolve(false));
+  });
+}
+
+async function checkPort(port) {
+  return new Promise((resolve) => {
+    const proc = spawn("docker", ["ps", "--format", "{{.Ports}}"], { stdio: "pipe" });
+    let out = "";
+    proc.stdout.on("data", (d) => (out += d));
+    proc.on("close", () => resolve(out.includes(`:${port}->`)));
+    proc.on("error", () => resolve(false));
+  });
+}
+
+// ============================================================
+// Compose file generation
+// ============================================================
+
+function generateCompose(provider, ollamaModel, apiKey) {
+  let compose = EMBEDDED_COMPOSE;
+
+  if (provider === "ollama") {
+    compose = compose.replace("__OLLAMA_PLACEHOLDER__", OLLAMA_SERVICE.replace("__OLLAMA_MODEL__", ollamaModel));
+  } else {
+    compose = compose.replace("__OLLAMA_PLACEHOLDER__", "");
+  }
+
+  compose = compose
+    .replace(/__PROVIDER__/g, provider)
+    .replace(/__OLLAMA_MODEL__/g, ollamaModel)
+    .replace(/__OPENAI_KEY__/g, apiKey || "");
+
+  return compose;
+}
+
+// ============================================================
+// Docker operations
+// ============================================================
+
+function runCmd(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, { stdio: "inherit", ...opts });
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited with ${code}`))));
+    proc.on("error", reject);
+  });
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitForHealth(url, retries = 30, delay = 2000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) return true;
+    } catch {}
+    await sleep(delay);
+  }
+  return false;
 }
 
 // ============================================================
@@ -102,13 +271,26 @@ async function choose(rl, prompt, options) {
 async function main() {
   header();
 
+  // Check Docker
+  const hasDocker = await checkDocker();
+  if (!hasDocker) {
+    console.log(`  ${RED}✗ Docker is not installed or not running.${R}`);
+    console.log("");
+    console.log(`  Please install Docker Desktop from ${C}https://docker.com${R}`);
+    console.log(`  Then re-run:  ${B}npx yats-setup${R}`);
+    console.log("");
+    process.exit(1);
+  }
+  console.log(`  ${G}✓${R} Docker found`);
+  console.log("");
+
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   // Step 1: Embedding provider
-  await step("Step 1 — Embedding provider");
+  step("Step 1 — Embedding provider");
 
   const provider = await choose(rl, "How should I generate embeddings for your code?", [
-    { label: "Ollama (local, private, included)", value: "ollama" },
+    { label: "Ollama (local, private, included) — recommended", value: "ollama" },
     { label: "OpenAI (cloud, needs API key)", value: "openai" },
   ]);
 
@@ -116,34 +298,36 @@ async function main() {
   let ollamaModel = "nomic-embed-text";
 
   if (provider === "ollama") {
-    await step("Step 2 — Ollama model");
+    step("Step 2 — Ollama model");
     ollamaModel = await choose(rl, "Which model?", [
-      { label: "nomic-embed-text (768d, fast, ~274MB) — recommended", value: "nomic-embed-text" },
+      { label: "nomic-embed-text (768d, fast, ~274MB)", value: "nomic-embed-text" },
       { label: "mxbai-embed-large (1024d, more accurate, ~669MB)", value: "mxbai-embed-large" },
     ]);
   } else {
-    await step("Step 2 — OpenAI API key");
-    apiKey = await ask(rl, `  ${BOLD}Your OpenAI API key:${RESET} `);
+    step("Step 2 — OpenAI API key");
+    apiKey = await ask(rl, `  ${B}Your OpenAI API key:${R} `);
     console.log("");
-    console.log(`  ${YELLOW}⚠${RESET}  This is a paid service. You may be charged for API usage.`);
+    console.log(`  ${Y}⚠${R}  This is a paid service — you may be charged for API usage.`);
     console.log("");
   }
 
   // Step 3: Confirm
-  await step("Step 3 — Confirm");
+  step("Step 3 — Confirm");
 
+  const providerName = provider === "ollama" ? `Ollama (${ollamaModel})` : "OpenAI";
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │                                                      │`);
-  console.log(`  │  Provider:     ${provider === "ollama" ? `Ollama (${ollamaModel})` : "OpenAI"}`);
-  console.log(`  │  Disk needed:   ${provider === "ollama" ? "~3GB" : "~1GB"}`);
+  console.log(`  │  Provider:     ${providerName.padEnd(39)}│`);
+  console.log(`  │  Disk needed:  ${(provider === "ollama" ? "~3GB" : "~1GB").padEnd(39)}│`);
   console.log(`  │                                                      │`);
   console.log(`  └──────────────────────────────────────────────────────┘`);
   console.log("");
 
-  const proceed = await ask(rl, `  ${BOLD}Proceed? [Y/n]${RESET} `);
+  const proceed = await ask(rl, `  ${B}Proceed? [Y/n]${R} `);
   if (proceed.toLowerCase() === "n") {
     console.log("");
-    console.log(`  Setup cancelled.`);
+    console.log(`  Setup cancelled. Run ${B}npx yats-setup${R} anytime to try again.`);
+    console.log("");
     rl.close();
     process.exit(0);
   }
@@ -152,61 +336,57 @@ async function main() {
 
   // Step 4: Install
   console.log("");
-  console.log(`  Step 4 — Installing`);
-  console.log("");
+  step("Step 4 — Installing");
 
-  // Create .yats directory
+  // Create directories
   mkdirSync(YATS_DIR, { recursive: true });
   mkdirSync(REPOS_DIR, { recursive: true });
 
-  // Write .env
-  const envContent = [
-    "# YATS environment",
-    `EMBEDDING_PROVIDER=${provider}`,
-    `OLLAMA_MODEL=${ollamaModel}`,
-    `NEO4J_PASSWORD=password`,
-    `REPOS_PATH=${REPOS_DIR}`,
-    `LOG_LEVEL=info`,
-    provider === "openai" ? `OPENAI_API_KEY=${apiKey}` : "",
-  ].filter(Boolean).join("\n");
-  writeFileSync(YATS_ENV, envContent);
+  // Generate and write docker-compose
+  const compose = generateCompose(provider, ollamaModel, apiKey);
+  writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
-  const mcpConfig = {
-    mcpServers: {
-      yats: {
-        url: "http://localhost:3000/mcp/sse",
-      },
-    },
-  };
-  writeFileSync(YATS_CONFIG, JSON.stringify(mcpConfig, null, 2));
+  const mcpConfig = { mcpServers: { yats: { url: "http://localhost:3000/mcp/sse" } } };
+  writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
-  // Start docker compose
-  console.log(`  ${DIM}Pulling Docker images...${RESET}`);
+  // Start services
+  const sPull = spinner("Pulling Docker images...");
+  try {
+    await runCmd("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d"]);
+    sPull.done(true);
+  } catch {
+    sPull.done(false);
+    console.log(`  ${RED}Failed to start Docker services. Check docker logs.${R}`);
+    process.exit(1);
+  }
 
-  const profile = provider === "ollama" ? "ollama" : "";
-  const composeArgs = ["compose", "-f", join(DOCKER_COMPOSE_DIR, "docker-compose.yml")];
-  if (profile) composeArgs.push("--profile", profile);
-  composeArgs.push("up", "-d");
+  const sWait = spinner("Waiting for databases...");
+  const neo4jOk = await waitForHealth("http://localhost:7474", 20, 3000);
+  if (!neo4jOk) {
+    sWait.done(false);
+    console.log(`  ${Y}Neo4j is taking longer than expected... continuing anyway.${R}`);
+  } else {
+    sWait.done(true);
+  }
 
-  await runCommand("docker", composeArgs, {
-    env: { ...process.env, YATS_ENV_FILE: YATS_ENV },
-  });
+  const sServer = spinner("Starting YATS server...");
+  const yatsOk = await waitForHealth("http://localhost:3000/health", 30, 2000);
+  sServer.done(yatsOk);
 
-  console.log(`  ${GREEN}✓${RESET} Docker started`);
-  console.log(`  ${DIM}Waiting for services...${RESET}`);
-  await sleep(3000);
-
-  // Wait for health
-  await waitForHealth();
-
-  console.log("");
+  if (!yatsOk) {
+    console.log("");
+    console.log(`  ${Y}⚠ Server still warming up.${R} It'll be ready shortly.`);
+    console.log(`  Check: ${C}docker compose -f ${COMPOSE_FILE} logs yats${R}`);
+    console.log("");
+  }
 
   // Done
-  console.log(`  ✅  ${GREEN}YATS is ready!${RESET}`);
   console.log("");
+  console.log(`  ✅  ${G}YATS is ready!${R}`);
+  divider();
   console.log("");
-  console.log(`  Add this to your AI agent configuration:`);
+  console.log(`  MCP configuration for your AI agent:`);
   console.log("");
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │  {                                                   │`);
@@ -218,55 +398,28 @@ async function main() {
   console.log(`  │  }                                                   │`);
   console.log(`  └──────────────────────────────────────────────────────┘`);
   console.log("");
-  console.log(`  ${GREEN}[✓ Copied to clipboard]${RESET}`);
+  console.log(`  Config saved to ${C}${MCP_CONFIG_FILE}${R}`);
+  divider();
   console.log("");
-  console.log(`  Config saved to ${YATS_CONFIG}`);
+  console.log(`  ${B}How it works:${R}`);
   console.log("");
-  console.log(`  ───────────────────────────────────────────────────────`);
+  console.log(`    Just ask your AI agent about your code.`);
+  console.log(`    The index builds automatically on the first search.`);
   console.log("");
-  console.log(`  How it works:`);
+  console.log(`    Example: "${D}how does authentication work in my project?${R}"`);
   console.log("");
-  console.log(`    Just ask your AI agent about your code. The index`);
-  console.log(`    builds automatically the first time you search.`);
+  console.log(`  ${B}Commands:${R}`);
+  console.log(`    yats add ~/work/project    Add a repo to index`);
+  console.log(`    yats status                Check what's indexed`);
+  console.log(`    yats stop                  Stop all services`);
+  console.log(`    yats update                Update to latest version`);
   console.log("");
-  console.log(`    Example: "how does authentication work in this project?"`);
+  console.log(`  Docs: ${C}https://yats.site${R}`);
   console.log("");
-  console.log(`    Add repos:  ${BOLD}yats add ~/work/my-project${RESET}`);
-  console.log("");
-  console.log(`  Docs: ${CYAN}https://yats.site${RESET}`);
-  console.log("");
-}
-
-function runCommand(cmd, args, opts = {}) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { stdio: "inherit", ...opts });
-    proc.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${cmd} exited with ${code}`));
-    });
-    proc.on("error", reject);
-  });
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForHealth() {
-  for (let i = 0; i < 30; i++) {
-    try {
-      const resp = await fetch("http://localhost:3000/health");
-      if (resp.ok) {
-        console.log(`  ${GREEN}✓${RESET} YATS server healthy`);
-        return;
-      }
-    } catch {}
-    await sleep(2000);
-  }
-  console.log(`  ${YELLOW}⚠${RESET} YATS server may still be starting...`);
 }
 
 main().catch((err) => {
-  console.error(`${RED}Error:${RESET} ${err.message}`);
+  console.error(`\n  ${RED}Error:${R} ${err.message}`);
+  console.error(`  If the problem persists, open an issue: ${C}https://github.com/fvinciarelli/yats/issues${R}\n`);
   process.exit(1);
 });
