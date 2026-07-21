@@ -21,6 +21,9 @@ const EXTENSION_MAP: Record<string, Language> = {
   ".pyi": Language.PYTHON,
   ".pyx": Language.PYTHON,
   ".pyw": Language.PYTHON,
+  ".go": Language.GO,
+  ".java": Language.JAVA,
+  ".jar": Language.JAVA,
 };
 
 const SHEBANG_MAP: Record<string, Language> = {

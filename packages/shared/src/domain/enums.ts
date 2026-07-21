@@ -105,15 +105,11 @@ export enum RelationshipKind {
 
 export enum Language {
   CSHARP = "csharp",
+  GO = "go",
+  JAVA = "java",
   PHP = "php",
   PYTHON = "python",
   TYPESCRIPT = "typescript",
-  // Future:
-  // GO = "go",
-  // RUST = "rust",
-  // JAVA = "java",
-  // KOTLIN = "kotlin",
-  // RUBY = "ruby",
 }
 
 // ============================================================

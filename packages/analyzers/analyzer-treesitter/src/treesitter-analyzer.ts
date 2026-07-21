@@ -34,6 +34,8 @@ const EXT_LANG_MAP: Record<string, Language> = {
   ".php": Language.PHP,
   ".py": Language.PYTHON,
   ".pyi": Language.PYTHON,
+  ".go": Language.GO,
+  ".java": Language.JAVA,
 };
 
 const ALL_EXTENSIONS = new Set(Object.keys(EXT_LANG_MAP));
@@ -95,6 +97,8 @@ export class TreeSitterAnalyzer extends AbstractAnalyzer {
       [Language.PYTHON]: "tree-sitter-python",
       [Language.PHP]: "tree-sitter-php",
       [Language.CSHARP]: "tree-sitter-c-sharp",
+      [Language.GO]: "tree-sitter-go",
+      [Language.JAVA]: "tree-sitter-java",
     };
 
     const pkgName = grammarMap[language];
@@ -198,8 +202,8 @@ export class TreeSitterAnalyzer extends AbstractAnalyzer {
       }));
     }
 
-    // Function/method definitions
-    const funcRe = /(?:function|def|async function)\s+(\w+)\s*\(/g;
+    // Function/method definitions (includes Go's "func" keyword)
+    const funcRe = /(?:func|function|def|async function|public\s+(?:static\s+)?(?:void|int|String|boolean|long|double|float)\s+|private\s+(?:static\s+)?(?:void|int|String|boolean|long|double|float)\s+|protected\s+(?:static\s+)?(?:void|int|String|boolean|long|double|float)\s+)\s*(\w+)\s*\(/g;
     while ((match = funcRe.exec(content)) !== null) {
       const name = match[1]!;
       const id = createSymbolId(repositoryName, filePath, `${namespace}.${name}`);
@@ -301,6 +305,19 @@ export class TreeSitterAnalyzer extends AbstractAnalyzer {
         (interface_declaration name: (name) @interface)
         (function_definition name: (name) @function)
         (method_declaration name: (name) @method)
+      `,
+      [Language.GO]: `
+        (type_declaration (type_spec name: (type_identifier) @class))
+        (function_declaration name: (identifier) @function)
+        (method_declaration name: (field_identifier) @method)
+        (import_declaration) @import
+      `,
+      [Language.JAVA]: `
+        (class_declaration name: (identifier) @class)
+        (interface_declaration name: (identifier) @interface)
+        (enum_declaration name: (identifier) @enum)
+        (method_declaration name: (identifier) @method)
+        (import_declaration) @import
       `,
     };
     return queries[language] ?? null;
