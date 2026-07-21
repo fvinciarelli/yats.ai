@@ -90,6 +90,7 @@ COPY packages/analyzers/analyzer-treesitter/src packages/analyzers/analyzer-tree
 COPY packages/analyzers/analyzer-treesitter/tsconfig.json packages/analyzers/analyzer-treesitter/
 
 RUN pnpm build
+ENV CI=true
 RUN pnpm install --frozen-lockfile --prod
 
 # ============================================================
