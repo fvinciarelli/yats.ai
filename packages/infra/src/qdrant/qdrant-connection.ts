@@ -1,5 +1,5 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
-import { createLogger, type Logger, CollectionName } from "@code-indexer/shared";
+import { createLogger, type Logger, CollectionName } from "@yats/shared";
 import { getCollectionConfig, type CollectionConfig } from "./collections.js";
 
 // ============================================================

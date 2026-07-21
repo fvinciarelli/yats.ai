@@ -1,8 +1,8 @@
 {
-  "name": "code-indexer",
+  "name": "yats",
   "version": "0.1.0",
   "private": true,
-  "description": "AI Code Intelligence Platform — index repositories, build knowledge graphs, expose MCP tools",
+  "description": "YATS — Yet Another Token Saver. Index your code, talk to your AI.",
   "scripts": {
     "build": "pnpm -r run build",
     "build:watch": "pnpm -r run build:watch",

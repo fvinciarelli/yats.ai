@@ -38,4 +38,4 @@ pnpm test             # Run all tests
 - Never modify `AI/` documentation unless explicitly asked.
 - When in doubt, read the relevant AI document before coding.
 - Follow the conventions in AI/conventions.md.
-- All interfaces are in `@code-indexer/shared` — implement, don't redefine.
+- All interfaces are in `@yats/shared` — implement, don't redefine.

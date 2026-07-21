@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import { watch, type FSWatcher } from "node:fs";
 
 // ============================================================

@@ -1,25 +1,25 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { Command } from "commander";
-import { createLogger } from "@code-indexer/shared";
-import { container, initializeConnections, shutdownConnections, TOKENS } from "@code-indexer/infra";
+import { createLogger } from "@yats/shared";
+import { container, initializeConnections, shutdownConnections, TOKENS } from "@yats/infra";
 import type {
   GraphRepository,
   VectorRepository,
   EmbeddingGenerator,
   FileSystem,
-} from "@code-indexer/shared";
-import { AnalyzerFactory } from "@code-indexer/analyzer-interface";
-import { TypeScriptAnalyzer } from "@code-indexer/analyzer-typescript";
-import { IndexerService } from "@code-indexer/indexing";
-import { RetrieverService } from "@code-indexer/retrieval";
-import { McpServer } from "@code-indexer/mcp-server";
+} from "@yats/shared";
+import { AnalyzerFactory } from "@yats/analyzer-interface";
+import { TypeScriptAnalyzer } from "@yats/analyzer-typescript";
+import { IndexerService } from "@yats/indexing";
+import { RetrieverService } from "@yats/retrieval";
+import { McpServer } from "@yats/mcp-server";
 
 const logger = createLogger("cli");
 const program = new Command();
 
 program
-  .name("code-indexer")
+  .name("yats")
   .description("AI Code Intelligence Platform — index, search, and understand codebases")
   .version("0.1.0");
 

@@ -1,7 +1,7 @@
-import type { Symbol, Relationship, SymbolKind, RelationshipKind } from "@code-indexer/shared";
-import type { GraphSymbol, Subgraph, RepositorySummary } from "@code-indexer/shared";
-import type { GraphRepository } from "@code-indexer/shared";
-import { createLogger, type Logger } from "@code-indexer/shared";
+import type { Symbol, Relationship, SymbolKind, RelationshipKind } from "@yats/shared";
+import type { GraphSymbol, Subgraph, RepositorySummary } from "@yats/shared";
+import type { GraphRepository } from "@yats/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import { Neo4jConnection } from "./neo4j-connection.js";
 
 // ============================================================

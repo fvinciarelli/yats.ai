@@ -1,4 +1,4 @@
-import type { RankedContextItem } from "@code-indexer/shared";
+import type { RankedContextItem } from "@yats/shared";
 
 // ============================================================
 // Token Budgeting — ensures results fit within context window

@@ -1,8 +1,8 @@
-import { Language, SymbolKind, RelationshipKind } from "@code-indexer/shared";
-import type { Symbol, Relationship, AnalysisResult } from "@code-indexer/shared";
-import { AbstractAnalyzer } from "@code-indexer/analyzer-interface";
-import { hashContent } from "@code-indexer/shared";
-import { createSymbolId } from "@code-indexer/shared";
+import { Language, SymbolKind, RelationshipKind } from "@yats/shared";
+import type { Symbol, Relationship, AnalysisResult } from "@yats/shared";
+import { AbstractAnalyzer } from "@yats/analyzer-interface";
+import { hashContent } from "@yats/shared";
+import { createSymbolId } from "@yats/shared";
 import * as path from "node:path";
 
 // ============================================================

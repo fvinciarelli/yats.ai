@@ -1,5 +1,5 @@
 import neo4j, { type Driver, type Session, type SessionMode, int } from "neo4j-driver";
-import { createLogger, type Logger } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
 
 /** Convert Neo4j Integer objects to plain JS numbers (recursive) */
 function toPlainObject(obj: any): any {

@@ -1,4 +1,4 @@
-// @code-indexer/infra — Infrastructure implementations
+// @yats/infra — Infrastructure implementations
 
 // Neo4j
 export { Neo4jConnection } from "./neo4j/neo4j-connection.js";

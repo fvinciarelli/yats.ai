@@ -1,4 +1,4 @@
-import type { Symbol, Relationship } from "@code-indexer/shared";
+import type { Symbol, Relationship } from "@yats/shared";
 
 // ============================================================
 // Symbol Differ — compares old and new symbol sets

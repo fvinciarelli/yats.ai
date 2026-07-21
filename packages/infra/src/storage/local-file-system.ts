@@ -1,5 +1,5 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
-import type { FileSystem, FileEdit } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
+import type { FileSystem, FileEdit } from "@yats/shared";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 

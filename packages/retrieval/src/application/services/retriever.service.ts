@@ -1,17 +1,17 @@
-import type { Symbol, RetrievalDebug } from "@code-indexer/shared";
+import type { Symbol, RetrievalDebug } from "@yats/shared";
 import type {
   RankedContextItem,
   RetrievalQuery,
   RetrievalResult,
   Retriever,
-} from "@code-indexer/shared";
+} from "@yats/shared";
 import type {
   GraphRepository,
   VectorRepository,
   EmbeddingGenerator,
-} from "@code-indexer/shared";
-import { CollectionName } from "@code-indexer/shared";
-import { createLogger, type Logger } from "@code-indexer/shared";
+} from "@yats/shared";
+import { CollectionName } from "@yats/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import { RankerService } from "./ranker.service.js";
 import { DeduplicatorService } from "./deduplicator.service.js";
 import { TokenBudgetService } from "./token-budget.service.js";

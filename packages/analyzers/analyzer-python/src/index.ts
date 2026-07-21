@@ -1,1 +1,1 @@
-// @code-indexer/analyzer-python
+// @yats/analyzer-python

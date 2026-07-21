@@ -1,5 +1,5 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
-import type { GitAdapter, ChangedFile, Watcher } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
+import type { GitAdapter, ChangedFile, Watcher } from "@yats/shared";
 import { execSync } from "node:child_process";
 
 // ============================================================

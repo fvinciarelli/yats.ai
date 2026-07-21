@@ -1,1 +1,1 @@
-// @code-indexer/analyzer-csharp
+// @yats/analyzer-csharp

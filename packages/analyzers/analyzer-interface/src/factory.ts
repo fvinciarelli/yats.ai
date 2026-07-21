@@ -1,5 +1,5 @@
-import { Language } from "@code-indexer/shared";
-import type { LanguageAnalyzer } from "@code-indexer/shared";
+import { Language } from "@yats/shared";
+import type { LanguageAnalyzer } from "@yats/shared";
 
 // ============================================================
 // Analyzer Factory — registers analyzers and dispatches by language

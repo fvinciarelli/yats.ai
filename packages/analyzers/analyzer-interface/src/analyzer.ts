@@ -1,7 +1,7 @@
-import type { LanguageAnalyzer, AnalysisResult, AnalysisError } from "@code-indexer/shared";
-import type { Symbol, Relationship } from "@code-indexer/shared";
-import { Language } from "@code-indexer/shared";
-import { createSymbolId } from "@code-indexer/shared";
+import type { LanguageAnalyzer, AnalysisResult, AnalysisError } from "@yats/shared";
+import type { Symbol, Relationship } from "@yats/shared";
+import { Language } from "@yats/shared";
+import { createSymbolId } from "@yats/shared";
 
 // ============================================================
 // Abstract base class for all language analyzers

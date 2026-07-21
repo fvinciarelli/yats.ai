@@ -1,6 +1,6 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
-import type { EmbeddingGenerator } from "@code-indexer/shared";
-import { Language } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
+import type { EmbeddingGenerator } from "@yats/shared";
+import { Language } from "@yats/shared";
 
 // ============================================================
 // OpenAI Embedding Generator

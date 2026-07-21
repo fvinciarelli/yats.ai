@@ -1,10 +1,10 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
-import type { IndexResult, GitAdapter, FileSystem, LanguageAnalyzer, GraphRepository, VectorRepository, EmbeddingGenerator } from "@code-indexer/shared";
-import { AnalyzerFactory } from "@code-indexer/analyzer-interface";
+import { createLogger, type Logger } from "@yats/shared";
+import type { IndexResult, GitAdapter, FileSystem, LanguageAnalyzer, GraphRepository, VectorRepository, EmbeddingGenerator } from "@yats/shared";
+import { AnalyzerFactory } from "@yats/analyzer-interface";
 import { SymbolDiffer } from "./symbol-differ.service.js";
 import { detectLanguage } from "../../infrastructure/language-detector.js";
-import { hashContent } from "@code-indexer/shared";
-import type { Symbol, Relationship } from "@code-indexer/shared";
+import { hashContent } from "@yats/shared";
+import type { Symbol, Relationship } from "@yats/shared";
 
 // ============================================================
 // Incremental Indexer — indexes only changed files

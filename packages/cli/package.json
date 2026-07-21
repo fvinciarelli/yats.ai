@@ -1,11 +1,11 @@
 {
-  "name": "@code-indexer/cli",
+  "name": "@yats/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "code-indexer": "./dist/index.js"
+    "yats": "./dist/index.js"
   },
   "types": "./dist/index.d.ts",
   "exports": {
@@ -23,13 +23,13 @@
     "test:coverage": "echo 'TODO'"
   },
   "dependencies": {
-    "@code-indexer/analyzer-interface": "workspace:^",
-    "@code-indexer/analyzer-typescript": "workspace:^",
-    "@code-indexer/indexing": "workspace:^",
-    "@code-indexer/infra": "workspace:^",
-    "@code-indexer/mcp-server": "workspace:^",
-    "@code-indexer/retrieval": "workspace:^",
-    "@code-indexer/shared": "workspace:*",
+    "@yats/analyzer-interface": "workspace:^",
+    "@yats/analyzer-typescript": "workspace:^",
+    "@yats/indexing": "workspace:^",
+    "@yats/infra": "workspace:^",
+    "@yats/mcp-server": "workspace:^",
+    "@yats/retrieval": "workspace:^",
+    "@yats/shared": "workspace:*",
     "chalk": "^5.6.2",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",

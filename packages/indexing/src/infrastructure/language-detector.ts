@@ -1,5 +1,5 @@
-import { Language } from "@code-indexer/shared";
-import type { LanguageAnalyzer } from "@code-indexer/shared";
+import { Language } from "@yats/shared";
+import type { LanguageAnalyzer } from "@yats/shared";
 
 // ============================================================
 // Language detection from file extensions and shebangs

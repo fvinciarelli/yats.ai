@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import type { ToolHandler, ToolResult } from "../tools/all-tools.js";
 
 // ============================================================

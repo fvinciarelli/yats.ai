@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { QdrantClient } from "@qdrant/js-client-rest";
-import { createLogger, type Logger } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import type {
   VectorRepository,
   VectorPoint,
   SearchHit,
   SearchOptions,
   VectorFilters,
-} from "@code-indexer/shared";
-import { CollectionName } from "@code-indexer/shared";
+} from "@yats/shared";
+import { CollectionName } from "@yats/shared";
 import { QdrantConnection } from "./qdrant-connection.js";
 
 // ============================================================

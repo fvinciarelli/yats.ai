@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { detectLanguage } from "./language-detector.js";

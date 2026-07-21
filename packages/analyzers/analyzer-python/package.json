@@ -1,5 +1,5 @@
 {
-  "name": "@code-indexer/analyzer-python",
+  "name": "@yats/analyzer-python",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,8 +20,8 @@
     "test:coverage": "echo 'TODO'"
   },
   "dependencies": {
-    "@code-indexer/analyzer-interface": "workspace:^",
-    "@code-indexer/shared": "workspace:*"
+    "@yats/analyzer-interface": "workspace:^",
+    "@yats/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

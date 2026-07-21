@@ -1,4 +1,4 @@
-// @code-indexer/shared — Domain models, enums, interfaces, and DTOs
+// @yats/shared — Domain models, enums, interfaces, and DTOs
 
 // Domain
 export * from "./domain/enums.js";

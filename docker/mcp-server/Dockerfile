@@ -50,7 +50,7 @@ RUN pnpm install --frozen-lockfile --prod
 # ============================================================
 FROM node:22-alpine
 
-RUN addgroup -S codeindexer && adduser -S codeindexer -G codeindexer
+RUN addgroup -S yats && adduser -S yats -G yats
 
 WORKDIR /app
 
@@ -68,7 +68,7 @@ COPY --from=builder /app/packages/analyzers/analyzer-typescript/dist ./packages/
 COPY --from=builder /app/pnpm-workspace.yaml ./
 COPY --from=builder /app/package.json ./
 
-USER codeindexer
+USER yats
 
 EXPOSE 3000
 

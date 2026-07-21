@@ -4,7 +4,7 @@
 FROM node:22-alpine
 
 RUN corepack enable && corepack prepare pnpm@9 --activate && \
-    addgroup -S codeindexer && adduser -S codeindexer -G codeindexer
+    addgroup -S yats && adduser -S yats -G yats
 
 WORKDIR /app
 
@@ -33,7 +33,7 @@ COPY packages/analyzers/analyzer-typescript/tsconfig.json packages/analyzers/ana
 RUN pnpm build && pnpm install --frozen-lockfile --prod
 RUN rm -rf packages/*/src packages/*/tsconfig.json
 
-USER codeindexer
+USER yats
 
 EXPOSE 3002
 

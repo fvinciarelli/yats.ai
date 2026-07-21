@@ -102,14 +102,14 @@ services:
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=codeindexer
+      - POSTGRES_USER=yats
       - POSTGRES_PASSWORD=${PG_PASSWORD:-password}
-      - POSTGRES_DB=codeindexer
+      - POSTGRES_DB=yats
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test:
-        ["CMD-SHELL", "pg_isready -U codeindexer -d codeindexer"]
+        ["CMD-SHELL", "pg_isready -U yats -d yats"]
       interval: 5s
       timeout: 3s
       retries: 5

@@ -1,7 +1,7 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
-import type { GraphRepository, VectorRepository, EmbeddingGenerator, FileSystem, Retriever, Indexer } from "@code-indexer/shared";
-import { Language, SymbolKind, RelationshipKind, CollectionName } from "@code-indexer/shared";
-import type { RankedContextItem, RetrievalQuery } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
+import type { GraphRepository, VectorRepository, EmbeddingGenerator, FileSystem, Retriever, Indexer } from "@yats/shared";
+import { Language, SymbolKind, RelationshipKind, CollectionName } from "@yats/shared";
+import type { RankedContextItem, RetrievalQuery } from "@yats/shared";
 import * as path from "node:path";
 
 // ============================================================

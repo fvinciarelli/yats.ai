@@ -1,4 +1,4 @@
-import type { RankedContextItem } from "@code-indexer/shared";
+import type { RankedContextItem } from "@yats/shared";
 
 // ============================================================
 // Deduplication — removes duplicate search results

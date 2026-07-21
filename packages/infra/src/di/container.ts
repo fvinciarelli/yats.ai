@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { container } from "tsyringe";
-import { createLogger } from "@code-indexer/shared";
+import { createLogger } from "@yats/shared";
 
 import { TOKENS } from "./tokens.js";
 

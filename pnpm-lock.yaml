@@ -20,7 +20,7 @@ importers:
 
   packages/analyzers/analyzer-csharp:
     dependencies:
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../../shared
     devDependencies:
@@ -36,7 +36,7 @@ importers:
 
   packages/analyzers/analyzer-interface:
     dependencies:
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../../shared
     devDependencies:
@@ -52,10 +52,10 @@ importers:
 
   packages/analyzers/analyzer-php:
     dependencies:
-      '@code-indexer/analyzer-interface':
+      '@yats/analyzer-interface':
         specifier: workspace:^
         version: link:../analyzer-interface
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../../shared
     devDependencies:
@@ -71,10 +71,10 @@ importers:
 
   packages/analyzers/analyzer-python:
     dependencies:
-      '@code-indexer/analyzer-interface':
+      '@yats/analyzer-interface':
         specifier: workspace:^
         version: link:../analyzer-interface
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../../shared
     devDependencies:
@@ -90,10 +90,10 @@ importers:
 
   packages/analyzers/analyzer-treesitter:
     dependencies:
-      '@code-indexer/analyzer-interface':
+      '@yats/analyzer-interface':
         specifier: workspace:^
         version: link:../analyzer-interface
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../../shared
     devDependencies:
@@ -109,10 +109,10 @@ importers:
 
   packages/analyzers/analyzer-typescript:
     dependencies:
-      '@code-indexer/analyzer-interface':
+      '@yats/analyzer-interface':
         specifier: workspace:^
         version: link:../analyzer-interface
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../../shared
     devDependencies:
@@ -128,25 +128,25 @@ importers:
 
   packages/cli:
     dependencies:
-      '@code-indexer/analyzer-interface':
+      '@yats/analyzer-interface':
         specifier: workspace:^
         version: link:../analyzers/analyzer-interface
-      '@code-indexer/analyzer-typescript':
+      '@yats/analyzer-typescript':
         specifier: workspace:^
         version: link:../analyzers/analyzer-typescript
-      '@code-indexer/indexing':
+      '@yats/indexing':
         specifier: workspace:^
         version: link:../indexing
-      '@code-indexer/infra':
+      '@yats/infra':
         specifier: workspace:^
         version: link:../infra
-      '@code-indexer/mcp-server':
+      '@yats/mcp-server':
         specifier: workspace:^
         version: link:../mcp-server
-      '@code-indexer/retrieval':
+      '@yats/retrieval':
         specifier: workspace:^
         version: link:../retrieval
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../shared
       chalk:
@@ -174,13 +174,13 @@ importers:
 
   packages/indexing:
     dependencies:
-      '@code-indexer/analyzer-interface':
+      '@yats/analyzer-interface':
         specifier: workspace:^
         version: link:../analyzers/analyzer-interface
-      '@code-indexer/infra':
+      '@yats/infra':
         specifier: workspace:^
         version: link:../infra
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../shared
     devDependencies:
@@ -196,12 +196,12 @@ importers:
 
   packages/infra:
     dependencies:
-      '@code-indexer/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@qdrant/js-client-rest':
         specifier: ^1.18.0
         version: 1.18.0(typescript@5.9.3)
+      '@yats/shared':
+        specifier: workspace:*
+        version: link:../shared
       neo4j-driver:
         specifier: ^6.2.0
         version: 6.2.0
@@ -224,21 +224,21 @@ importers:
 
   packages/mcp-server:
     dependencies:
-      '@code-indexer/indexing':
-        specifier: workspace:^
-        version: link:../indexing
-      '@code-indexer/infra':
-        specifier: workspace:^
-        version: link:../infra
-      '@code-indexer/retrieval':
-        specifier: workspace:^
-        version: link:../retrieval
-      '@code-indexer/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
+      '@yats/indexing':
+        specifier: workspace:^
+        version: link:../indexing
+      '@yats/infra':
+        specifier: workspace:^
+        version: link:../infra
+      '@yats/retrieval':
+        specifier: workspace:^
+        version: link:../retrieval
+      '@yats/shared':
+        specifier: workspace:*
+        version: link:../shared
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -255,10 +255,10 @@ importers:
 
   packages/retrieval:
     dependencies:
-      '@code-indexer/infra':
+      '@yats/infra':
         specifier: workspace:^
         version: link:../infra
-      '@code-indexer/shared':
+      '@yats/shared':
         specifier: workspace:*
         version: link:../shared
     devDependencies:

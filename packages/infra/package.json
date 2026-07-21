@@ -1,5 +1,5 @@
 {
-  "name": "@code-indexer/infra",
+  "name": "@yats/infra",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "test:coverage": "echo 'TODO'"
   },
   "dependencies": {
-    "@code-indexer/shared": "workspace:*",
+    "@yats/shared": "workspace:*",
     "@qdrant/js-client-rest": "^1.18.0",
     "neo4j-driver": "^6.2.0",
     "reflect-metadata": "^0.2.2",

@@ -1,5 +1,5 @@
 {
-  "name": "@code-indexer/mcp-server",
+  "name": "@yats/mcp-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,10 +20,10 @@
     "test:coverage": "echo 'TODO'"
   },
   "dependencies": {
-    "@code-indexer/indexing": "workspace:^",
-    "@code-indexer/infra": "workspace:^",
-    "@code-indexer/retrieval": "workspace:^",
-    "@code-indexer/shared": "workspace:*",
+    "@yats/indexing": "workspace:^",
+    "@yats/infra": "workspace:^",
+    "@yats/retrieval": "workspace:^",
+    "@yats/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   },

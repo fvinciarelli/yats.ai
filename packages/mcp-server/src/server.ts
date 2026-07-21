@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import {
   getAllToolDefinitions,
   createToolHandlers,
@@ -128,7 +128,7 @@ export class McpServer {
                 tools: {},
               },
               serverInfo: {
-                name: "code-indexer",
+                name: "yats",
                 version: "0.1.0",
               },
             },

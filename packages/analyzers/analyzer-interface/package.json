@@ -1,5 +1,5 @@
 {
-  "name": "@code-indexer/analyzer-interface",
+  "name": "@yats/analyzer-interface",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "test:coverage": "echo 'TODO'"
   },
   "dependencies": {
-    "@code-indexer/shared": "workspace:*"
+    "@yats/shared": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

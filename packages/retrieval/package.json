@@ -1,5 +1,5 @@
 {
-  "name": "@code-indexer/retrieval",
+  "name": "@yats/retrieval",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,8 +20,8 @@
     "test:coverage": "echo 'TODO'"
   },
   "dependencies": {
-    "@code-indexer/infra": "workspace:^",
-    "@code-indexer/shared": "workspace:*"
+    "@yats/infra": "workspace:^",
+    "@yats/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

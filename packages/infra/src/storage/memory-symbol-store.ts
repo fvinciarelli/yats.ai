@@ -1,4 +1,4 @@
-import type { SymbolStore, Symbol, Relationship } from "@code-indexer/shared";
+import type { SymbolStore, Symbol, Relationship } from "@yats/shared";
 
 /**
  * In-memory symbol store used during a single indexing run.

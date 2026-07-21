@@ -1,5 +1,5 @@
-import type { RankedContextItem } from "@code-indexer/shared";
-import { SymbolKind } from "@code-indexer/shared";
+import type { RankedContextItem } from "@yats/shared";
+import { SymbolKind } from "@yats/shared";
 
 // ============================================================
 // Context Compression — trims snippets to save tokens

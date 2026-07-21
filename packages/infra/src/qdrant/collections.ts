@@ -1,4 +1,4 @@
-import { CollectionName } from "@code-indexer/shared";
+import { CollectionName } from "@yats/shared";
 
 // ============================================================
 // Qdrant Collection Definitions

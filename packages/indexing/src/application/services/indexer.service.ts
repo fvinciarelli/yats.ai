@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from "@code-indexer/shared";
+import { createLogger, type Logger } from "@yats/shared";
 import type {
   Indexer,
   IndexResult,
@@ -10,12 +10,12 @@ import type {
   FileSystem,
   Symbol,
   Relationship,
-} from "@code-indexer/shared";
-import { AnalyzerFactory } from "@code-indexer/analyzer-interface";
-import { MemorySymbolStore } from "@code-indexer/infra";
+} from "@yats/shared";
+import { AnalyzerFactory } from "@yats/analyzer-interface";
+import { MemorySymbolStore } from "@yats/infra";
 import { FileWalker } from "../../infrastructure/file-walker.js";
 import { detectLanguage } from "../../infrastructure/language-detector.js";
-import { hashContent } from "@code-indexer/shared";
+import { hashContent } from "@yats/shared";
 
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline

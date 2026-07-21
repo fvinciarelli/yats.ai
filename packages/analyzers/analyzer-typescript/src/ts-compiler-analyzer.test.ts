@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { TypeScriptAnalyzer } from "./ts-compiler-analyzer.js";
-import { SymbolKind, RelationshipKind } from "@code-indexer/shared";
+import { SymbolKind, RelationshipKind } from "@yats/shared";
 
 const analyzer = new TypeScriptAnalyzer();
 
