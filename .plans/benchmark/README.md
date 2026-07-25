@@ -33,7 +33,9 @@ Copiá el archivo de `configs/` que corresponda:
 |--------|---------|---------|
 | Continue | `configs/continue-config.json` | `~/.continue/config.json` |
 | Cursor | `configs/cursor-mcp.json` | `~/.cursor/mcp.json` |
+| Codex | `configs/codex-mcp.json` | `.mcp.json` (en la raíz del proyecto) |
 | Claude Desktop | `configs/claude-desktop-config.json` | `~/.claude/claude_desktop_config.json` |
+| Claude CLI | `configs/claude-cli-config.sh` | Ejecutar `claude mcp add --transport sse yats http://localhost:5555/mcp/sse` |
 | Aider | `configs/aider-context.sh` | Ejecutar antes de iniciar Aider |
 
 ### Paso 2: Hacer las preguntas

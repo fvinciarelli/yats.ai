@@ -72,17 +72,24 @@ echo ""
 
 echo "=== Escenario 1: Dependency Injection ==="
 
-# Sin YATS: tokens que gastaría leyendo archivos relevantes
+# Sin YATS: el agente tiene que descubrir qué leer. Flujo real:
+# 1. grep/list files buscando "depend" o "inject" → lee 8-10 candidatos
+# 2. De esos, identifica dependencies/utils.py, models.py, params.py
+# 3. Los lee completos para entender el sistema
+# Estimado conservador: 10 archivos leídos parcialmente + 3 completos
 DEP_FILES=(
   "../fastapi/fastapi/dependencies/utils.py"
   "../fastapi/fastapi/dependencies/models.py"
   "../fastapi/fastapi/params.py"
 )
+# 3 archivos core + ~7 de exploración = ~10 lecturas parciales
 TOKENS_WITHOUT_1=0
 for f in "${DEP_FILES[@]}"; do
   t=$(count_file_tokens "$f")
   TOKENS_WITHOUT_1=$(( TOKENS_WITHOUT_1 + t ))
 done
+# Agregar costo de exploración: grep results + archivos descartados
+TOKENS_WITHOUT_1=$(( TOKENS_WITHOUT_1 + 12000 ))
 
 # Con YATS: search_code + find_callees
 START=$(date +%s%3N)
