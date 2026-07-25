@@ -77,9 +77,9 @@ export class IndexerService implements Indexer {
 
     // Provider-specific defaults
     const defaults: Record<string, { concurrency: number; embedBatch: number; batchAnalyzer: number }> = {
-      openai:   { concurrency: 16, embedBatch: 200, batchAnalyzer: 100 },
-      mistral:  { concurrency: 8,  embedBatch: 100, batchAnalyzer: 50  },
-      voyage:   { concurrency: 4,  embedBatch: 64,  batchAnalyzer: 50  },
+      openai:   { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
+      mistral:  { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
+      voyage:   { concurrency: 4,  embedBatch: 50,  batchAnalyzer: 50  },
       ollama:   { concurrency: 4,  embedBatch: 4,   batchAnalyzer: 50  },
     };
 
