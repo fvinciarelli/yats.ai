@@ -37,16 +37,61 @@ export class IndexerService implements Indexer {
   private readonly concurrency: number;
   private readonly embedBatchSize: number;
   private readonly pipelineChunkSize: number;
+  private readonly batchAnalyzerSize: number;
 
   constructor(
     private readonly deps: IndexerDependencies,
   ) {
     this.logger = createLogger("indexer:service");
-    this.concurrency = parseInt(process.env.INDEXER_CONCURRENCY ?? "8", 10);
-    this.embedBatchSize = parseInt(process.env.EMBEDDING_BATCH_SIZE ?? "50", 10);
-    // Pipeline chunk: how many symbols to accumulate before flushing to DB.
-    // Larger = fewer DB roundtrips but higher memory. 500 is a good balance.
-    this.pipelineChunkSize = parseInt(process.env.PIPELINE_CHUNK_SIZE ?? "500", 10);
+
+    // Resolve config with provider-aware defaults.
+    // Env vars override; without them, defaults adapt to the embedding provider.
+    const config = IndexerService.resolveConfig();
+    this.concurrency = config.concurrency;
+    this.embedBatchSize = config.embedBatchSize;
+    this.pipelineChunkSize = config.pipelineChunkSize;
+    this.batchAnalyzerSize = config.batchAnalyzerSize;
+
+    this.logger.info(
+      `Indexer config: provider=${config.provider}, concurrency=${this.concurrency}, ` +
+      `embedBatch=${this.embedBatchSize}, pipelineChunk=${this.pipelineChunkSize}, ` +
+      `batchAnalyzer=${this.batchAnalyzerSize}`,
+    );
+  }
+
+  /**
+   * Resolve indexing parameters with provider-aware defaults.
+   *
+   * Different embedding providers have different rate limits and performance
+   * characteristics. These defaults are tuned per provider. Env vars always
+   * take precedence for fine-tuning.
+   */
+  private static resolveConfig(): {
+    provider: string;
+    concurrency: number;
+    embedBatchSize: number;
+    pipelineChunkSize: number;
+    batchAnalyzerSize: number;
+  } {
+    const provider = process.env.EMBEDDING_PROVIDER ?? "ollama";
+
+    // Provider-specific defaults
+    const defaults: Record<string, { concurrency: number; embedBatch: number; batchAnalyzer: number }> = {
+      openai:   { concurrency: 16, embedBatch: 200, batchAnalyzer: 100 },
+      mistral:  { concurrency: 8,  embedBatch: 100, batchAnalyzer: 50  },
+      voyage:   { concurrency: 4,  embedBatch: 64,  batchAnalyzer: 50  },
+      ollama:   { concurrency: 4,  embedBatch: 4,   batchAnalyzer: 50  },
+    };
+
+    const def = defaults[provider] ?? defaults["ollama"]!;
+
+    return {
+      provider,
+      concurrency: parseInt(process.env.INDEXER_CONCURRENCY ?? String(def.concurrency), 10),
+      embedBatchSize: parseInt(process.env.EMBEDDING_BATCH_SIZE ?? String(def.embedBatch), 10),
+      pipelineChunkSize: parseInt(process.env.PIPELINE_CHUNK_SIZE ?? "500", 10),
+      batchAnalyzerSize: parseInt(process.env.BATCH_ANALYZER_SIZE ?? String(def.batchAnalyzer), 10),
+    };
   }
 
   // ============================================================
@@ -151,8 +196,8 @@ export class IndexerService implements Indexer {
 
       for (const [analyzer, group] of byAnalyzer) {
         if (analyzer.analyzeBatch) {
-          // Process in sub-batches to avoid overwhelming the subprocess
-          const BATCH_CHUNK = parseInt(process.env.BATCH_ANALYZER_SIZE ?? "50", 10);
+          // Process in sub-batches (provider-tuned via BATCH_ANALYZER_SIZE)
+          const BATCH_CHUNK = this.batchAnalyzerSize;
           for (let bi = 0; bi < group.length; bi += BATCH_CHUNK) {
             const subGroup = group.slice(bi, bi + BATCH_CHUNK);
             try {
