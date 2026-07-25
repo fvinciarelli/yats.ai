@@ -491,7 +491,7 @@ async function main() {
     }
     rlPort.close();
   }
-  console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp${R}`);
+  console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
   console.log("");
 
   // Step 5: Confirm
@@ -538,7 +538,7 @@ async function main() {
   writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
-  const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp` } } };
+  const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp/sse` } } };
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
   // Build the YATS Docker image (needed for yats:local)
@@ -622,7 +622,7 @@ async function main() {
   console.log(`  ┌──────────────────────────────────────────────────────┐`);
   console.log(`  │                                                      │`);
   console.log(`  │  ${B}For Cursor, Zed, Cline, Continue.dev, Roo Code:${R}     │`);
-  console.log(`  │  { "url": "http://localhost:${mcpPort}/mcp" }        │`);
+  console.log(`  │  { "url": "http://localhost:${mcpPort}/mcp/sse" }        │`);
   console.log(`  │                                                      │`);
   console.log(`  │  ${B}For Copilot, Claude Desktop (stdio only):${R}           │`);
   console.log(`  │  { "command": "npx", "args": ["yats-bridge"] }       │`);

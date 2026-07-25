@@ -1,7 +1,1 @@
-{
-  "mcpServers": {
-    "yats": {
-      "url": "http://localhost:5555/mcp"
-    }
-  }
-}
+{"mcpServers":{"yats":{"url":"http://localhost:5555/mcp/sse"}}}
