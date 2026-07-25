@@ -541,6 +541,7 @@ def main():
     parser = argparse.ArgumentParser(description="Python Code Indexer Bridge")
     parser.add_argument("--file", help="Analyze a single file by path")
     parser.add_argument("--stdin", action="store_true", help="Read source from stdin instead of file")
+    parser.add_argument("--batch", action="store_true", help="Read JSON batch from stdin: {files: [{path, source}], repo}")
     parser.add_argument("--file-path", default="", help="File path for symbol IDs (used with --stdin)")
     parser.add_argument("--dir", help="Analyze all .py files in a directory")
     parser.add_argument("--repo", default=os.path.basename(os.getcwd()), help="Repository name")
@@ -550,6 +551,18 @@ def main():
     all_symbols = []
     all_relationships = []
     all_errors = []
+
+    if args.batch:
+        batch_input = json.loads(sys.stdin.read())
+        repo = batch_input.get("repo", args.repo)
+        results = []
+        for file_entry in batch_input.get("files", []):
+            file_path = file_entry["path"]
+            source = file_entry["source"]
+            result = analyze_source(source, file_path, repo, "")
+            results.append(result)
+        print(json.dumps(results, indent=2, default=str))
+        return
 
     if args.stdin:
         source = sys.stdin.read()

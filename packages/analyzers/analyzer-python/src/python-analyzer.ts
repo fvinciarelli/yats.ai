@@ -62,7 +62,86 @@ export class PythonAnalyzer extends AbstractAnalyzer {
   }
 
   // ============================================================
-  // Python Bridge (subprocess)
+  // Batch analysis — single subprocess for multiple files
+  // ============================================================
+
+  async analyzeBatch(
+    files: Array<{ filePath: string; content: string }>,
+    repositoryName: string,
+  ): Promise<AnalysisResult[]> {
+    try {
+      return await this.analyzeBatchWithBridge(files, repositoryName);
+    } catch {
+      // Fallback: analyze one by one
+      const results: AnalysisResult[] = [];
+      for (const file of files) {
+        try {
+          results.push(await this.analyzeWithBridge(file.filePath, file.content, repositoryName));
+        } catch {
+          results.push(this.analyzeFallback(file.filePath, file.content, repositoryName));
+        }
+      }
+      return results;
+    }
+  }
+
+  private analyzeBatchWithBridge(
+    files: Array<{ filePath: string; content: string }>,
+    repositoryName: string,
+  ): Promise<AnalysisResult[]> {
+    return new Promise((resolve, reject) => {
+      const input = JSON.stringify({
+        files: files.map((f) => ({ path: f.filePath, source: f.content })),
+        repo: repositoryName,
+      });
+
+      const pyProc = spawn("python3", [
+        this.bridgePath,
+        "--batch",
+      ], {
+        timeout: 120000,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      pyProc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
+      pyProc.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
+
+      pyProc.stdin.write(input);
+      pyProc.stdin.end();
+
+      pyProc.on("close", (code: number) => {
+        if (code !== 0) {
+          reject(new Error(`Python batch bridge exited ${code}: ${stderr}`));
+          return;
+        }
+        try {
+          const results: any[] = JSON.parse(stdout);
+          resolve(results.map((r: any) => ({
+            symbols: (r.symbols ?? []).map((s: any) => this.normalizeSymbol(s)),
+            relationships: (r.relationships ?? []).map((rel: any) => ({
+              id: rel.id,
+              sourceSymbolId: rel.sourceSymbolId,
+              targetSymbolId: rel.targetSymbolId,
+              kind: rel.kind as RelationshipKind,
+              metadata: rel.metadata ?? {},
+            })),
+            errors: r.errors ?? [],
+            warnings: r.warnings ?? [],
+          })));
+        } catch (err: any) {
+          reject(new Error(`Bad batch bridge JSON: ${err.message}`));
+        }
+      });
+
+      pyProc.on("error", reject);
+    });
+  }
+
+  // ============================================================
+  // Python Bridge (subprocess) — single file
   // ============================================================
 
   private analyzeWithBridge(

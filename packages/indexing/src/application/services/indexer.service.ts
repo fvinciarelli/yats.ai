@@ -118,22 +118,106 @@ export class IndexerService implements Indexer {
     for (let i = 0; i < supportedFiles.length; i += this.concurrency) {
       const batch = supportedFiles.slice(i, i + this.concurrency);
 
-      // Analyze batch in parallel
-      const results = await Promise.allSettled(
+      // Group files by analyzer for potential batch processing
+      const byAnalyzer = new Map<LanguageAnalyzer, Array<{ file: typeof batch[0]; content: string }>>();
+
+      // Read all files in parallel
+      const reads = await Promise.allSettled(
         batch.map(async (file) => {
           const analyzer = this.deps.analyzerFactory.getAnalyzerForFile(file.relativePath);
-          if (!analyzer) return { errors: 0 };
-
+          if (!analyzer) return null;
           const content = await this.deps.fileSystem.readFile(file.absolutePath);
-          const result = await analyzer.analyze(file.relativePath, content, repoName);
+          return { analyzer, file, content };
+        }),
+      );
 
-          // Add symbols to accumulator
-          for (const symbol of result.symbols) {
+      for (const r of reads) {
+        if (r.status === "rejected" || !r.value) continue;
+        const { analyzer, file, content } = r.value;
+        let group = byAnalyzer.get(analyzer);
+        if (!group) {
+          group = [];
+          byAnalyzer.set(analyzer, group);
+        }
+        group.push({ file, content });
+      }
+
+      // Analyze each group — use batch when available
+      const allResults: Array<{
+        status: "fulfilled" | "rejected";
+        value?: { errors: number; symbols: Symbol[]; relationships: Relationship[] };
+        reason?: any;
+      }> = [];
+
+      for (const [analyzer, group] of byAnalyzer) {
+        if (analyzer.analyzeBatch) {
+          // Process in sub-batches to avoid overwhelming the subprocess
+          const BATCH_CHUNK = parseInt(process.env.BATCH_ANALYZER_SIZE ?? "50", 10);
+          for (let bi = 0; bi < group.length; bi += BATCH_CHUNK) {
+            const subGroup = group.slice(bi, bi + BATCH_CHUNK);
+            try {
+              const batchResults = await analyzer.analyzeBatch(
+                subGroup.map((g) => ({ filePath: g.file.relativePath, content: g.content })),
+                repoName,
+              );
+              for (const result of batchResults) {
+                allResults.push({
+                  status: "fulfilled",
+                  value: {
+                    errors: result.errors.length,
+                    symbols: result.symbols,
+                    relationships: result.relationships,
+                  },
+                });
+              }
+            } catch (err: any) {
+              // Batch failed — fall back to per-file for this sub-group
+              this.logger.warn(`Batch analysis failed for ${analyzer.language}: ${err.message}, falling back to per-file`);
+              for (const g of subGroup) {
+                try {
+                  const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
+                  allResults.push({
+                    status: "fulfilled",
+                    value: {
+                      errors: result.errors.length,
+                      symbols: result.symbols,
+                      relationships: result.relationships,
+                    },
+                  });
+                } catch (err2: any) {
+                  allResults.push({ status: "rejected", reason: err2 });
+                }
+              }
+            }
+          }
+        } else {
+          // Per-file analysis (no batch support)
+          const perFileResults = await Promise.allSettled(
+            group.map(async (g) => {
+              const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
+              return {
+                errors: result.errors.length,
+                symbols: result.symbols,
+                relationships: result.relationships,
+              };
+            }),
+          );
+          allResults.push(...perFileResults);
+        }
+      }
+
+      // Process results
+      for (const r of allResults) {
+        if (r.status === "rejected") {
+          totalErrors++;
+          this.logger.error(`File processing error: ${r.reason}`);
+        } else if (r.value) {
+          totalErrors += r.value.errors;
+          for (const symbol of r.value.symbols) {
             if (!symbol.contentHash) {
               symbol.contentHash = hashContent(symbol.sourceSnippet || "");
             }
             symbolStore.add(symbol);
-            // Lightweight entry for cross-file resolution
             symbolTableEntries.push({
               id: symbol.id,
               name: symbol.name,
@@ -141,20 +225,9 @@ export class IndexerService implements Indexer {
               relativePath: symbol.location.relativePath,
             });
           }
-          for (const rel of result.relationships) {
+          for (const rel of r.value.relationships) {
             allRelationships.push(rel);
           }
-
-          return { errors: result.errors.length };
-        }),
-      );
-
-      for (const r of results) {
-        if (r.status === "rejected") {
-          totalErrors++;
-          this.logger.error(`File processing error: ${r.reason}`);
-        } else if (r.value) {
-          totalErrors += r.value.errors;
         }
       }
 
