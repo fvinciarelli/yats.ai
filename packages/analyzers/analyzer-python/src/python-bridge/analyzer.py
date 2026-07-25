@@ -52,6 +52,31 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
         self.current_function = None
         self.namespace = os.path.splitext(self.relative_path.replace("/", "."))[0]
 
+    def _get_decorator_name(self, decorator) -> Optional[str]:
+        """Extract the full dotted decorator name, handling @app.get, @router.post, etc."""
+        deco = decorator.decorator
+        # Simple: @decorator or @decorator()
+        if hasattr(deco, 'value') and isinstance(deco.value, str):
+            name = deco.value
+            # If it's a call like @decorator(), deco is the Call, func is the Name
+            if hasattr(deco, 'func'):
+                func = deco.func
+                if hasattr(func, 'value'):
+                    name = func.value
+            return name
+        # Dotted: @app.get, @router.post()
+        if hasattr(deco, 'attr') and hasattr(deco, 'value'):
+            obj = deco.value.value if hasattr(deco.value, 'value') else str(deco.value)
+            attr = deco.attr.value if hasattr(deco.attr, 'value') else str(deco.attr)
+            return f"{obj}.{attr}"
+        # Call on dotted: @app.get("/path")
+        if hasattr(deco, 'func') and hasattr(deco.func, 'attr'):
+            func = deco.func
+            obj = func.value.value if hasattr(func.value, 'value') else str(func.value)
+            attr = func.attr.value if hasattr(func.attr, 'value') else str(func.attr)
+            return f"{obj}.{attr}"
+        return None
+
     def make_id(self, symbol_path: str) -> str:
         return f"{self.repo}::{self.relative_path}::{symbol_path}"
 
@@ -105,10 +130,12 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                     "metadata": {},
                 })
 
-        # Extract decorators
+        # Extract decorators on classes and attach to class metadata
+        class_decorators = []
         for decorator in node.decorators:
-            if hasattr(decorator.decorator, 'value'):
-                deco_name = decorator.decorator.value
+            deco_name = self._get_decorator_name(decorator)
+            if deco_name:
+                class_decorators.append(deco_name)
                 deco_id = self.make_id(f"{self.namespace}.{name}.@{deco_name}")
                 self.symbols.append({
                     "id": deco_id,
@@ -131,6 +158,11 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                     "kind": "DECORATES",
                     "metadata": {},
                 })
+
+        # Attach decorator names to the class symbol for convention detection
+        if class_decorators:
+            cls_symbol = self.symbols[-len(class_decorators) - 1]  # class is before its decorators
+            cls_symbol["metadata"]["decorators"] = class_decorators
 
         old_class = self.current_class
         self.current_class = name
@@ -194,10 +226,12 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                 "metadata": {},
             })
 
-        # Extract decorators on functions
+        # Extract decorators on functions and attach to function metadata
+        func_decorators = []
         for decorator in node.decorators:
-            if hasattr(decorator.decorator, 'value'):
-                deco_name = decorator.decorator.value
+            deco_name = self._get_decorator_name(decorator)
+            if deco_name:
+                func_decorators.append(deco_name)
                 deco_id = self.make_id(f"{self.namespace}.{qual_name}.@{deco_name}")
                 self.symbols.append({
                     "id": deco_id,
@@ -213,6 +247,11 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                     "contentHash": hashlib.sha256(f"@{deco_name}".encode()).hexdigest()[:64],
                     "metadata": {},
                 })
+
+        # Attach decorator names to the function symbol for convention detection
+        if func_decorators:
+            func_symbol = self.symbols[-len(func_decorators) - 1]  # function is before its decorators
+            func_symbol["metadata"]["decorators"] = func_decorators
 
         self.current_function = name
         return True
@@ -318,9 +357,24 @@ FRAMEWORK_DECORATORS = {
     "app.put": "route",
     "app.patch": "route",
     "app.delete": "route",
+    "app.head": "route",
+    "app.options": "route",
+    "app.websocket": "route",
     "router.get": "route",
     "router.post": "route",
+    "router.put": "route",
+    "router.patch": "route",
+    "router.delete": "route",
+    "router.head": "route",
+    "router.options": "route",
+    "router.websocket": "route",
     "route": "route",
+    "get": "route",
+    "post": "route",
+    "put": "route",
+    "patch": "route",
+    "delete": "route",
+    "websocket": "route",
     "dataclass": "dto",
     "dataclasses.dataclass": "dto",
     "pydantic": "dto",
