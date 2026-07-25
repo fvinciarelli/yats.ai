@@ -109,13 +109,8 @@ export class IndexerService implements Indexer {
     this.logger.info(`Indexing repository: ${repoName} at ${repositoryPath}`);
 
     // Track cumulative metrics
-    let totalSymbols = 0;
     let totalRelationships = 0;
-    let totalErrors = 0;
     let walkMs = 0;
-    let analyzeMs = 0;
-    let embedMs = 0;
-    let storeMs = 0;
     let docsMs = 0;
 
     // 0. Store repository metadata + capture git commit
@@ -149,26 +144,91 @@ export class IndexerService implements Indexer {
       });
     }
 
-    // 3. PIPELINE: analyze → accumulate → flush symbols now, batch relationships later
-    //    Symbols are embedded and stored in chunks as they accumulate.
-    //    Relationships are deferred until all symbols exist (cross-file refs).
-    //    We also build a lightweight table for cross-file reference resolution.
+    // 3. PRODUCER/CONSUMER PIPELINE
+    //    Analyzer (producer) pushes results to a queue.
+    //    Flusher (consumer) drains the queue and stores to DB.
+    //    Both run concurrently — flush doesn't block analysis.
     const analyzeStart = Date.now();
-    const symbolStore = new MemorySymbolStore();
     let allRelationships: Relationship[] = [];
-
-    // Lightweight accumulator for the global symbol table
     const symbolTableEntries: SymbolTableEntry[] = [];
 
-    for (let i = 0; i < supportedFiles.length; i += this.concurrency) {
-      const batch = supportedFiles.slice(i, i + this.concurrency);
+    // Shared queue between producer and consumer
+    type AnalysisBatch = { symbols: Symbol[]; relationships: Relationship[]; errors: number };
+    const resultQueue: AnalysisBatch[] = [];
+    let producerDone = false;
+    let consumerTotalSymbols = 0;
+    let consumerTotalErrors = 0;
+    let consumerEmbedMs = 0;
+    let consumerStoreMs = 0;
+    let lastFlushPct = 0;
 
+    // Consumer: drains the queue and flushes in chunks
+    const consumerPromise = (async () => {
+      const store = new MemorySymbolStore();
+
+      while (true) {
+        // Drain available results from the queue
+        while (resultQueue.length > 0) {
+          const batch = resultQueue.shift()!;
+          consumerTotalErrors += batch.errors;
+
+          for (const symbol of batch.symbols) {
+            if (!symbol.contentHash) {
+              symbol.contentHash = hashContent(symbol.sourceSnippet || "");
+            }
+            store.add(symbol);
+            symbolTableEntries.push({
+              id: symbol.id,
+              name: symbol.name,
+              namespace: symbol.namespace,
+              relativePath: symbol.location.relativePath,
+            });
+          }
+          for (const rel of batch.relationships) {
+            allRelationships.push(rel);
+          }
+        }
+
+        // Flush if enough symbols accumulated
+        const accumulated = store.getAll();
+        if (accumulated.length >= this.pipelineChunkSize) {
+          const flushResult = await this.flushSymbols(store, repoName);
+          consumerTotalSymbols += flushResult.symbols;
+          consumerEmbedMs += flushResult.embedMs;
+          consumerStoreMs += flushResult.storeMs;
+        }
+
+        // If producer is done and queue is empty, flush remaining and exit
+        if (producerDone && resultQueue.length === 0) {
+          const remaining = store.getAll();
+          if (remaining.length > 0) {
+            const flushResult = await this.flushSymbols(store, repoName);
+            consumerTotalSymbols += flushResult.symbols;
+            consumerEmbedMs += flushResult.embedMs;
+            consumerStoreMs += flushResult.storeMs;
+          }
+          return;
+        }
+
+        // Small delay to avoid busy-waiting when queue is empty
+        if (resultQueue.length === 0 && !producerDone) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+    })();
+
+    // Producer: process batches concurrently (limited by concurrency)
+    // Each batch pushes results to the shared queue when done.
+    // The consumer drains the queue independently in the background.
+    let batchesDispatched = 0;
+    const totalBatches = Math.ceil(supportedFiles.length / this.concurrency);
+
+    const processBatch = async (batchFiles: typeof supportedFiles) => {
       // Group files by analyzer for potential batch processing
-      const byAnalyzer = new Map<LanguageAnalyzer, Array<{ file: typeof batch[0]; content: string }>>();
+      const byAnalyzer = new Map<LanguageAnalyzer, Array<{ file: typeof batchFiles[0]; content: string }>>();
 
-      // Read all files in parallel
       const reads = await Promise.allSettled(
-        batch.map(async (file) => {
+        batchFiles.map(async (file) => {
           const analyzer = this.deps.analyzerFactory.getAnalyzerForFile(file.relativePath);
           if (!analyzer) return null;
           const content = await this.deps.fileSystem.readFile(file.absolutePath);
@@ -187,8 +247,7 @@ export class IndexerService implements Indexer {
         group.push({ file, content });
       }
 
-      // Analyze each group — use batch when available
-      const allResults: Array<{
+      const results: Array<{
         status: "fulfilled" | "rejected";
         value?: { errors: number; symbols: Symbol[]; relationships: Relationship[] };
         reason?: any;
@@ -196,7 +255,6 @@ export class IndexerService implements Indexer {
 
       for (const [analyzer, group] of byAnalyzer) {
         if (analyzer.analyzeBatch) {
-          // Process in sub-batches (provider-tuned via BATCH_ANALYZER_SIZE)
           const BATCH_CHUNK = this.batchAnalyzerSize;
           for (let bi = 0; bi < group.length; bi += BATCH_CHUNK) {
             const subGroup = group.slice(bi, bi + BATCH_CHUNK);
@@ -206,7 +264,7 @@ export class IndexerService implements Indexer {
                 repoName,
               );
               for (const result of batchResults) {
-                allResults.push({
+                results.push({
                   status: "fulfilled",
                   value: {
                     errors: result.errors.length,
@@ -216,12 +274,11 @@ export class IndexerService implements Indexer {
                 });
               }
             } catch (err: any) {
-              // Batch failed — fall back to per-file for this sub-group
               this.logger.warn(`Batch analysis failed for ${analyzer.language}: ${err.message}, falling back to per-file`);
               for (const g of subGroup) {
                 try {
                   const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
-                  allResults.push({
+                  results.push({
                     status: "fulfilled",
                     value: {
                       errors: result.errors.length,
@@ -230,13 +287,12 @@ export class IndexerService implements Indexer {
                     },
                   });
                 } catch (err2: any) {
-                  allResults.push({ status: "rejected", reason: err2 });
+                  results.push({ status: "rejected", reason: err2 });
                 }
               }
             }
           }
         } else {
-          // Per-file analysis (no batch support)
           const perFileResults = await Promise.allSettled(
             group.map(async (g) => {
               const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
@@ -247,60 +303,72 @@ export class IndexerService implements Indexer {
               };
             }),
           );
-          allResults.push(...perFileResults);
+          results.push(...perFileResults);
         }
       }
 
-      // Process results
-      for (const r of allResults) {
+      // Push results to queue for consumer (consumer is running in background)
+      let batchErrors = 0;
+      const batchSymbols: Symbol[] = [];
+      const batchRels: Relationship[] = [];
+
+      for (const r of results) {
         if (r.status === "rejected") {
-          totalErrors++;
+          batchErrors++;
           this.logger.error(`File processing error: ${r.reason}`);
         } else if (r.value) {
-          totalErrors += r.value.errors;
-          for (const symbol of r.value.symbols) {
-            if (!symbol.contentHash) {
-              symbol.contentHash = hashContent(symbol.sourceSnippet || "");
-            }
-            symbolStore.add(symbol);
-            symbolTableEntries.push({
-              id: symbol.id,
-              name: symbol.name,
-              namespace: symbol.namespace,
-              relativePath: symbol.location.relativePath,
-            });
-          }
-          for (const rel of r.value.relationships) {
-            allRelationships.push(rel);
-          }
+          batchErrors += r.value.errors;
+          batchSymbols.push(...r.value.symbols);
+          batchRels.push(...r.value.relationships);
         }
       }
 
-      // FLUSH: if accumulator has enough symbols, embed + store now (symbols only)
-      const accumulated = symbolStore.getAll();
-      if (accumulated.length >= this.pipelineChunkSize) {
-        const flushResult = await this.flushSymbols(symbolStore, repoName);
-        totalSymbols += flushResult.symbols;
-        embedMs += flushResult.embedMs;
-        storeMs += flushResult.storeMs;
+      resultQueue.push({ symbols: batchSymbols, relationships: batchRels, errors: batchErrors });
+      batchesDispatched++;
 
-        const pct = Math.round((i + batch.length) / supportedFiles.length * 100);
+      const pct = Math.round(batchesDispatched / totalBatches * 100);
+      if (pct >= lastFlushPct + 10) {
+        lastFlushPct = pct;
         this.logger.info(
-          `Pipeline flush at ${pct}%: ${totalSymbols} symbols, ` +
-          `${allRelationships.length} rels pending ` +
-          `(embed ${flushResult.embedMs}ms, store ${flushResult.storeMs}ms)`,
+          `Analysis ${pct}% — ${consumerTotalSymbols} symbols flushed so far`,
         );
+      }
+    };
+
+    // Dispatch batches with concurrency limit.
+    // Allow 2x concurrency so analysis overlaps with consumer flushing.
+    const maxConcurrent = this.concurrency * 2;
+    const inFlight: Promise<void>[] = [];
+
+    for (let i = 0; i < supportedFiles.length; i += this.concurrency) {
+      const batch = supportedFiles.slice(i, i + this.concurrency);
+
+      const task = processBatch(batch).then(() => {
+        // Remove self from inFlight when done
+        const idx = inFlight.indexOf(task);
+        if (idx >= 0) inFlight.splice(idx, 1);
+      });
+      inFlight.push(task);
+
+      // If at capacity, wait for any one to finish before dispatching more
+      if (inFlight.length >= maxConcurrent) {
+        await Promise.race(inFlight);
       }
     }
 
-    // Final flush — remaining symbols
-    const remaining = symbolStore.getAll();
-    if (remaining.length > 0) {
-      const flushResult = await this.flushSymbols(symbolStore, repoName);
-      totalSymbols += flushResult.symbols;
-      embedMs += flushResult.embedMs;
-      storeMs += flushResult.storeMs;
-    }
+    // Wait for all in-flight batches to complete
+    await Promise.all(inFlight);
+    producerDone = true;
+    const analyzeEnd = Date.now();
+
+    // Wait for consumer to finish processing remaining items
+    await consumerPromise;
+
+    const totalSymbols = consumerTotalSymbols;
+    const totalErrors = consumerTotalErrors;
+    const embedMs = consumerEmbedMs;
+    const storeMs = consumerStoreMs;
+    const analyzeMs = analyzeEnd - analyzeStart;
 
     // Resolve cross-file references before storing relationships
     if (allRelationships.length > 0) {
@@ -334,8 +402,6 @@ export class IndexerService implements Indexer {
         this.logger.error(`Failed to store relationships: ${err.message}`);
       }
     }
-
-    analyzeMs = Date.now() - analyzeStart;
 
     // 4. Await docs (running in parallel since step 2, or skipped if INDEX_DOCS=false)
     const docsStart = Date.now();
