@@ -1,0 +1,60 @@
+{
+  "benchmark": "YATS vs raw file reading",
+  "repository": "fastapi",
+  "timestamp": "2026-07-25T22:31:42+02:00",
+  "summary": {
+    "total_tokens_without_yats": 75396,
+    "total_tokens_with_yats": 13784,
+    "avg_token_savings_pct": 86,
+    "avg_latency_ms": 398
+  },
+  "scenarios": [
+    {
+      "id": 1,
+      "name": "Dependency Injection",
+      "tokens_without": 18788,
+      "tokens_with": 848,
+      "savings_pct": 95,
+      "latency_ms": 1175,
+      "quality_hint": "search_code devuelve Dependant/SolvedDependency; find_callees devuelve get_dependant→BackgroundTasks→FastAPI.get"
+    },
+    {
+      "id": 2,
+      "name": "Find Callers",
+      "tokens_without": 15000,
+      "tokens_with": 488,
+      "savings_pct": 96,
+      "latency_ms": 41,
+      "quality_hint": "find_callers devuelve _solve_dependencies, app, etc. con callers reales del grafo"
+    },
+    {
+      "id": 3,
+      "name": "Routes",
+      "tokens_without": 25000,
+      "tokens_with": 11606,
+      "savings_pct": 53,
+      "latency_ms": 27,
+      "quality_hint": "find_routes devuelve 100 rutas clasificadas con nombre, archivo y método HTTP"
+    },
+    {
+      "id": 4,
+      "name": "OAuth2 Relations",
+      "tokens_without": 9696,
+      "tokens_with": 823,
+      "savings_pct": 91,
+      "latency_ms": 567,
+      "quality_hint": "search_code OAuth2PasswordBearer (0.63) + expand_graph muestra 200 nodos conectados"
+    },
+    {
+      "id": 5,
+      "name": "WebSocket Tests",
+      "tokens_without": 6912,
+      "tokens_with": 19,
+      "savings_pct": 99,
+      "latency_ms": 182,
+      "quality_hint": "find_tests linkea tests con las funciones del router vía CALLS"
+    }
+  ],
+  "prompts_dir": ".plans/benchmark/prompts",
+  "agent_configs_dir": "configs/"
+}
