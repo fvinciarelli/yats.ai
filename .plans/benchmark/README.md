@@ -29,14 +29,15 @@ Latencia promedio MCP: **398ms**.
 
 Copiá el archivo de `configs/` que corresponda:
 
-| Agente | Archivo | Destino |
-|--------|---------|---------|
-| Continue | `configs/continue-config.json` | `~/.continue/config.json` |
-| Cursor | `configs/cursor-mcp.json` | `~/.cursor/mcp.json` |
-| Codex | `configs/codex-mcp.json` | `.mcp.json` (raíz del proyecto) |
-| Copilot | `configs/copilot-mcp.json` | `.vscode/mcp.json` (raíz del proyecto) |
-| Claude Desktop | `configs/claude-desktop-config.json` | `~/.claude/claude_desktop_config.json` |
-| Claude CLI | `configs/claude-cli-config.sh` | Ejecutar `claude mcp add --transport sse yats http://localhost:5555/mcp/sse` |
+| Agente | Archivo | MCP funcional? |
+|--------|---------|----------------|
+| Cursor | `configs/cursor-mcp.json` | ✅ Nativo |
+| Codex | `configs/codex-mcp.json` | ❓ Sin probar |
+| Copilot | `configs/copilot-mcp.json` | ❓ Sin probar |
+| Claude Desktop | `configs/claude-desktop-config.json` | ✅ Vía bridge |
+| Claude CLI | `configs/claude-cli-config.sh` | ✅ `claude mcp add` |
+| Aider | `configs/aider-context.sh` | ❌ Sin MCP nativo |
+| ~~Continue~~ | — | ❌ No inyecta MCP tools |
 | Aider | `configs/aider-context.sh` | Ejecutar antes de iniciar Aider |
 
 ### Paso 2: Hacer las preguntas
