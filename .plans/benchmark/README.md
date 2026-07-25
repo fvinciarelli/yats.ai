@@ -32,12 +32,10 @@ Copiá el archivo de `configs/` que corresponda:
 | Agente | Archivo | MCP funcional? |
 |--------|---------|----------------|
 | Cursor | `configs/cursor-mcp.json` | ✅ Nativo |
-| Codex | `configs/codex-mcp.json` | ❓ Sin probar |
-| Copilot | `configs/copilot-mcp.json` | ❓ Sin probar |
+| Codex | `configs/codex-mcp.json` | ✅ `.mcp.json` |
 | Claude Desktop | `configs/claude-desktop-config.json` | ✅ Vía bridge |
 | Claude CLI | `configs/claude-cli-config.sh` | ✅ `claude mcp add` |
 | Aider | `configs/aider-context.sh` | ❌ Sin MCP nativo |
-| ~~Continue~~ | — | ❌ No inyecta MCP tools |
 | Aider | `configs/aider-context.sh` | Ejecutar antes de iniciar Aider |
 
 ### Paso 2: Hacer las preguntas
