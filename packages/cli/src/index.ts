@@ -1,7 +1,7 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { Command } from "commander";
-import { createLogger } from "@yats/shared";
+import { createLogger, Language } from "@yats/shared";
 import { container, initializeConnections, shutdownConnections, TOKENS } from "@yats/infra";
 import type {
   GraphRepository,
@@ -14,6 +14,7 @@ import { AnalyzerFactory } from "@yats/analyzer-interface";
 import { TypeScriptAnalyzer } from "@yats/analyzer-typescript";
 import { GoAnalyzer } from "@yats/analyzer-go";
 import { CSharpAnalyzer } from "@yats/analyzer-csharp";
+import { PythonAnalyzer } from "@yats/analyzer-python";
 import { IndexerService } from "@yats/indexing";
 import { RetrieverService } from "@yats/retrieval";
 import { McpServer } from "@yats/mcp-server";
@@ -33,10 +34,13 @@ program
 async function bootstrap() {
   // Register analyzers
   const analyzerFactory = new AnalyzerFactory();
-  analyzerFactory.register(new TypeScriptAnalyzer());
+  const tsAnalyzer = new TypeScriptAnalyzer();
+  analyzerFactory.register(tsAnalyzer);
+  // TS Compiler API handles JS too with allowJs
+  analyzerFactory.register(tsAnalyzer, Language.JAVASCRIPT);
   analyzerFactory.register(new GoAnalyzer());
   analyzerFactory.register(new CSharpAnalyzer());
-  // Future: register PHP, Python analyzers
+  analyzerFactory.register(new PythonAnalyzer());
 
   // Initialize connections
   await initializeConnections();
@@ -102,8 +106,10 @@ program
         ? await indexer.incrementalIndex(repoPath, options.since)
         : await indexer.indexRepository(repoPath);
 
+      const t = result.timings;
       console.log(JSON.stringify(result, null, 2));
-      console.log(`✅ Indexed ${result.symbolsFound} symbols, ${result.relationshipsFound} relationships in ${(result.duration / 1000).toFixed(1)}s`);
+      console.log(`✅ Indexed ${result.symbolsFound} symbols, ${result.relationshipsFound} relationships in ${(t.totalMs / 1000).toFixed(1)}s`);
+      console.log(`   walk: ${(t.walkMs / 1000).toFixed(1)}s | analyze: ${(t.analyzeMs / 1000).toFixed(1)}s | embed: ${(t.embedMs / 1000).toFixed(1)}s | store: ${(t.storeMs / 1000).toFixed(1)}s | docs: ${(t.docsMs / 1000).toFixed(1)}s`);
     } catch (err: any) {
       console.error(`❌ Index failed: ${err.message}`);
     } finally {

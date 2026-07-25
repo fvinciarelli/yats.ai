@@ -38,10 +38,9 @@
 - **Better approach:** Use `simple-git` npm package (async) or `node:child_process.exec`
 - **Risk:** Blocks the event loop during git operations (acceptable for CLI, problematic for server)
 
-### 6. MCP server has no HTTP transport
-- **Current state:** Stdio-only transport
-- **Missing:** HTTP/SSE transport for remote MCP connections
-- **Note:** Stdio is the standard MCP transport. HTTP is optional per spec.
+### 6. MCP server HTTP transport — ✅ DONE
+- **Current state:** Supports stdio, HTTP+SSE, and Streamable HTTP (`/mcp`)
+- **Endpoints:** `/mcp` (Streamable HTTP), `/mcp/sse` (SSE), `/mcp/message` (SSE messages), `/health`, `/index`, `/index/file`
 
 ### 7. No input sanitization on MCP tools
 - **Current state:** Tool arguments are passed directly to services
@@ -113,12 +112,16 @@
 
 | Feature | ARCHITECTURE.md | Implemented? |
 |---------|----------------|-------------|
-| Redis cache | Optional service | Yes (docker-compose profile) |
-| Postgres metadata | Optional service | Yes (docker-compose profile) |
-| HTTP API adapters | Listed in layers | No (stdio-only) |
+| Redis cache | Optional service | No (removed, not needed) |
+| Postgres metadata | Optional service | No (removed, not needed) |
+| HTTP API adapters | Listed in layers | ✅ Done (HTTP+SSE + Streamable HTTP) |
 | CQRS command/query handlers | Separate handler files | Merged (tools + services) |
 | Prometheus metrics | Mentioned | No |
 | pino logger | Specified | No (custom logger) |
 | `simple-git` npm package | Specified | No (`execSync` wrapper) |
+| Multi-service Docker | Separate Dockerfiles per service | Unified single Dockerfile + compose |
+| PHP/Python analyzers | Full bridge implementations | Removed (not in current scope) |
+| Go analyzer | Not planned | ✅ Done (subprocess bridge) |
+| File tools (read/write/edit) | In MCP tools | Removed (search-only philosophy) |
 
 [← Back to README](./README.md)

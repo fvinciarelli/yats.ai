@@ -3,19 +3,19 @@
 ## Root
 
 ```
-code-indexer/
+yats/
 ├── AI/                          ← AI-oriented documentation (this folder)
-├── docker/                      ← Dockerfiles and compose configs
+├── docker/                      ← Docker Compose, Dockerfile, entrypoint
 ├── packages/                    ← pnpm workspace packages
 │   ├── shared/                  ← Domain layer
 │   ├── infra/                   ← Infrastructure layer
 │   ├── indexing/                ← Indexing application
 │   ├── retrieval/               ← Retrieval application
-│   ├── mcp-server/              ← MCP server adapter
-│   ├── cli/                     ← CLI adapter
+│   ├── mcp-server/              ← MCP server adapter (stdio + HTTP+SSE + Streamable HTTP)
+│   ├── cli/                     ← CLI adapter (yats)
+│   ├── setup/                   ← Setup wizard, bridge, status, stop scripts
 │   └── analyzers/               ← Language analyzer plugins
-├── ARCHITECTURE.md              ← Original design spec
-├── package.json                 ← Root workspace config
+├── package.json                 ← Root workspace config (name: "yats")
 ├── pnpm-workspace.yaml          ← Workspace definition
 ├── tsconfig.base.json           ← Shared TypeScript config
 ├── .env.example                 ← Environment variable reference
@@ -147,13 +147,13 @@ retrieval/src/
 
 ## `packages/mcp-server/` — MCP Server Adapter
 
-**Purpose:** Exposes the platform as MCP tools over JSON-RPC stdio.
+**Purpose:** Exposes the platform as MCP tools over JSON-RPC (stdio, HTTP+SSE, and Streamable HTTP).
 
 ```
 mcp-server/src/
-├── server.ts              ← JSON-RPC parser, dispatcher, lifecycle
+├── server.ts              ← JSON-RPC parser, dispatcher, lifecycle (stdio + HTTP)
 ├── tools/
-│   └── all-tools.ts       ← 22 tool definitions + handler factory
+│   └── all-tools.ts       ← 19 tool definitions + handler factory
 ├── middleware/
 │   ├── error-handler.ts   ← Exception → JSON-RPC error
 │   ├── rate-limiter.ts    ← Sliding window rate limiter
@@ -173,8 +173,28 @@ mcp-server/src/
 
 ```
 cli/src/
-└── index.ts   ← Commander-based CLI (index, search, serve, summary commands)
+├── index.ts        ← Commander-based CLI (list, index, search, serve, summary, clear)
+└── commands/
 ```
+
+---
+
+## `packages/setup/` — Setup Wizard & Thin Scripts
+
+**Purpose:** One-command setup wizard and thin CLI scripts that interact with the Docker-based MCP server.
+
+```
+setup/src/
+├── setup.js        ← YATS Setup wizard: detects Docker, writes compose file, starts services
+├── bridge.js       ← MCP stdio ↔ HTTP proxy (yats-bridge)
+├── indexer.js      ← HTTP client to trigger indexing via POST /index
+├── status.js       ← Health check and service status
+└── stop.js         ← Stop all YATS services
+```
+
+**Rules:**
+- ✅ Thin scripts, HTTP calls to the YATS MCP server
+- ❌ Never: business logic, direct DB access
 
 **Rules:**
 - ✅ CLI parsing, human-readable output, bootstrapping
@@ -195,20 +215,12 @@ analyzers/
 │   └── src/
 │       └── ts-compiler-analyzer.ts  ← Full AST walk, symbol extraction, convention detection
 │
-├── analyzer-php/           ← PHP-Parser + PHPStan bridge
+├── analyzer-go/            ← Go subprocess bridge
 │   └── src/
-│       ├── php-parser-analyzer.ts   ← Node.js side (spawns PHP, parses JSON)
-│       └── php-bridge/             ← PHP side
-│           ├── analyze.php         ← PHP parser script
-│           └── composer.json       ← nikic/php-parser, phpstan/phpstan
+│       ├── go-analyzer.ts           ← Node.js side (spawns Go parser, parses JSON)
+│       └── go-bridge/               ← Go side
 │
-├── analyzer-python/        ← LibCST + Jedi bridge
-│   └── src/
-│       ├── python-analyzer.ts      ← Node.js side (spawns Python, parses JSON)
-│       └── python-bridge/          ← Python side
-│           └── analyzer.py         ← LibCST + Jedi script
-│
-├── analyzer-csharp/        ← Placeholder (needs .NET project)
+├── analyzer-csharp/        ← Stub (needs .NET project)
 │   └── src/
 │       └── index.ts        ← Stub only
 │
@@ -217,8 +229,7 @@ analyzers/
         ├── treesitter-analyzer.ts  ← tree-sitter + regex fallback
         └── queries/
             ├── typescript.scm
-            ├── php.scm
-            └── python.scm
+            └── go.scm
 ```
 
 **Rules:**
@@ -231,16 +242,14 @@ analyzers/
 
 ```
 docker/
-├── docker-compose.yml          ← Production: neo4j, qdrant, ollama, redis, postgres
+├── docker-compose.yml          ← Unified: neo4j, qdrant, ollama, yats MCP server
 ├── docker-compose.dev.yml      ← Development overrides (debug ports, mounts)
-├── qdrant/
-│   └── config.yaml             ← Qdrant production config
-├── mcp-server/
-│   └── Dockerfile              ← Multi-stage alpine build
-├── retriever/
-│   └── Dockerfile              ← Retriever service with health check
-└── indexer/
-    └── Dockerfile              ← Indexer service with health check
+├── Dockerfile                  ← Multi-stage build with analyzers
+├── entrypoint.sh               ← Container entrypoint
+├── neo4j/
+│   └── plugins/                ← APOC plugins
+└── qdrant/
+    └── config.yaml             ← Qdrant config
 ```
 
 [← Back to README](./README.md)

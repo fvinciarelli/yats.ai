@@ -85,8 +85,8 @@ services:
       args:
         INCLUDE_GO: "${INCLUDE_GO:-true}"
         INCLUDE_CSHARP: "${INCLUDE_CSHARP:-true}"
-        INCLUDE_PYTHON: "${INCLUDE_PYTHON:-false}"
-        INCLUDE_PHP: "${INCLUDE_PHP:-false}"
+        INCLUDE_PYTHON: "${INCLUDE_PYTHON:-true}"
+        INCLUDE_PHP: "${INCLUDE_PHP:-true}"
     image: yats:local
     ports:
       - "${YATS_PORT:-5555}:5555"

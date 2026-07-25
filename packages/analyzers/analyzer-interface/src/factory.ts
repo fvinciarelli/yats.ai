@@ -11,6 +11,10 @@ const EXTENSION_MAP: Record<string, Language> = {
   ".tsx": Language.TYPESCRIPT,
   ".mts": Language.TYPESCRIPT,
   ".cts": Language.TYPESCRIPT,
+  ".js": Language.JAVASCRIPT,
+  ".jsx": Language.JAVASCRIPT,
+  ".mjs": Language.JAVASCRIPT,
+  ".cjs": Language.JAVASCRIPT,
   ".cs": Language.CSHARP,
   ".csx": Language.CSHARP,
   ".php": Language.PHP,
@@ -32,9 +36,11 @@ export class AnalyzerFactory {
 
   /**
    * Register an analyzer for a specific language.
+   * If no language is provided, uses the analyzer's own language property.
+   * Useful for registering the same analyzer for multiple languages (e.g. TS for JS).
    */
-  register(analyzer: LanguageAnalyzer): void {
-    this.analyzers.set(analyzer.language, analyzer);
+  register(analyzer: LanguageAnalyzer, language?: Language): void {
+    this.analyzers.set(language ?? analyzer.language, analyzer);
   }
 
   /**

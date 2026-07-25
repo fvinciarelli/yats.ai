@@ -16,7 +16,8 @@ import { AnalyzerFactory } from "@yats/analyzer-interface";
 import { MemorySymbolStore } from "@yats/infra";
 import { FileWalker } from "../../infrastructure/file-walker.js";
 import { detectLanguage } from "../../infrastructure/language-detector.js";
-import { hashContent } from "@yats/shared";
+import { hashContent, type RelationshipKind } from "@yats/shared";
+import { GlobalSymbolTable, resolveRelationships, type SymbolTableEntry } from "./global-symbol-table.js";
 
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline
@@ -34,86 +35,117 @@ export interface IndexerDependencies {
 export class IndexerService implements Indexer {
   private readonly logger: Logger;
   private readonly concurrency: number;
+  private readonly embedBatchSize: number;
+  private readonly pipelineChunkSize: number;
 
   constructor(
     private readonly deps: IndexerDependencies,
   ) {
     this.logger = createLogger("indexer:service");
-    this.concurrency = parseInt(
-      process.env.INDEXER_CONCURRENCY ?? "4",
-      10,
-    );
+    this.concurrency = parseInt(process.env.INDEXER_CONCURRENCY ?? "8", 10);
+    this.embedBatchSize = parseInt(process.env.EMBEDDING_BATCH_SIZE ?? "50", 10);
+    // Pipeline chunk: how many symbols to accumulate before flushing to DB.
+    // Larger = fewer DB roundtrips but higher memory. 500 is a good balance.
+    this.pipelineChunkSize = parseInt(process.env.PIPELINE_CHUNK_SIZE ?? "500", 10);
   }
 
   // ============================================================
-  // Full Repository Index
+  // Full Repository Index (Pipeline Architecture)
+  //
+  // Instead of sequential phases (analyze-all → embed-all → store-all),
+  // we pipeline: analyze → accumulate → flush when chunk is full.
+  // This means embedding and DB writes start while analysis is still
+  // running, reducing total wall-clock time significantly.
   // ============================================================
 
   async indexRepository(repositoryPath: string): Promise<IndexResult> {
-    const startTime = Date.now();
+    const totalStart = Date.now();
     const repoName = this.getRepoName(repositoryPath);
     this.logger.info(`Indexing repository: ${repoName} at ${repositoryPath}`);
 
-    // 0. Store repository metadata (root path)
-    await this.deps.graphRepository.upsertRepositoryMetadata(
-      repoName,
-      repositoryPath,
-    );
+    // Track cumulative metrics
+    let totalSymbols = 0;
+    let totalRelationships = 0;
+    let totalErrors = 0;
+    let walkMs = 0;
+    let analyzeMs = 0;
+    let embedMs = 0;
+    let storeMs = 0;
+    let docsMs = 0;
 
-    // 0b. Capture current git commit for future incremental indexing
+    // 0. Store repository metadata + capture git commit
+    await this.deps.graphRepository.upsertRepositoryMetadata(repoName, repositoryPath);
+
     let currentCommit: string | null = null;
     if (this.deps.gitAdapter) {
       try {
         currentCommit = await this.deps.gitAdapter.getCurrentCommit(repositoryPath);
-      } catch {
-        // Not a git repo — ignore
-      }
+      } catch { /* Not a git repo */ }
     }
 
-    // 1. Walk files
+    // 1. WALK — discover files
+    const walkStart = Date.now();
     const walker = new FileWalker();
     const files = await walker.walk(repositoryPath);
-
-    // 2. Filter to supported languages
     const supportedFiles = files.filter((f) => f.language !== null);
-    this.logger.info(`Found ${supportedFiles.length} indexable files (${files.length} total)`);
+    walkMs = Date.now() - walkStart;
+    this.logger.info(`Walked ${files.length} files (${supportedFiles.length} indexable) in ${walkMs}ms`);
 
-    // 3. Process files in parallel batches
+    // 2. Launch docs indexing in parallel with code pipeline (if enabled)
+    //    Docs are independent of code — they run concurrently so they
+    //    don't add to total time (they overlap with code analysis).
+    const indexDocs = process.env.INDEX_DOCS !== "false";
+    let docsPromise: Promise<number> | null = null;
+
+    if (indexDocs) {
+      docsPromise = this.indexDocumentation(repositoryPath).catch((err) => {
+        this.logger.warn(`Documentation indexing skipped: ${err}`);
+        return 0;
+      });
+    }
+
+    // 3. PIPELINE: analyze → accumulate → flush symbols now, batch relationships later
+    //    Symbols are embedded and stored in chunks as they accumulate.
+    //    Relationships are deferred until all symbols exist (cross-file refs).
+    //    We also build a lightweight table for cross-file reference resolution.
+    const analyzeStart = Date.now();
     const symbolStore = new MemorySymbolStore();
-    let totalErrors = 0;
+    let allRelationships: Relationship[] = [];
+
+    // Lightweight accumulator for the global symbol table
+    const symbolTableEntries: SymbolTableEntry[] = [];
 
     for (let i = 0; i < supportedFiles.length; i += this.concurrency) {
       const batch = supportedFiles.slice(i, i + this.concurrency);
 
+      // Analyze batch in parallel
       const results = await Promise.allSettled(
         batch.map(async (file) => {
-          const analyzer = this.deps.analyzerFactory.getAnalyzerForFile(
-            file.relativePath,
-          );
-          if (!analyzer) return;
+          const analyzer = this.deps.analyzerFactory.getAnalyzerForFile(file.relativePath);
+          if (!analyzer) return { errors: 0 };
 
-          const content = await this.deps.fileSystem.readFile(
-            file.absolutePath,
-          );
-          const result = await analyzer.analyze(
-            file.relativePath,
-            content,
-            repoName,
-          );
+          const content = await this.deps.fileSystem.readFile(file.absolutePath);
+          const result = await analyzer.analyze(file.relativePath, content, repoName);
 
-          // Add to symbol store
+          // Add symbols to accumulator
           for (const symbol of result.symbols) {
-            // Compute content hash if missing
             if (!symbol.contentHash) {
               symbol.contentHash = hashContent(symbol.sourceSnippet || "");
             }
             symbolStore.add(symbol);
+            // Lightweight entry for cross-file resolution
+            symbolTableEntries.push({
+              id: symbol.id,
+              name: symbol.name,
+              namespace: symbol.namespace,
+              relativePath: symbol.location.relativePath,
+            });
           }
           for (const rel of result.relationships) {
-            symbolStore.addRelationship(rel);
+            allRelationships.push(rel);
           }
 
-          return result.errors.length;
+          return { errors: result.errors.length };
         }),
       );
 
@@ -122,35 +154,141 @@ export class IndexerService implements Indexer {
           totalErrors++;
           this.logger.error(`File processing error: ${r.reason}`);
         } else if (r.value) {
-          totalErrors += r.value;
+          totalErrors += r.value.errors;
         }
+      }
+
+      // FLUSH: if accumulator has enough symbols, embed + store now (symbols only)
+      const accumulated = symbolStore.getAll();
+      if (accumulated.length >= this.pipelineChunkSize) {
+        const flushResult = await this.flushSymbols(symbolStore, repoName);
+        totalSymbols += flushResult.symbols;
+        embedMs += flushResult.embedMs;
+        storeMs += flushResult.storeMs;
+
+        const pct = Math.round((i + batch.length) / supportedFiles.length * 100);
+        this.logger.info(
+          `Pipeline flush at ${pct}%: ${totalSymbols} symbols, ` +
+          `${allRelationships.length} rels pending ` +
+          `(embed ${flushResult.embedMs}ms, store ${flushResult.storeMs}ms)`,
+        );
       }
     }
 
-    // 4. Generate embeddings
-    const symbols = symbolStore.getAll();
-    this.logger.info(`Generating embeddings for ${symbols.length} symbols...`);
+    // Final flush — remaining symbols
+    const remaining = symbolStore.getAll();
+    if (remaining.length > 0) {
+      const flushResult = await this.flushSymbols(symbolStore, repoName);
+      totalSymbols += flushResult.symbols;
+      embedMs += flushResult.embedMs;
+      storeMs += flushResult.storeMs;
+    }
 
-    const texts = symbols.map((s) => this.buildEmbeddingText(s));
-    const vectors = await this.deps.embeddingGenerator.embedBatch(texts);
+    // Resolve cross-file references before storing relationships
+    if (allRelationships.length > 0) {
+      const table = new GlobalSymbolTable();
+      table.index(symbolTableEntries);
 
-    // 5. Store in Neo4j
-    this.logger.info(`Storing ${symbols.length} symbols in graph...`);
-    await this.deps.graphRepository.upsertSymbols(symbols);
+      const { resolved, rewritten } = resolveRelationships(allRelationships, table);
+      this.logger.info(
+        `Resolved ${rewritten} cross-file references`,
+      );
+
+      // Filter out relationships whose source or target symbol doesn't exist
+      // (e.g. IMPORTS pseudo-sources like "import:get_user", builtins like len())
+      const validRelationships = resolved.filter((rel) => {
+        const sourceExists = symbolTableEntries.some((e) => e.id === rel.sourceSymbolId);
+        const targetExists = symbolTableEntries.some((e) => e.id === rel.targetSymbolId);
+        return sourceExists && targetExists;
+      });
+
+      const filtered = resolved.length - validRelationships.length;
+      if (filtered > 0) {
+        this.logger.debug(`Filtered ${filtered} relationships with non-existent endpoints`);
+      }
+
+      this.logger.info(`Storing ${validRelationships.length} relationships...`);
+
+      try {
+        await this.deps.graphRepository.upsertRelationships(validRelationships);
+        totalRelationships = validRelationships.length;
+      } catch (err: any) {
+        this.logger.error(`Failed to store relationships: ${err.message}`);
+      }
+    }
+
+    analyzeMs = Date.now() - analyzeStart;
+
+    // 4. Await docs (running in parallel since step 2, or skipped if INDEX_DOCS=false)
+    const docsStart = Date.now();
+    const docsIndexed = docsPromise ? await docsPromise : 0;
+    docsMs = Date.now() - docsStart;
+    if (docsMs < analyzeMs) docsMs = 0; // overlapped completely → zero added time
+
+    // Save last indexed commit
+    if (currentCommit) {
+      await this.deps.graphRepository.setLastIndexedCommit(repoName, currentCommit);
+    }
+
+    const totalMs = Date.now() - totalStart;
 
     this.logger.info(
-      `Storing ${symbolStore.getRelationships().length} relationships...`,
-    );
-    await this.deps.graphRepository.upsertRelationships(
-      symbolStore.getRelationships(),
+      `✅ Indexed ${repoName}: ${totalSymbols} symbols, ${totalRelationships} rels, ` +
+      `${docsIndexed} docs in ${totalMs}ms ` +
+      `(walk ${walkMs}ms | analyze ${analyzeMs}ms | embed ${embedMs}ms | store ${storeMs}ms | docs ${docsMs}ms)`,
     );
 
-    // 6. Store in Qdrant
-    this.logger.info(`Storing ${symbols.length} vectors...`);
+    return {
+      repository: repoName,
+      symbolsFound: totalSymbols,
+      relationshipsFound: totalRelationships,
+      vectorsCreated: totalSymbols,
+      docsIndexed,
+      errors: totalErrors,
+      duration: totalMs,
+      timings: {
+        walkMs,
+        analyzeMs,
+        embedMs,
+        storeMs,
+        docsMs,
+        totalMs,
+      },
+    };
+  }
+
+  /**
+   * Flush accumulated symbols: embed in batches → upsert Neo4j → upsert Qdrant.
+   * Drains the symbolStore (symbols only; relationships are batched separately).
+   */
+  private async flushSymbols(
+    symbolStore: MemorySymbolStore,
+    repoName: string,
+  ): Promise<{ symbols: number; embedMs: number; storeMs: number }> {
+    const symbols = symbolStore.getAll();
+    if (symbols.length === 0) return { symbols: 0, embedMs: 0, storeMs: 0 };
+
+    // EMBED — in sub-batches of embedBatchSize
+    const embedStart = Date.now();
+    const allVectors: number[][] = [];
+
+    for (let i = 0; i < symbols.length; i += this.embedBatchSize) {
+      const chunk = symbols.slice(i, i + this.embedBatchSize);
+      const texts = chunk.map((s) => this.buildEmbeddingText(s));
+      const vectors = await this.deps.embeddingGenerator.embedBatch(texts);
+      allVectors.push(...vectors);
+    }
+    const embedMs = Date.now() - embedStart;
+
+    // STORE — Neo4j + Qdrant (symbols only, no relationships)
+    const storeStart = Date.now();
+
+    await this.deps.graphRepository.upsertSymbols(symbols);
+
     await this.deps.vectorRepository.upsertVectors(
       symbols.map((symbol, i) => ({
         id: symbol.id,
-        vector: vectors[i] ?? [],
+        vector: allVectors[i] ?? [],
         payload: {
           symbolId: symbol.id,
           language: symbol.language as any,
@@ -167,38 +305,12 @@ export class IndexerService implements Indexer {
       })),
     );
 
-    // 7. Index documentation
-    let docsIndexed = 0;
-    try {
-      const docResult = await this.indexDocumentation(repositoryPath);
-      docsIndexed = docResult;
-    } catch (err) {
-      this.logger.warn(`Documentation indexing skipped: ${err}`);
-    }
+    const storeMs = Date.now() - storeStart;
 
-    const duration = Date.now() - startTime;
+    // Drain the store
+    symbolStore.clear();
 
-    // Save last indexed commit for future incremental indexing
-    if (currentCommit) {
-      await this.deps.graphRepository.setLastIndexedCommit(
-        repoName,
-        currentCommit,
-      );
-    }
-
-    this.logger.info(
-      `Indexed ${repoName}: ${symbols.length} symbols, ${symbolStore.getRelationships().length} relationships, ${docsIndexed} docs in ${duration}ms`,
-    );
-
-    return {
-      repository: repoName,
-      symbolsFound: symbols.length,
-      relationshipsFound: symbolStore.getRelationships().length,
-      vectorsCreated: symbols.length,
-      docsIndexed,
-      errors: totalErrors,
-      duration,
-    };
+    return { symbols: symbols.length, embedMs, storeMs };
   }
 
   /**
@@ -349,22 +461,40 @@ export class IndexerService implements Indexer {
   // ============================================================
 
   async indexDocumentation(repositoryPath: string): Promise<number> {
-    const docFiles = [
-      "AI/architecture.md",
-      "AI/conventions.md",
-      "AI/domain.md",
-      "AI/decisions.md",
-      "AI/components.md",
-      "README.md",
-      "ARCHITECTURE.md",
-      "CONTRIBUTING.md",
-      "docs/",
-    ];
+    // Default doc patterns — override with DOC_PATTERNS env var (comma-separated)
+    const docPatterns = process.env.DOC_PATTERNS?.split(",").map(p => p.trim()).filter(Boolean)
+      ?? [
+        "AI/architecture.md",
+        "AI/conventions.md",
+        "AI/domain.md",
+        "AI/decisions.md",
+        "AI/components.md",
+        "README.md",
+        "ARCHITECTURE.md",
+        "CONTRIBUTING.md",
+        "docs/",
+      ];
+
+    // Warn if docs directory has too many files (default threshold 300)
+    const docMaxFiles = parseInt(process.env.DOC_MAX_FILES ?? "300", 10);
+    try {
+      const docsDir = await this.deps.fileSystem.resolvePath(repositoryPath, "docs");
+      if (await this.deps.fileSystem.exists(docsDir)) {
+        const mdFiles = (await this.deps.fileSystem.listFiles(docsDir, "\\.md$")).length;
+        if (mdFiles > docMaxFiles) {
+          this.logger.warn(
+            `docs/ has ${mdFiles} .md files (threshold: ${docMaxFiles}). ` +
+            `Consider INDEX_DOCS=false or DOC_PATTERNS to limit scope. ` +
+            `Indexing all of them will take a while...`,
+          );
+        }
+      }
+    } catch { /* docs/ doesn't exist or not accessible */ }
 
     const repoName = this.getRepoName(repositoryPath);
     let count = 0;
 
-    for (const pattern of docFiles) {
+    for (const pattern of docPatterns) {
       try {
         const fullPath = await this.deps.fileSystem.resolvePath(
           repositoryPath,

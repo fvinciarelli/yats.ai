@@ -6,6 +6,7 @@ Analyzes Python files using LibCST + Jedi,
 outputs JSON representation of symbols and relationships.
 
 Usage: python3 analyzer.py --file <path> [--repo <name>]
+       python3 analyzer.py --stdin --file-path <path> [--repo <name>]
        python3 analyzer.py --dir <path> [--repo <name>]
 """
 
@@ -38,25 +39,28 @@ except ImportError:
 class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
     """Extracts symbols and relationships from Python AST using LibCST."""
 
-    def __init__(self, repo_name: str, file_path: str, source_code: str):
+    def __init__(self, repo_name: str, file_path: str, source_code: str, repo_root: str = ""):
         self.repo = repo_name
         self.file_path = file_path
+        # Compute relative path by stripping repo root prefix
+        rel = file_path.removeprefix(repo_root).removeprefix("/")
+        self.relative_path = rel if rel else file_path
         self.source_lines = source_code.splitlines()
         self.symbols = []
         self.relationships = []
         self.current_class = None
         self.current_function = None
-        self.namespace = os.path.splitext(file_path.replace("/", "."))[0]
+        self.namespace = os.path.splitext(self.relative_path.replace("/", "."))[0]
 
     def make_id(self, symbol_path: str) -> str:
-        return f"{self.repo}::{self.file_path}::{symbol_path}"
+        return f"{self.repo}::{self.relative_path}::{symbol_path}"
 
     def make_location(self, node: cst.CSTNode) -> dict:
         start = node.start if hasattr(node, 'start') else None
         end = node.end if hasattr(node, 'end') else None
         return {
             "repository": self.repo,
-            "relativePath": self.file_path,
+            "relativePath": self.relative_path,
             "startLine": start.line if start else 1,
             "endLine": end.line if end else 1,
             "startColumn": start.column if start else 0,
@@ -130,7 +134,7 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
 
         old_class = self.current_class
         self.current_class = name
-        return True  # Continue visiting children
+        return True
 
     def leave_ClassDef(self, node: cst.ClassDef) -> None:
         self.current_class = None
@@ -365,7 +369,7 @@ def detect_conventions(repo_name: str, file_path: str, symbols: list) -> list:
             symbol["kind"] = "route"
             symbol["metadata"]["framework"] = "django"
         if symbol["kind"] == "class" and name.endswith("View"):
-            symbol["kind"] = "controller"  # Django class-based views
+            symbol["kind"] = "controller"
 
         # Test detection
         if is_test_file:
@@ -499,65 +503,96 @@ def analyze_with_regex(file_path: str, content: str, repo_name: str) -> dict:
 
 
 # ============================================================
+# Shared analysis helper
+# ============================================================
+
+def analyze_source(source: str, file_path: str, repo_name: str, repo_root: str = "") -> dict:
+    """Analyze source code and return symbols + relationships."""
+    errors = []
+
+    if HAS_LIBCST:
+        try:
+            tree = cst.parse_module(source)
+            wrapper = MetadataWrapper(tree)
+            extractor = PythonSymbolExtractor(repo_name, file_path, source, repo_root)
+            wrapper.visit(extractor)
+            symbols = extractor.symbols
+            relationships = extractor.relationships
+            symbols = detect_conventions(repo_name, file_path, symbols)
+        except Exception as e:
+            errors.append({"line": 1, "column": 0, "message": f"LibCST error: {e}", "severity": "error"})
+            # Fallback to regex
+            result = analyze_with_regex(file_path, source, repo_name)
+            symbols = result["symbols"]
+            relationships = result["relationships"]
+    else:
+        result = analyze_with_regex(file_path, source, repo_name)
+        symbols = result["symbols"]
+        relationships = result["relationships"]
+
+    return {"symbols": symbols, "relationships": relationships, "errors": errors}
+
+
+# ============================================================
 # Main
 # ============================================================
 
 def main():
     parser = argparse.ArgumentParser(description="Python Code Indexer Bridge")
-    parser.add_argument("--file", help="Analyze a single file")
+    parser.add_argument("--file", help="Analyze a single file by path")
+    parser.add_argument("--stdin", action="store_true", help="Read source from stdin instead of file")
+    parser.add_argument("--file-path", default="", help="File path for symbol IDs (used with --stdin)")
     parser.add_argument("--dir", help="Analyze all .py files in a directory")
     parser.add_argument("--repo", default=os.path.basename(os.getcwd()), help="Repository name")
+    parser.add_argument("--repo-root", default="", help="Repository root path (to compute relative paths)")
     args = parser.parse_args()
 
     all_symbols = []
     all_relationships = []
     all_errors = []
 
-    files = []
+    if args.stdin:
+        source = sys.stdin.read()
+        file_path = args.file_path or "<stdin>"
+        result = analyze_source(source, file_path, args.repo, "")
+        all_symbols.extend(result["symbols"])
+        all_relationships.extend(result["relationships"])
+        all_errors.extend(result["errors"])
 
-    if args.file:
-        files = [args.file]
-    elif args.dir:
-        for root, dirs, filenames in os.walk(args.dir):
-            # Skip virtual envs and cache dirs
-            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".venv", "venv", ".tox", "node_modules")]
-            for f in filenames:
-                if f.endswith(".py"):
-                    files.append(os.path.join(root, f))
-    else:
-        sys.stderr.write("Usage: python3 analyzer.py --file <path> [--repo <name>]\n")
-        sys.exit(1)
-
-    for file_path in files:
+    elif args.file:
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(args.file, "r", encoding="utf-8") as f:
                 source = f.read()
         except Exception as e:
             all_errors.append({"line": 1, "column": 0, "message": str(e), "severity": "error"})
-            continue
+            source = ""
 
-        if HAS_LIBCST:
-            try:
-                tree = cst.parse_module(source)
-                wrapper = MetadataWrapper(tree)
-                extractor = PythonSymbolExtractor(args.repo, file_path, source)
-                wrapper.visit(extractor)
-                symbols = extractor.symbols
-                relationships = extractor.relationships
-                symbols = detect_conventions(args.repo, file_path, symbols)
-            except Exception as e:
-                all_errors.append({"line": 1, "column": 0, "message": f"LibCST error: {e}", "severity": "error"})
-                # Fallback to regex
-                result = analyze_with_regex(file_path, source, args.repo)
-                symbols = result["symbols"]
-                relationships = result["relationships"]
-        else:
-            result = analyze_with_regex(file_path, source, args.repo)
-            symbols = result["symbols"]
-            relationships = result["relationships"]
+        if source:
+            result = analyze_source(source, args.file, args.repo, args.repo_root)
+            all_symbols.extend(result["symbols"])
+            all_relationships.extend(result["relationships"])
+            all_errors.extend(result["errors"])
 
-        all_symbols.extend(symbols)
-        all_relationships.extend(relationships)
+    elif args.dir:
+        for root, dirs, filenames in os.walk(args.dir):
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".venv", "venv", ".tox", "node_modules")]
+            for f in filenames:
+                if f.endswith(".py"):
+                    file_path = os.path.join(root, f)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as fh:
+                            source = fh.read()
+                    except Exception as e:
+                        all_errors.append({"line": 1, "column": 0, "message": str(e), "severity": "error"})
+                        continue
+
+                    result = analyze_source(source, file_path, args.repo, args.repo_root)
+                    all_symbols.extend(result["symbols"])
+                    all_relationships.extend(result["relationships"])
+                    all_errors.extend(result["errors"])
+    else:
+        sys.stderr.write("Usage: python3 analyzer.py --file <path> | --stdin --file-path <path> [--repo <name>]\n")
+        sys.exit(1)
 
     print(json.dumps({
         "symbols": all_symbols,

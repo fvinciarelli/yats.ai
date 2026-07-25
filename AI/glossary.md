@@ -112,4 +112,8 @@
 
 **VectorRepository:** Interface for Qdrant operations. Implemented by `QdrantVectorRepository`.
 
+## Y
+
+**YATS (Yet Another Token Saver):** The project name. Indexes codebases, builds knowledge graphs, and serves MCP tools so LLMs query code without reading raw files — saving tokens.
+
 [← Back to README](./README.md)

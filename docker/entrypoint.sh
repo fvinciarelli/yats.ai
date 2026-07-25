@@ -17,13 +17,13 @@ echo "  ✓ Neo4j ready"
 
 # Wait for Qdrant
 echo "  Waiting for Qdrant..."
-until curl -s "http://${QDRANT_HOST:-qdrant}:6333/health" > /dev/null 2>&1; do
+until curl -s "http://${QDRANT_HOST:-qdrant}:6333/healthz" > /dev/null 2>&1; do
   sleep 2
 done
 echo "  ✓ Qdrant ready"
 
-# Wait for Ollama (if configured)
-if [ "${EMBEDDING_PROVIDER:-ollama}" = "ollama" ]; then
+# Wait for Ollama (only when provider is ollama)
+if [ "${EMBEDDING_PROVIDER}" = "ollama" ]; then
   echo "  Waiting for Ollama..."
   until curl -s "http://${OLLAMA_HOST:-ollama}:11434/api/tags" > /dev/null 2>&1; do
     sleep 2
@@ -34,7 +34,8 @@ fi
 echo ""
 echo "  Starting YATS MCP server..."
 echo "  Transport: HTTP+SSE on port ${YATS_PORT:-5555}"
+echo "  Embedding provider: ${EMBEDDING_PROVIDER:-ollama}"
 echo ""
 
 # Start the MCP server in HTTP mode
-exec node packages/cli/dist/index.js serve --http --port "${YATS_PORT:-3000}"
+exec node packages/cli/dist/index.js serve --http --port "${YATS_PORT:-5555}"

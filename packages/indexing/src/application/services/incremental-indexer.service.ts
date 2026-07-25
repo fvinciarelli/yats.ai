@@ -103,6 +103,14 @@ export class IncrementalIndexerService {
       docsIndexed: 0,
       errors: totalErrors,
       duration,
+      timings: {
+        walkMs: 0,
+        analyzeMs: duration,
+        embedMs: 0,
+        storeMs: 0,
+        docsMs: 0,
+        totalMs: duration,
+      },
     };
   }
 

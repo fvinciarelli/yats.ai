@@ -18,19 +18,22 @@ Read the documentation in `AI/` to understand this project:
 
 ## Project at a glance
 
-- **Monorepo:** pnpm workspaces, 14 packages under `packages/`
+- **Monorepo:** pnpm workspaces, 9 packages under `packages/`
 - **Language:** TypeScript (strict), ESM modules
-- **Purpose:** Index codebases → build knowledge graph → expose MCP tools to LLMs
-- **Key packages:** `shared` (domain), `infra` (Neo4j/Qdrant), `indexing`, `retrieval`, `mcp-server`, `cli`
+- **Purpose:** Index codebases → build knowledge graph → expose MCP tools to LLMs to save tokens
+- **Deployment:** Docker Compose (Neo4j, Qdrant, Ollama, YATS MCP server)
+- **Key packages:** `shared` (domain), `infra` (Neo4j/Qdrant), `indexing`, `retrieval`, `mcp-server`, `cli`, `setup`, `bridge`
+- **Analyzers:** TypeScript (native), Go (subprocess bridge), C# (stub), plus Tree-sitter fallback
 - **Databases:** Neo4j (graph) + Qdrant (vectors)
-- **Protocol:** MCP JSON-RPC over stdio
+- **Protocol:** MCP JSON-RPC over stdio, HTTP+SSE, and Streamable HTTP
 
 ## Quick commands
 
 ```bash
-pnpm install          # Install all dependencies
-pnpm build            # Build all packages
-pnpm test             # Run all tests
+docker compose -f docker/docker-compose.yml up -d     # Start everything
+pnpm install                                           # Install all dependencies
+pnpm build                                             # Build all packages
+pnpm test                                              # Run all tests
 ```
 
 ## Rules

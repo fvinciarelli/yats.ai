@@ -1,1 +1,1 @@
-// @yats/analyzer-python
+export { PythonAnalyzer } from "./python-analyzer.js";

@@ -1,0 +1,41 @@
+{
+  "settings": {
+    "idleTimeout": 10,
+    "showStatus": true
+  },
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--headless=false",
+        "--viewport=1280x720"
+      ],
+      "lifecycle": "lazy",
+      "directTools": [
+        "navigate_page",
+        "take_screenshot",
+        "take_snapshot",
+        "click",
+        "fill",
+        "press_key",
+        "evaluate_script",
+        "wait_for",
+        "list_pages",
+        "select_page",
+        "new_page",
+        "close_page",
+        "list_console_messages",
+        "get_console_message",
+        "list_network_requests",
+        "get_network_request",
+        "resize_page"
+      ]
+    },
+    "exa": {
+      "url": "https://mcp.exa.ai/mcp",
+      "lifecycle": "lazy"
+    }
+  }
+}

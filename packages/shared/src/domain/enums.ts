@@ -107,6 +107,7 @@ export enum Language {
   CSHARP = "csharp",
   GO = "go",
   JAVA = "java",
+  JAVASCRIPT = "javascript",
   PHP = "php",
   PYTHON = "python",
   TYPESCRIPT = "typescript",

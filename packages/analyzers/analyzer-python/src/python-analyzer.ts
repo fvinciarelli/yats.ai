@@ -4,6 +4,7 @@ import { AbstractAnalyzer } from "@yats/analyzer-interface";
 import { hashContent } from "@yats/shared";
 import { createSymbolId } from "@yats/shared";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 
 // ============================================================
@@ -18,11 +19,27 @@ export class PythonAnalyzer extends AbstractAnalyzer {
 
   constructor(bridgePath?: string) {
     super();
-    this.bridgePath = bridgePath ?? path.join(
-      import.meta.dirname,
-      "python-bridge",
-      "analyzer.py",
-    );
+    // Resolve bridge path: try explicit path, then Docker location, then local dev
+    if (bridgePath) {
+      this.bridgePath = bridgePath;
+    } else {
+      // Docker: bridge is copied to /usr/local/lib/yats-python-bridge
+      const dockerPath = "/usr/local/lib/yats-python-bridge/analyzer.py";
+      // Local dev: bridge is in src/python-bridge relative to package root
+      const localPath = path.join(
+        import.meta.dirname,
+        "..",
+        "src",
+        "python-bridge",
+        "analyzer.py",
+      );
+      // Node.js: import.meta.dirname is dist/, so we go up one level to find src/
+      if (existsSync(dockerPath)) {
+        this.bridgePath = dockerPath;
+      } else {
+        this.bridgePath = localPath;
+      }
+    }
   }
 
   canAnalyze(filePath: string, _content: string): boolean {
@@ -36,9 +53,10 @@ export class PythonAnalyzer extends AbstractAnalyzer {
     repositoryName: string,
   ): Promise<AnalysisResult> {
     try {
-      return await this.analyzeWithBridge(filePath, repositoryName);
+      // Pass content via stdin so the bridge doesn't need to read the file
+      return await this.analyzeWithBridge(filePath, content, repositoryName);
     } catch {
-      // Fallback to basic analysis
+      // Fallback to regex-based analysis
       return this.analyzeFallback(filePath, content, repositoryName);
     }
   }
@@ -49,12 +67,15 @@ export class PythonAnalyzer extends AbstractAnalyzer {
 
   private analyzeWithBridge(
     filePath: string,
+    content: string,
     repositoryName: string,
   ): Promise<AnalysisResult> {
     return new Promise((resolve, reject) => {
+      // Pass content via stdin and file path for ID generation only
       const pyProc = spawn("python3", [
         this.bridgePath,
-        "--file",
+        "--stdin",
+        "--file-path",
         filePath,
         "--repo",
         repositoryName,
@@ -68,6 +89,10 @@ export class PythonAnalyzer extends AbstractAnalyzer {
 
       pyProc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
       pyProc.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
+
+      // Write content to stdin and close
+      pyProc.stdin.write(content);
+      pyProc.stdin.end();
 
       pyProc.on("close", (code: number) => {
         if (code !== 0) {

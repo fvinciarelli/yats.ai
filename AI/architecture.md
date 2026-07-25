@@ -7,7 +7,7 @@ The project follows **Hexagonal Architecture (Ports & Adapters)** with **Domain-
 ```
 ┌────────────────────────────────────────────────────┐
 │                 PRIMARY ADAPTERS                    │
-│  MCP Server (stdio JSON-RPC)    CLI (commander)    │
+│  MCP Server (stdio/HTTP+SSE/Streamable HTTP)  CLI (commander) │
 └──────────────────────┬─────────────────────────────┘
                        │ depends on
 ┌──────────────────────▼─────────────────────────────┐
@@ -36,21 +36,21 @@ The project follows **Hexagonal Architecture (Ports & Adapters)** with **Domain-
 
 ## Layer Responsibilities
 
-### Domain Layer (`@code-indexer/shared`)
+### Domain Layer (`@yats/shared`)
 
 - **Entities/Value Objects:** `Symbol`, `Relationship`, `SourceLocation`, `SymbolId`
 - **Enums:** `SymbolKind` (39 values), `RelationshipKind` (21 values), `Language` (4 values)
 - **Ports (interfaces):** `GraphRepository`, `VectorRepository`, `EmbeddingGenerator`, `Indexer`, `Retriever`, `FileSystem`, `GitAdapter`, `LanguageAnalyzer`, `SymbolStore`
 - **No dependencies on any other layer or external library**
 
-### Application Layer (`@code-indexer/indexing`, `@code-indexer/retrieval`)
+### Application Layer (`@yats/indexing`, `@yats/retrieval`)
 
 - **Orchestrates use cases:** indexing pipeline, hybrid retrieval pipeline
 - **Depends on:** Domain interfaces (ports), never on infrastructure directly
 - **Uses:** Dependency injection to receive implementations
 - **Does NOT:** Access Neo4j, Qdrant, or filesystem directly
 
-### Infrastructure Layer (`@code-indexer/infra`)
+### Infrastructure Layer (`@yats/infra`)
 
 - **Implements all port interfaces** defined in the domain
 - **Neo4j:** Connection (retry logic), GraphRepository (CRUD + graph traversal)
@@ -62,8 +62,10 @@ The project follows **Hexagonal Architecture (Ports & Adapters)** with **Domain-
 
 ### Adapters Layer
 
-- **MCP Server** (`@code-indexer/mcp-server`): Primary driving adapter. JSON-RPC over stdio. 22 tools.
-- **CLI** (`@code-indexer/cli`): Secondary driving adapter. Commander-based CLI with `index`, `search`, `serve`, `summary`.
+- **MCP Server** (`@yats/mcp-server`): Primary driving adapter. JSON-RPC over stdio, HTTP+SSE, and Streamable HTTP. 19 tools.
+- **CLI** (`@yats/cli`): Secondary driving adapter. Commander-based CLI with `list`, `index`, `search`, `serve`, `summary`, `clear`.
+- **Bridge** (`packages/bridge`): Thin proxy that translates stdio MCP ↔ HTTP+SSE, for agents that only speak stdio.
+- **Setup** (`packages/setup`): One-command wizard (`npx yats-setup`) that configures Docker, clones repos, and starts services.
 
 ### Analyzers (Plugin Layer)
 
@@ -156,7 +158,7 @@ flowchart TD
 
 ## Communication Between Modules
 
-All inter-module communication uses **interfaces defined in `@code-indexer/shared`**. There is no direct coupling between packages.
+All inter-module communication uses **interfaces defined in `@yats/shared`**. There is no direct coupling between packages.
 
 - MCP Server → Retriever: via `Retriever` interface
 - MCP Server → GraphRepository: via `GraphRepository` interface

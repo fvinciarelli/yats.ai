@@ -110,85 +110,91 @@ const FIND_SYMBOL: ToolDefinition = {
 
 const FIND_REFERENCES: ToolDefinition = {
   name: "find_references",
-  description: "Find all symbols that reference the given symbol.",
+  description: "Find all symbols that reference the given symbol. Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
+      name: { type: "string" },
       repository: { type: "string" },
       limit: { type: "number", default: 20 },
     },
-    required: ["symbolId", "repository"],
+    required: ["repository"],
   },
 };
 
 const FIND_CALLERS: ToolDefinition = {
   name: "find_callers",
-  description: "Find all functions/methods that call the given function/method.",
+  description: "Find all functions/methods that call the given function/method. Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
+      name: { type: "string" },
       repository: { type: "string" },
       limit: { type: "number", default: 20 },
     },
-    required: ["symbolId", "repository"],
+    required: ["repository"],
   },
 };
 
 const FIND_CALLEES: ToolDefinition = {
   name: "find_callees",
-  description: "Find all functions/methods called by the given function/method.",
+  description: "Find all functions/methods called by the given function/method. Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
+      name: { type: "string" },
       repository: { type: "string" },
       limit: { type: "number", default: 20 },
     },
-    required: ["symbolId", "repository"],
+    required: ["repository"],
   },
 };
 
 const FIND_IMPLEMENTATIONS: ToolDefinition = {
   name: "find_implementations",
-  description: "Find all implementations of an interface or abstract class/method.",
+  description: "Find all implementations of an interface or abstract class/method. Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
+      name: { type: "string" },
       repository: { type: "string" },
       limit: { type: "number", default: 20 },
     },
-    required: ["symbolId", "repository"],
+    required: ["repository"],
   },
 };
 
 const FIND_INHERITORS: ToolDefinition = {
   name: "find_inheritors",
-  description: "Find all subclasses / types that inherit from the given class.",
+  description: "Find all subclasses/types that inherit from the given class. Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
+      name: { type: "string" },
       repository: { type: "string" },
       limit: { type: "number", default: 20 },
     },
-    required: ["symbolId", "repository"],
+    required: ["repository"],
   },
 };
 
 const FIND_TESTS: ToolDefinition = {
   name: "find_tests",
-  description: "Find tests related to the given symbol.",
+  description: "Find tests related to the given symbol. Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
+      name: { type: "string" },
       repository: { type: "string" },
       limit: { type: "number", default: 20 },
     },
-    required: ["symbolId", "repository"],
+    required: ["repository"],
   },
 };
 
@@ -242,15 +248,16 @@ const EXPAND_GRAPH: ToolDefinition = {
 
 const RELATED_SYMBOLS: ToolDefinition = {
   name: "related_symbols",
-  description: "Find symbols directly related to the given symbol (1-hop neighbors).",
+  description: "Find symbols directly related to the given symbol (1-hop neighbors). Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
+      name: { type: "string" },
       repository: { type: "string" },
       limit: { type: "number", default: 30 },
     },
-    required: ["symbolId"],
+    required: [],
   },
 };
 
@@ -486,6 +493,41 @@ function notIndexed(hint?: string): ToolResult {
 }
 
 // ============================================================
+// Resolve symbol ID from name
+// ============================================================
+
+async function resolveSymbolId(
+  args: Record<string, unknown>,
+  deps: McpDependencies,
+): Promise<string | ToolResult> {
+  // If symbolId is directly provided, use it
+  const symbolId = args.symbolId as string | undefined;
+  if (symbolId) return symbolId;
+
+  // Otherwise, resolve from name + repository
+  const name = args.name as string | undefined;
+  const repoName = args.repository as string | undefined;
+
+  if (!name || !repoName) {
+    return {
+      content: [{ type: "text", text: "Either 'symbolId' or both 'name' and 'repository' are required." }],
+      isError: true,
+    };
+  }
+
+  const symbols = await deps.graphRepository.findSymbolByName(repoName, name);
+  if (symbols.length === 0) {
+    return {
+      content: [{ type: "text", text: `Symbol "${name}" not found in repository "${repoName}".` }],
+      isError: true,
+    };
+  }
+
+  // Use the first match
+  return symbols[0]!.id;
+}
+
+// ============================================================
 // Tool Handler Factory
 // ============================================================
 
@@ -540,50 +582,44 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("find_references", async (args) => {
-    const refs = await deps.graphRepository.findReferences(
-      args.symbolId as string,
-      (args.limit as number) ?? 20,
-    );
+    const sid = await resolveSymbolId(args, deps);
+    if (typeof sid !== "string") return sid;
+    const refs = await deps.graphRepository.findReferences(sid, (args.limit as number) ?? 20);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(refs), null, 2) }] };
   });
 
   handlers.set("find_callers", async (args) => {
-    const callers = await deps.graphRepository.findCallers(
-      args.symbolId as string,
-      (args.limit as number) ?? 20,
-    );
+    const sid = await resolveSymbolId(args, deps);
+    if (typeof sid !== "string") return sid;
+    const callers = await deps.graphRepository.findCallers(sid, (args.limit as number) ?? 20);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(callers), null, 2) }] };
   });
 
   handlers.set("find_callees", async (args) => {
-    const callees = await deps.graphRepository.findCallees(
-      args.symbolId as string,
-      (args.limit as number) ?? 20,
-    );
+    const sid = await resolveSymbolId(args, deps);
+    if (typeof sid !== "string") return sid;
+    const callees = await deps.graphRepository.findCallees(sid, (args.limit as number) ?? 20);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(callees), null, 2) }] };
   });
 
   handlers.set("find_implementations", async (args) => {
-    const impls = await deps.graphRepository.findImplementations(
-      args.symbolId as string,
-      (args.limit as number) ?? 20,
-    );
+    const sid = await resolveSymbolId(args, deps);
+    if (typeof sid !== "string") return sid;
+    const impls = await deps.graphRepository.findImplementations(sid, (args.limit as number) ?? 20);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(impls), null, 2) }] };
   });
 
   handlers.set("find_inheritors", async (args) => {
-    const inheritors = await deps.graphRepository.findInheritors(
-      args.symbolId as string,
-      (args.limit as number) ?? 20,
-    );
+    const sid = await resolveSymbolId(args, deps);
+    if (typeof sid !== "string") return sid;
+    const inheritors = await deps.graphRepository.findInheritors(sid, (args.limit as number) ?? 20);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(inheritors), null, 2) }] };
   });
 
   handlers.set("find_tests", async (args) => {
-    const tests = await deps.graphRepository.findTests(
-      args.symbolId as string,
-      (args.limit as number) ?? 20,
-    );
+    const sid = await resolveSymbolId(args, deps);
+    if (typeof sid !== "string") return sid;
+    const tests = await deps.graphRepository.findTests(sid, (args.limit as number) ?? 20);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(tests), null, 2) }] };
   });
 
@@ -621,10 +657,9 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("related_symbols", async (args) => {
-    const related = await deps.graphRepository.relatedSymbols(
-      args.symbolId as string,
-      (args.limit as number) ?? 30,
-    );
+    const sid = await resolveSymbolId(args, deps);
+    if (typeof sid !== "string") return sid;
+    const related = await deps.graphRepository.relatedSymbols(sid, (args.limit as number) ?? 30);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(related), null, 2) }] };
   });
 

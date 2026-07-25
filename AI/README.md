@@ -1,10 +1,10 @@
-# Code Indexer — AI Documentation Hub
+# YATS — AI Documentation Hub
 
 ## Overview
 
-Code Indexer is an **AI Code Intelligence Platform** that indexes source code repositories, builds a symbolic knowledge graph, generates vector embeddings, and exposes intelligent retrieval through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/).
+YATS (**Yet Another Token Saver**) is an **AI Code Intelligence Platform** that indexes source code repositories, builds a symbolic knowledge graph, generates vector embeddings, and exposes intelligent retrieval through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/).
 
-LLMs never access files directly. They query the platform exclusively through MCP tools.
+LLMs query the codebase through MCP tools instead of reading raw files — drastically reducing token consumption.
 
 ## Purpose
 
@@ -23,36 +23,34 @@ LLMs never access files directly. They query the platform exclusively through MC
 | Embeddings | Ollama (nomic-embed-text, 768d) or OpenAI (text-embedding-3-small, 1536d) |
 | DI | tsyringe (decorator-free factory registration) |
 | Package Manager | pnpm 9 workspaces |
-| Protocol | MCP JSON-RPC over stdio |
-| Container Runtime | Docker Compose |
-| Parsers | TS Compiler API, PHP-Parser, LibCST, tree-sitter |
+| Protocol | MCP JSON-RPC over stdio, HTTP+SSE, and Streamable HTTP |
+| Container Runtime | Docker Compose (unified `docker compose up -d`) |
+| Parsers | TS Compiler API, tree-sitter, Go bridge |
 
 ## Solution Structure
 
 ```
-code-indexer/
+yats/
 ├── AI/                     ← You are here. AI-oriented documentation.
 ├── packages/
 │   ├── shared/             ← Domain models, enums, ports (interfaces), DTOs
 │   ├── infra/              ← Neo4j, Qdrant, embeddings, file system, git, DI
 │   ├── indexing/           ← Indexing pipeline: walker, language detector, indexer
 │   ├── retrieval/          ← Hybrid retrieval: rank, dedup, compress, token budget
-│   ├── mcp-server/         ← MCP JSON-RPC server (stdio), 22 tools
-│   ├── cli/                ← CLI commands: index, search, serve, summary
+│   ├── mcp-server/         ← MCP JSON-RPC server (stdio + HTTP+SSE + Streamable HTTP), 19 tools
+│   ├── cli/                ← CLI: yats list|index|search|serve|summary|clear
+│   ├── setup/              ← One-command setup wizard + bridge/stop/status scripts
 │   └── analyzers/
 │       ├── analyzer-interface/   ← AbstractAnalyzer + AnalyzerFactory
 │       ├── analyzer-typescript/  ← TS Compiler API (full implementation)
-│       ├── analyzer-php/         ← PHP-Parser + PHPStan bridge
-│       ├── analyzer-python/      ← LibCST + Jedi bridge
-│       ├── analyzer-csharp/      ← Placeholder (needs .NET project)
+│       ├── analyzer-go/          ← Go subprocess bridge
+│       ├── analyzer-csharp/      ← Stub (needs .NET project)
 │       └── analyzer-treesitter/  ← Universal regex/TS fallback
 ├── docker/
-│   ├── docker-compose.yml
+│   ├── docker-compose.yml        ← Unified: neo4j, qdrant, ollama, yats MCP server
 │   ├── docker-compose.dev.yml
-│   ├── mcp-server/Dockerfile
-│   ├── retriever/Dockerfile
-│   ├── indexer/Dockerfile
-│   └── qdrant/config.yaml
+│   ├── Dockerfile                ← Multi-stage, all-in-one
+│   └── entrypoint.sh
 └── ARCHITECTURE.md         ← Original design document
 ```
 

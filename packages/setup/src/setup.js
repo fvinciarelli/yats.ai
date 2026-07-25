@@ -92,6 +92,9 @@ const EMBEDDED_COMPOSE = `services:
       - VOYAGE_API_KEY=__VOYAGE_KEY__
       - REPOSITORIES_PATH=/repos
       - YATS_PORT=__MCP_PORT__
+      - EMBEDDING_BATCH_SIZE=__BATCH_SIZE__
+      - INDEX_DOCS=__INDEX_DOCS__
+      - DOC_MAX_FILES=__DOC_MAX__
       - LOG_LEVEL=info
     volumes:
       - \${REPOS_PATH:-~/.yats/repos}:/repos:ro
@@ -276,7 +279,7 @@ async function checkYatsRunning() {
 // Compose file generation
 // ============================================================
 
-function generateCompose(provider, ollamaModel, apiKey, mcpPort) {
+function generateCompose(provider, ollamaModel, apiKey, mcpPort, batchSize, indexDocs, docMaxFiles) {
   let compose = EMBEDDED_COMPOSE;
 
   if (provider === "ollama") {
@@ -290,7 +293,11 @@ function generateCompose(provider, ollamaModel, apiKey, mcpPort) {
     .replace(/__OLLAMA_MODEL__/g, ollamaModel)
     .replace(/__OPENAI_KEY__/g, provider === "openai" ? apiKey : "")
     .replace(/__MISTRAL_KEY__/g, provider === "mistral" ? apiKey : "")
+    .replace(/__VOYAGE_KEY__/g, provider === "voyage" ? apiKey : "")
     .replace(/__MCP_PORT__/g, String(mcpPort))
+    .replace(/__BATCH_SIZE__/g, String(batchSize))
+    .replace(/__INDEX_DOCS__/g, indexDocs ? "true" : "false")
+    .replace(/__DOC_MAX__/g, String(docMaxFiles))
 
   return compose;
 }
@@ -385,8 +392,67 @@ async function main() {
     console.log("");
   }
 
+  // Step 3: Embedding batch size
+  const BATCH_DEFAULTS = {
+    openai: 200,
+    mistral: 200,
+    voyage: 100,
+    ollama: 4,
+  };
+  const BATCH_MAX = {
+    openai: 2048,
+    mistral: 1024,
+    voyage: 128,
+    ollama: 4,
+  };
+  const defaultBatch = BATCH_DEFAULTS[provider];
+  const maxBatch = BATCH_MAX[provider];
+
+  step(`Step 3 — Embedding batch size`);
+  console.log(`  ${D}How many texts to embed per API request.${R}`);
+  console.log(`  ${D}Higher = faster indexing, lower = safer for rate limits.${R}`);
+  console.log(`  ${D}Provider max: ${maxBatch}${R}`);
+  console.log("");
+
+  const rlBatch = createInterface({ input: process.stdin, output: process.stdout });
+  const batchAnswer = await ask(rlBatch, `  ${B}Batch size${R} [${defaultBatch}]: `);
+  rlBatch.close();
+  let batchSize = defaultBatch;
+  const batchTrimmed = batchAnswer.trim();
+  if (batchTrimmed) {
+    const num = parseInt(batchTrimmed, 10);
+    if (num >= 1 && num <= maxBatch) {
+      batchSize = num;
+    } else {
+      console.log(`  ${Y}⚠${R}  Must be 1–${maxBatch}. Using default ${defaultBatch}.`);
+    }
+  }
+  console.log(`  ${G}✓${R} Batch size: ${batchSize}`);
+  console.log("");
+
+  // Step 4: Documentation indexing
+  const docMaxFiles = 300;
+  let indexDocs = true;
+
+  step("Step 4 — Documentation indexing");
+  console.log(`  ${D}Index README, ARCHITECTURE, AI/ docs, and docs/ directory.${R}`);
+  console.log(`  ${D}Patterns (edit via DOC_PATTERNS env): AI/*.md, README.md, docs/${R}`);
+  console.log(`  ${D}If docs/ has >${docMaxFiles} .md files, you'll get a warning.${R}`);
+  console.log("");
+
+  const rlDocs = createInterface({ input: process.stdin, output: process.stdout });
+  const docsAnswer = await ask(rlDocs, `  ${B}Index documentation? [Y/n]${R} `);
+  rlDocs.close();
+  if (docsAnswer.toLowerCase() === "n") {
+    indexDocs = false;
+    console.log(`  ${Y}⚠${R}  Documentation indexing disabled. Set INDEX_DOCS=true to re-enable.`);
+  } else {
+    console.log(`  ${G}✓${R}  Documentation will be indexed.`);
+  }
+  console.log("");
+
   // Optional: pre-index directories
-  step("Step 4 — Pre-index (optional)");
+  step("Step 5 — Pre-index (optional)");
   console.log(`  ${D}Indexing happens automatically on first search.${R}`);
   console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
   console.log("");
@@ -440,6 +506,8 @@ async function main() {
   if (pathsToIndex.length) {
     console.log(`  │  ${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)").padEnd(39)}│`);
   }
+  console.log(`  │  ${B}Batch:${R}       ${String(batchSize).padEnd(39)}│`);
+  console.log(`  │  ${B}Index docs:${R}  ${(indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No").padEnd(39)}│`);
   console.log(`  │  ${B}API calls:${R}    ${(provider === "ollama" ? "None (runs locally)" : `To ${provider} API`).padEnd(39)}│`);
   console.log(`  │  ${B}Disk needed:${R}  ${(provider === "ollama" ? "~3GB" : "~1GB").padEnd(39)}│`);
   console.log(`  │                                                      │`);
@@ -466,15 +534,41 @@ async function main() {
   mkdirSync(REPOS_DIR, { recursive: true });
 
   // Generate and write docker-compose
-  const compose = generateCompose(provider, ollamaModel, apiKey, mcpPort);
+  const compose = generateCompose(provider, ollamaModel, apiKey, mcpPort, batchSize, indexDocs, docMaxFiles);
   writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
   const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp/sse` } } };
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
+  // Build the YATS Docker image (needed for yats:local)
+  const dockerfilePath = join(import.meta.dirname, "..", "..", "..", "docker", "Dockerfile");
+  const buildContext = join(import.meta.dirname, "..", "..", "..");
+
+  if (existsSync(dockerfilePath)) {
+    const sBuild = spinner("Building YATS image (all languages)...");
+    try {
+      await runCmd("docker", [
+        "build", "-f", dockerfilePath, "-t", "yats:local",
+        "--build-arg", "INCLUDE_GO=true",
+        "--build-arg", "INCLUDE_CSHARP=true",
+        "--build-arg", "INCLUDE_PYTHON=true",
+        "--build-arg", "INCLUDE_PHP=true",
+        buildContext,
+      ]);
+      sBuild.done(true);
+    } catch {
+      sBuild.done(false);
+      console.log(`  ${RED}Failed to build YATS image. Is Docker running?${R}`);
+      process.exit(1);
+    }
+  } else {
+    // Published package flow: pull from registry
+    console.log(`  ${D}(Pre-built image — pulling from registry)${R}`);
+  }
+
   // Start services
-  const sPull = spinner("Pulling Docker images...");
+  const sPull = spinner("Starting Docker services...");
   try {
     await runCmd("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d"]);
     sPull.done(true);
@@ -484,24 +578,16 @@ async function main() {
     process.exit(1);
   }
 
-  const sWait = spinner("Waiting for databases...");
-  const neo4jOk = await waitForHealth("http://localhost:7474", 20, 3000);
-  if (!neo4jOk) {
-    sWait.done(false);
-    console.log(`  ${Y}Neo4j is taking longer than expected... continuing anyway.${R}`);
-  } else {
-    sWait.done(true);
-  }
-
-  const sServer = spinner("Starting YATS server...");
-  const yatsOk = await waitForHealth(`http://localhost:${mcpPort}/health`, 30, 2000);
-  sServer.done(yatsOk);
+  const sWait = spinner("Starting YATS server...");
+  const yatsOk = await waitForHealth(`http://localhost:${mcpPort}/health`, 60, 2000);
+  sWait.done(yatsOk);
 
   if (!yatsOk) {
     console.log("");
-    console.log(`  ${Y}⚠ Server still warming up.${R} It'll be ready shortly.`);
-    console.log(`  Check: ${C}docker compose -f ${COMPOSE_FILE} logs yats${R}`);
+    console.log(`  ${RED}✗ YATS server failed to start within 2 minutes.${R}`);
+    console.log(`  Check logs: ${C}docker compose -f ${COMPOSE_FILE} logs yats${R}`);
     console.log("");
+    process.exit(1);
   }
 
   // Pre-index directories if user added them
@@ -511,10 +597,12 @@ async function main() {
     try {
       for (const dir of pathsToIndex) {
         const repoName = dir.split("/").pop() || dir;
+        // Path inside the container: repos are mounted under /repos/
+        const containerPath = `/repos/${repoName}`;
         await fetch(`http://localhost:${mcpPort}/index`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repo: repoName, path: dir }),
+          body: JSON.stringify({ path: containerPath }),
         });
       }
       sIndex.done(true);

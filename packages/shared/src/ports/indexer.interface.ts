@@ -1,3 +1,12 @@
+export interface IndexTimings {
+  walkMs: number;
+  analyzeMs: number;
+  embedMs: number;
+  storeMs: number;
+  docsMs: number;
+  totalMs: number;
+}
+
 export interface IndexResult {
   repository: string;
   symbolsFound: number;
@@ -6,6 +15,7 @@ export interface IndexResult {
   docsIndexed: number;
   errors: number;
   duration: number;
+  timings: IndexTimings;
 }
 
 export interface Indexer {

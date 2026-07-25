@@ -1,6 +1,6 @@
 # Components
 
-## Domain Components (`@code-indexer/shared`)
+## Domain Components (`@yats/shared`)
 
 ### SymbolKind
 - **File:** `domain/enums.ts`
@@ -33,7 +33,7 @@
 
 ---
 
-## Infrastructure Components (`@code-indexer/infra`)
+## Infrastructure Components (`@yats/infra`)
 
 ### Neo4jConnection
 - **File:** `neo4j/neo4j-connection.ts`
@@ -109,7 +109,7 @@
 ## Application Components
 
 ### IndexerService
-- **Package:** `@code-indexer/indexing`
+- **Package:** `@yats/indexing`
 - **File:** `application/services/indexer.service.ts`
 - **Responsibility:** Full indexing pipeline orchestrator
 - **Dependencies:** `GraphRepository`, `VectorRepository`, `EmbeddingGenerator`, `FileSystem`, `AnalyzerFactory`
@@ -144,7 +144,7 @@
 ---
 
 ### RetrieverService
-- **Package:** `@code-indexer/retrieval`
+- **Package:** `@yats/retrieval`
 - **File:** `application/services/retriever.service.ts`
 - **Responsibility:** Hybrid retrieval pipeline (embed → Qdrant → Neo4j → merge → dedup → rank → compress → budget)
 - **Dependencies:** `GraphRepository`, `VectorRepository`, `EmbeddingGenerator`
@@ -176,16 +176,17 @@
 ## Adapter Components
 
 ### McpServer
-- **Package:** `@code-indexer/mcp-server`
+- **Package:** `@yats/mcp-server`
 - **File:** `server.ts`
-- **Responsibility:** MCP JSON-RPC server over stdio
-- **Key API:** `start()` — blocks until stdin closes or SIGTERM
+- **Responsibility:** MCP JSON-RPC server over stdio, HTTP+SSE, and Streamable HTTP
+- **Key API:** `start({ transport?, port? })` — blocks until shutdown
+- **Endpoints:** `/mcp` (Streamable HTTP), `/mcp/sse` (SSE), `/mcp/message` (SSE messages), `/health`
 - **Handles:** `initialize`, `tools/list`, `tools/call`, `shutdown`, `ping`
 
 ### MCP Tools
 - **File:** `tools/all-tools.ts`
-- **Responsibility:** 22 tool definitions + handler factory
-- **Tools:** `search_code`, `search_documentation`, `find_symbol`, `find_references`, `find_callers`, `find_callees`, `find_implementations`, `find_inheritors`, `find_tests`, `find_routes`, `find_configuration`, `expand_graph`, `related_symbols`, `list_symbols`, `repository_summary`, `architecture_summary`, `search_similar`, `read_file`, `write_file`, `update_file`, `delete_file`, `create_file`
+- **Responsibility:** 19 tool definitions + handler factory (read-only search & query)
+- **Tools:** `search_code`, `search_documentation`, `find_symbol`, `find_references`, `find_callers`, `find_callees`, `find_implementations`, `find_inheritors`, `find_tests`, `find_routes`, `find_configuration`, `expand_graph`, `related_symbols`, `list_symbols`, `repository_summary`, `architecture_summary`, `search_similar`, `list_repositories`, `index_repository`
 
 ### MCP Middleware
 - **Files:** `middleware/error-handler.ts`, `middleware/rate-limiter.ts`, `middleware/logger.ts`
@@ -194,17 +195,30 @@
 - **Logger:** Logs every tool call with timing
 
 ### CLI
-- **Package:** `@code-indexer/cli`
+- **Package:** `@yats/cli`
 - **File:** `src/index.ts`
 - **Responsibility:** Commander-based CLI entry point
-- **Commands:** `index`, `search`, `serve`, `summary`
+- **Commands:** `list`, `index`, `search`, `serve`, `summary`, `clear`
+
+### Bridge
+- **Package:** `packages/bridge`
+- **File:** `src/bridge.js`
+- **Responsibility:** Thin proxy that translates stdio MCP ↔ HTTP+SSE
+- **Key API:** `npx yats-bridge [--port 5555] [--url http://...]`
+- **Usage:** For MCP clients that only speak stdio, bridge connects to the HTTP YATS server
+
+### Setup Wizard
+- **Package:** `packages/setup`
+- **File:** `src/setup.js`
+- **Responsibility:** One-command setup: detects Docker, writes compose file, starts services
+- **Key API:** `npx yats-setup` or `curl -fsSL https://get.yats.site | bash`
 
 ---
 
 ## Analyzer Components
 
 ### AbstractAnalyzer
-- **Package:** `@code-indexer/analyzer-interface`
+- **Package:** `@yats/analyzer-interface`
 - **File:** `analyzer.ts`
 - **Responsibility:** Base class with `createSymbol`, `createRelationship`, `makeId`, `warning`, `error` helpers
 
@@ -214,27 +228,29 @@
 - **Key API:** `register(analyzer)`, `getAnalyzer(language)`, `getAnalyzerForFile(path)`
 
 ### TypeScriptAnalyzer
-- **Package:** `@code-indexer/analyzer-typescript`
+- **Package:** `@yats/analyzer-typescript`
 - **Responsibility:** Full TS Compiler API analyzer
 - **Extracts:** Classes, interfaces, enums, type aliases, methods, properties, constructors, getters/setters, decorators, functions, variables, imports, exports
 - **Relationships:** CONTAINS, INHERITS, IMPLEMENTS, CALLS, IMPORTS, EXPORTS, DECORATES
 - **Conventions:** NestJS (Controller, Injectable, Module), TypeORM (Entity), naming suffixes
 
-### PhpAnalyzer
-- **Package:** `@code-indexer/analyzer-php`
+### GoAnalyzer
+- **Package:** `@yats/analyzer-go`
+- **Responsibility:** Go analyzer via subprocess bridge
+- **Bridge:** Go binary spawned as subprocess, returns JSON
 - **Responsibility:** PHP analyzer via PHP-Parser bridge subprocess
 - **Fallback:** Regex-based when PHP not available
 - **Conventions:** Symfony, Laravel, Doctrine, naming suffixes
 
-### PythonAnalyzer
-- **Package:** `@code-indexer/analyzer-python`
+### CSharpAnalyzer
+- **Package:** `@yats/analyzer-csharp`
 - **Responsibility:** Python analyzer via LibCST + Jedi bridge subprocess
 - **Fallback:** Regex-based when LibCST not available
 - **Conventions:** FastAPI, Flask, Django, SQLAlchemy, Pydantic
 
 ### TreeSitterAnalyzer
-- **Package:** `@code-indexer/analyzer-treesitter`
-- **Responsibility:** Universal fallback for all 4 languages
+- **Package:** `@yats/analyzer-treesitter`
+- **Responsibility:** Universal fallback for TypeScript and Go
 - **Strategies:** tree-sitter AST + query files, then regex fallback
 
 [← Back to README](./README.md)

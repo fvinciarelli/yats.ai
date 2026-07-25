@@ -32,7 +32,7 @@ Every package has `src/index.ts` that re-exports all public symbols. Packages re
 | Functions | camelCase | `createSymbolId`, `hashContent` |
 | Variables | camelCase | `symbolStore`, `queryVector` |
 | Files | kebab-case | `neo4j-connection.ts`, `language-detector.ts` |
-| Packages | kebab-case, `@code-indexer/*` | `@code-indexer/analyzer-typescript` |
+| Packages | kebab-case, `@yats/*` | `@yats/analyzer-typescript` |
 | Injection tokens | UPPER_SNAKE_CASE | `GRAPH_REPOSITORY`, `NEO4J_CONNECTION` |
 
 ### Async
@@ -40,7 +40,7 @@ Every package has `src/index.ts` that re-exports all public symbols. Packages re
 - **All I/O is async** (`Promise<T>`)
 - **No sync file reads** in production code (only `execSync` in `SimpleGitAdapter`)
 - **No callbacks** — `async/await` exclusively
-- **`Promise.allSettled`** for parallel file processing (failures don't crash the batch)
+- **`Promise.allSettled`** for parallel file processing in batches of `INDEXER_CONCURRENCY` (default 4). Failures don't crash the batch.
 
 ### Error Handling
 
@@ -100,9 +100,9 @@ Every package has `src/index.ts` that re-exports all public symbols. Packages re
 
 ### Docker
 
+- **Unified compose:** single `docker compose up -d` starts neo4j, qdrant, ollama, yats
 - **Base image:** `node:22-alpine`
-- **Multi-stage builds** for MCP server (build → prune → run)
-- **No root user** — `USER codeindexer`
-- **Health checks** via `wget` on `/health` endpoint
+- **Multi-stage builds** with optional analyzer inclusion (`INCLUDE_GO`, `INCLUDE_CSHARP`, etc.)
+- **Health checks** via `/health` endpoint on port 5555
 
 [← Back to README](./README.md)

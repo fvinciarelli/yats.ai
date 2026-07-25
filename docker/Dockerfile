@@ -11,7 +11,7 @@
 # Stage 0: Go bridge builder (optional)
 # ============================================================
 FROM golang:1.23-alpine AS go-builder
-ARG INCLUDE_GO=false
+ARG INCLUDE_GO=true
 WORKDIR /go-bridge
 COPY packages/analyzers/analyzer-go/src/go-bridge/analyze.go .
 RUN if [ "$INCLUDE_GO" = "true" ]; then \
@@ -24,7 +24,7 @@ RUN if [ "$INCLUDE_GO" = "true" ]; then \
 # Stage 1: C# bridge builder (optional)
 # ============================================================
 FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS csharp-builder
-ARG INCLUDE_CSHARP=false
+ARG INCLUDE_CSHARP=true
 WORKDIR /csharp-bridge
 COPY packages/analyzers/analyzer-csharp/src/csharp-bridge/RoslynAnalyzer.csproj .
 COPY packages/analyzers/analyzer-csharp/src/csharp-bridge/Program.cs .
@@ -100,15 +100,16 @@ FROM node:22-alpine
 RUN apk add --no-cache curl
 
 # Optional: install PHP and Python runtimes for bridge scripts
-ARG INCLUDE_PHP=false
-ARG INCLUDE_PYTHON=false
+ARG INCLUDE_PHP=true
+ARG INCLUDE_PYTHON=true
 
 RUN if [ "$INCLUDE_PHP" = "true" ]; then \
       apk add --no-cache php83 php83-json php83-mbstring; \
     fi
 
 RUN if [ "$INCLUDE_PYTHON" = "true" ]; then \
-      apk add --no-cache python3; \
+      apk add --no-cache python3 py3-pip; \
+      pip3 install --break-system-packages libcst; \
     fi
 
 RUN addgroup -S yats && adduser -S yats -G yats
