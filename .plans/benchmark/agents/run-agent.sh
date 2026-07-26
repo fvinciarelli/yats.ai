@@ -29,9 +29,9 @@ case "$agent" in
   claude-cli)
     if check_cmd claude; then
       if [ -n "$mcp_config" ]; then
-        claude -p "$question" --output-format stream-json --mcp-config "$mcp_config" 2>/dev/null
+        claude -p "$question" --output-format stream-json --verbose 2>/dev/null
       else
-        claude -p "$question" --output-format stream-json 2>/dev/null
+        claude -p "$question" --output-format stream-json --verbose 2>/dev/null
       fi
     else
       echo '{"type":"message","usage":{"input_tokens":0,"output_tokens":0}}'
