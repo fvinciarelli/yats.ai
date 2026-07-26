@@ -9,7 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -18,7 +18,13 @@ import { createInterface } from "node:readline";
 // Constants
 // ============================================================
 
-const YATS_VERSION = "0.1.0";
+// Read version from package.json dynamically
+let YATS_VERSION = "0.1.0";
+try {
+  const pkgPath = new URL("../package.json", import.meta.url);
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  YATS_VERSION = pkg.version || YATS_VERSION;
+} catch {}
 const YATS_DIR = join(homedir(), ".yats");
 const REPOS_DIR = join(YATS_DIR, "repos");
 const COMPOSE_FILE = join(YATS_DIR, "docker-compose.yml");
@@ -161,7 +167,7 @@ function box(lines, width = W) {
     if (line === "") {
       console.log(`  ║ ${" ".repeat(width)} ║`);
     } else {
-      console.log(`  ║ ${pad(line)} ║`);
+      console.log(`  ║ ${center(line)} ║`);
     }
   }
   console.log(bottom);
@@ -429,6 +435,7 @@ async function main() {
     rl2.close();
     console.log("");
     console.log(`  ${Y}⚠${R}  This is a paid service — you may be charged for API usage.`);
+    console.log("");
     console.log("");
   }
 
