@@ -1,215 +1,94 @@
-# YATS — Yet Another Token Saver
+# YATS Toolkit
 
-> Index your code. Talk to your AI. Save tokens.
+> Give your AI agent superpowers over your codebase.
 
-YATS builds a knowledge graph of your codebase and exposes it as MCP tools. Your AI agent gets precise, relevant context without you pasting files or writing prompts.
+YATS indexes your repositories into a knowledge graph so AI coding agents (Claude, Cursor, Copilot) can search, navigate, and understand your code — without burning tokens reading files one by one.
 
-## How it works
-
-```
-You ask your AI:  "how does auth work in this project?"
-                        │
-                        ▼
-               AI agent calls YATS MCP tools
-                        │
-                        ▼
-               YATS searches the knowledge graph
-               (Neo4j + Qdrant → precise results)
-                        │
-                        ▼
-               AI agent responds with accurate,
-               context-aware answers
-```
-
-- **Auto-indexes** your code on first search (no manual setup)
-- **Incremental updates** — only re-indexes what changed
-- **24 MCP tools** — search, find references, callers, routes, architecture, and more
-- **Runs locally** — your code never leaves your machine
+[![npm version](https://img.shields.io/npm/v/yats-toolkit)](https://www.npmjs.com/package/yats-toolkit)
 
 ## Quick Start
 
 ```bash
-# One command
-npx yats-setup
+npx yats-toolkit
 ```
 
-That's it. The wizard will ask you a couple of questions, start Docker services, and give you the config to paste into your AI agent.
+The wizard pulls the Docker image, starts the MCP server, and asks which directories you want to index. After setup, paste the config into your AI agent and start asking questions about your code.
 
-### Requirements
+## Add Repositories
 
-- **Docker** (with compose plugin)
+Three ways:
 
-That's the only dependency.
+**During setup** — the wizard offers to pre-index directories.
 
-### AI Agent Configuration
+**From the terminal:**
+```bash
+yats index ~/work/backend
+yats index ~/work/frontend
+```
 
-Add this to your agent's MCP config:
+**From your AI agent** — just ask it to index a repo. The agent uses the `index_repository` MCP tool.
+
+## AI Agent Configuration
 
 ```json
 {
   "mcpServers": {
     "yats": {
-      "url": "http://localhost:3000/mcp/sse"
+      "url": "http://localhost:5555/mcp"
     }
   }
 }
 ```
 
-| Agent | Where to configure |
+| Agent | Config location |
 |---|---|
-| **Claude Desktop** | Settings → Developer → MCP Servers → Edit Config |
-| **Cursor** | Settings → MCP → Add new MCP server |
-| **Zed** | `~/.zed/settings.json` → `{"mcp": {"yats": {...}}}` |
-| **Continue.dev** | `~/.continue/config.json` → `"mcpServers": {...}` |
+| Cursor | `.cursor/mcp.json` |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| VS Code Copilot | `.vscode/mcp.json` |
+| Continue.dev | `~/.continue/config.json` |
+| Zed | `.zed/mcp.json` |
 
-## Embedding Providers
+## MCP Tools (20)
 
-| Provider | Setup | Privacy | Speed |
-|---|---|---|---|
-| **Ollama** (default) | Runs locally in Docker | ✅ Your code stays on your machine | Good |
-| **OpenAI** | Needs API key | ⚠️ Code sent to OpenAI | Fast |
-| **Mistral** | Needs API key | ⚠️ Code sent to Mistral | Fast |
-| **Voyage AI** | Needs API key | ⚠️ Code sent to Voyage | Fast |
-
-Choose during setup. Ollama requires no API key and keeps everything local.
-
-## MCP Tools
-
-### Code Search & Discovery
-
-| Tool | Description |
+| Category | Tools |
 |---|---|
-| `search_code` | Semantic search across your entire codebase |
-| `search_documentation` | Search READMEs, architecture docs, ADRs |
-| `find_symbol` | Find a specific symbol by name |
-| `search_similar` | Find code similar to a given symbol |
+| Search | `search_code`, `search_documentation`, `search_similar` |
+| Navigation | `find_symbol`, `find_references`, `find_callers`, `find_callees` |
+| Inheritance | `find_implementations`, `find_inheritors` |
+| Graph | `expand_graph`, `related_symbols` |
+| Discovery | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
+| Repository | `list_repositories`, `index_repository`, `delete_repository` |
+| Analysis | `repository_summary`, `architecture_summary` |
 
-### Graph Traversal
+## CLI Reference
 
-| Tool | Description |
-|---|---|
-| `find_references` | Everywhere a symbol is referenced |
-| `find_callers` | Who calls this function? |
-| `find_callees` | What does this function call? |
-| `find_implementations` | All implementations of an interface |
-| `find_inheritors` | All subclasses of a class |
-| `related_symbols` | Directly related symbols (1-hop) |
-| `expand_graph` | Multi-hop graph exploration |
-| `find_tests` | Tests for a symbol |
+```bash
+yats setup                        # One-time setup wizard
+yats index <path> [--skip-docs]  # Index a repository
+yats status                       # Check indexed repos
+yats stop                         # Stop services
+yats bridge                       # Stdio proxy for Copilot/Claude
+```
 
-### Architecture & Structure
+## Requirements
 
-| Tool | Description |
-|---|---|
-| `find_routes` | HTTP endpoints / API routes |
-| `find_configuration` | Config keys, env vars, settings |
-| `list_symbols` | List symbols filtered by kind |
-| `repository_summary` | Symbol counts by kind and language |
-| `architecture_summary` | Controllers, services, entities overview |
+- **Docker** with Compose plugin
+- Internet connection (first pull only, then fully local with Ollama)
 
-### File Operations
+## Languages
 
-| Tool | Description |
-|---|---|
-| `read_file` | Read files from the repository |
-| `write_file` | Write content to a file |
-| `update_file` | Precise text replacements |
-| `delete_file` | Delete a file |
-| `create_file` | Create a new file |
-
-### Repository Management
-
-| Tool | Description |
-|---|---|
-| `list_repositories` | List all indexed repos |
-| `index_repository` | Manually trigger indexing |
-
-## Supported Languages
-
-| Language | Analyzer | Status |
-|---|---|---|
-| TypeScript / JavaScript | TS Compiler API | ✅ Full support |
-| PHP | PHP-Parser bridge | ✅ Full support |
-| Python | LibCST + Jedi bridge | ✅ Full support |
-| C# | Roslyn bridge | 🚧 Coming soon |
-| All | Tree-sitter fallback | ✅ Basic support |
+TypeScript, JavaScript, Python, Go, C#, PHP — plus universal fallback via Tree-sitter.
 
 ## Architecture
 
-```
-┌─────────────┐     MCP (HTTP+SSE)     ┌──────────────────────┐
-│  AI Agent   │ ◄───────────────────► │  YATS Server (:3000) │
-└─────────────┘                        │  ┌────────────────┐  │
-                                       │  │ Neo4j (graph)  │  │
-                                       │  │ Qdrant (vectors)│  │
-                                       │  │ Ollama/OpenAI  │  │
-                                       │  └────────────────┘  │
-                                       └──────────────────────┘
-```
-
-YATS uses two databases for different purposes:
-- **Neo4j** — graph relationships (traversal, callers, inheritance)
-- **Qdrant** — vector similarity search (semantic code search)
-
-## Development
-
-```bash
-# Clone
-git clone https://github.com/fvinciarelli/yats
-cd yats
-
-# Install & build
-pnpm install
-pnpm build
-
-# Start infrastructure
-docker compose -f docker/docker-compose.yml up -d neo4j qdrant
-
-# Run MCP server (stdio)
-pnpm --filter @yats/cli exec yats serve
-
-# Run MCP server (HTTP+SSE)
-pnpm --filter @yats/cli exec yats serve --http --port 3000
-
-# Index a repo
-pnpm --filter @yats/cli exec yats index /path/to/repo
-
-# Search
-pnpm --filter @yats/cli exec yats search "authentication" --repo my-repo
-
-# Run tests
-pnpm test
-```
-
-### Project structure
-
-```
-yats/
-├── packages/
-│   ├── shared/          Domain models, interfaces, DTOs
-│   ├── infra/           Neo4j, Qdrant, embeddings, DI
-│   ├── indexing/        Indexing pipeline
-│   ├── retrieval/       Hybrid search pipeline
-│   ├── mcp-server/      MCP JSON-RPC server (stdio + HTTP)
-│   ├── cli/             CLI interface
-│   ├── setup/           Thin client wizard (yats-setup)
-│   └── analyzers/       Language analyzers
-│       ├── analyzer-interface/
-│       ├── analyzer-typescript/
-│       ├── analyzer-php/
-│       ├── analyzer-python/
-│       ├── analyzer-csharp/
-│       └── analyzer-treesitter/
-├── docker/              Dockerfiles & compose
-└── AI/                  Architecture docs
-```
+See the [GitHub repository](https://github.com/fvinciarelli/yats) for full architecture and source code.
 
 ## License
 
-Business Source License 1.1 — free for individuals and small teams. Companies with 5+ employees need a commercial license. See [LICENSE](LICENSE) for details.
+Free for individuals and organizations with fewer than 50 developers.
+Companies with 50+ developers need a commercial license — [see tiers](LICENSE).
 
 ## Links
 
-- **Website:** [yats.site](https://yats.site)
+- **npm:** [yats-toolkit](https://www.npmjs.com/package/yats-toolkit)
 - **GitHub:** [fvinciarelli/yats](https://github.com/fvinciarelli/yats)
-- **npm:** `yats-setup`
