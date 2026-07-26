@@ -41,7 +41,21 @@ case "$agent" in
 
   copilot-cli)
     if check_cmd copilot; then
-      copilot -p "$question" 2>/dev/null
+      # Copilot uses ~/.copilot/mcp-servers.json format
+      if [ -n "$mcp_config" ]; then
+        mkdir -p ~/.copilot
+        python3 -c "
+import json
+with open('$mcp_config') as f:
+  std = json.load(f)
+servers = [{'name': k, 'type': 'http', 'url': v['url']} for k,v in std.get('mcpServers',{}).items()]
+with open('/tmp/copilot-mcp.json', 'w') as f:
+  json.dump({'servers': servers}, f)
+" 2>/dev/null
+        copilot -p "$question" --mcp-config /tmp/copilot-mcp.json --allow-all-tools 2>/dev/null
+      else
+        copilot -p "$question" --allow-all-tools 2>/dev/null
+      fi
     else
       echo "copilot not installed: npm install -g @github/copilot" >&2
     fi
