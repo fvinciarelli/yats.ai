@@ -1,8 +1,37 @@
 {
-  "name": "yats",
+  "name": "yats-token-saver",
   "version": "0.1.0",
-  "private": true,
-  "description": "YATS — Yet Another Token Saver. One-command setup, indexing, and MCP bridge.",
+  "description": "YATS — Yet Another Token Saver. One-command MCP server that indexes your codebase into a knowledge graph so AI agents (Claude, Cursor, Copilot) can search and navigate it without burning tokens.",
+  "author": "Franco Vinciarelli <vinciarellifranco@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fvinciarelli/yats"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "code-indexer",
+    "code-search",
+    "knowledge-graph",
+    "semantic-search",
+    "embeddings",
+    "rag",
+    "llm",
+    "ai",
+    "claude",
+    "cursor",
+    "copilot",
+    "neo4j",
+    "qdrant",
+    "developer-tools",
+    "code-navigation",
+    "token-saver",
+    "token-reducer",
+    "context-window",
+    "codebase-intelligence",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "yats": "./bin/setup.js"
