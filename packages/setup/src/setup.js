@@ -297,8 +297,10 @@ async function checkPort(port) {
 }
 
 async function checkYatsRunning() {
+  // Check if the compose file from a previous setup exists
+  if (!existsSync(COMPOSE_FILE)) return false;
+  // Check if the YATS setup container is actually running
   return new Promise((resolve) => {
-    // Only match the YATS setup containers (not dev containers)
     const proc = spawn("docker", ["ps", "--format", "{{.Names}}", "--filter", "name=yats-yats"], { stdio: "pipe" });
     let out = "";
     proc.stdout.on("data", (d) => (out += d));
@@ -384,12 +386,18 @@ async function main() {
   // Check for existing YATS containers BEFORE the wizard
   const existingContainers = await checkYatsRunning();
   if (existingContainers) {
-    console.log(`  ${Y}YATS is already running on this machine.${R}`);
+    // Try to read the port from the existing compose/env
+    let port = 5555;
+    try {
+      const composeContent = require("fs").readFileSync(COMPOSE_FILE, "utf-8");
+      const match = composeContent.match(/YATS_PORT=(\d+)/) || composeContent.match(/"(\d+):(\d+)"/);
+      if (match) port = parseInt(match[1] || match[2], 10);
+    } catch {}
+
+    console.log(`  ${G}✓${R} YATS is already running on ${C}http://localhost:${port}/mcp${R}`);
     console.log("");
     console.log(`  To start fresh ${B}(destroys all indexed data):${R}`);
     console.log(`  ${C}cd ~/.yats && docker compose down -v${R}`);
-    console.log("");
-    console.log(`  To reconnect your AI agent, just point it at ${C}http://localhost:5555/mcp${R}`);
     console.log("");
     process.exit(0);
   }
