@@ -100,9 +100,14 @@ try:
       try: evt = json.loads(line)
       except: continue
       t = evt.get('type','')
+      # Cursor/Claude: result events
       if t in ('result','message'):
         u = evt.get('usage',{})
         total += u.get('input_tokens',0) + u.get('output_tokens',0) + u.get('cache_read_input_tokens',0) + u.get('cache_read_tokens',0)
+      # Codex: turn.completed events
+      if t == 'turn.completed':
+        u = evt.get('usage',{})
+        total += u.get('input_tokens',0) + u.get('cached_input_tokens',0) + u.get('output_tokens',0) + u.get('reasoning_output_tokens',0)
 except: pass
 print(total)
 " 2>/dev/null || echo 0

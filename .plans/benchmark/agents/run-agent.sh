@@ -52,9 +52,9 @@ case "$agent" in
   codex)
     if check_cmd codex; then
       if [ -n "$mcp_config" ]; then
-        codex -p "$question" --mcp-config "$mcp_config" 2>/dev/null
+        codex exec --json -c 'mcp_servers.yats.enabled=true' -c 'mcp_servers.yats.required=true' "$question" 2>/dev/null
       else
-        codex -p "$question" 2>/dev/null
+        codex exec --json -c 'mcp_servers.yats.enabled=false' "$question" 2>/dev/null
       fi
     else
       echo "codex not installed." >&2
