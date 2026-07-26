@@ -2,107 +2,81 @@
 set -e
 
 # ============================================================
-# YATS Benchmark — Interactive wizard
+# YATS Benchmark — Interactive wizard with real token measurement
 # ============================================================
 
 B="\x1b[1m"; D="\x1b[2m"; R="\x1b[0m"
 G="\x1b[32m"; Y="\x1b[33m"; C="\x1b[36m"; RED="\x1b[31m"
 
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGETS_DIR="$BENCH_DIR/targets"
-QUESTIONS_DIR="$BENCH_DIR/questions"
 AGENTS_DIR="$BENCH_DIR/agents"
+QUESTIONS_DIR="$BENCH_DIR/questions"
 RESULTS_DIR="$BENCH_DIR/results"
 
 mkdir -p "$RESULTS_DIR"
-
-# ============================================================
-# Step 1: Select agent
-# ============================================================
 
 echo ""
 echo "  ╔══════════════════════════════════════════════════════╗"
 echo "  ║              YATS Benchmark                          ║"
 echo "  ╚══════════════════════════════════════════════════════╝"
 echo ""
-echo "  ${B}Step 1 — Select your AI agent${R}"
-echo ""
 
+# ============================================================
+# Step 1: Agent
+# ============================================================
+echo "  ${B}Step 1 — AI Agent${R}"
+echo ""
 agents=("cursor" "claude-cli" "copilot-cli" "codex")
 labels=("Cursor" "Claude CLI" "GitHub Copilot CLI" "VS Code Codex")
-
 for i in "${!labels[@]}"; do
   echo "    ${B}$((i+1))${R}. ${labels[$i]}"
 done
 echo ""
-
-read -p "  ${B}Pick [1-${#agents[@]}]:${R} " agent_choice
-agent_idx=$((agent_choice - 1))
-AGENT="${agents[$agent_idx]}"
-
-if [ -z "$AGENT" ]; then
-  echo "  ${RED}Invalid choice${R}"
-  exit 1
-fi
-echo "  ${G}✓${R} Agent: ${labels[$agent_idx]}"
+read -p "  ${B}Pick [1-${#agents[@]}]:${R} " c
+AGENT="${agents[$((c-1))]}"
+[ -z "$AGENT" ] && echo "  ${RED}Invalid${R}" && exit 1
+echo "  ${G}✓${R} ${labels[$((c-1))]}"
 echo ""
 
 # ============================================================
-# Step 2: Select language
+# Step 2: Language
 # ============================================================
-
-echo "  ${B}Step 2 — Select language${R}"
+echo "  ${B}Step 2 — Language${R}"
 echo ""
-
 langs=($(ls -d "$QUESTIONS_DIR"/*/ | xargs -n1 basename))
 for i in "${!langs[@]}"; do
   echo "    ${B}$((i+1))${R}. ${langs[$i]}"
 done
 echo ""
-
-read -p "  ${B}Pick [1-${#langs[@]}]:${R} " lang_choice
-LANG="${langs[$((lang_choice - 1))]}"
-
-if [ -z "$LANG" ] || [ ! -d "$QUESTIONS_DIR/$LANG" ]; then
-  echo "  ${RED}Invalid choice${R}"
-  exit 1
-fi
-echo "  ${G}✓${R} Language: $LANG"
+read -p "  ${B}Pick [1-${#langs[@]}]:${R} " c
+LANG="${langs[$((c-1))]}"
+[ -z "$LANG" ] && echo "  ${RED}Invalid${R}" && exit 1
+echo "  ${G}✓${R} $LANG"
 echo ""
 
 # ============================================================
-# Step 3: Select repo
+# Step 3: Repo
 # ============================================================
-
-echo "  ${B}Step 3 — Select repository${R}"
+echo "  ${B}Step 3 — Repository${R}"
 echo ""
-
 repos=($(ls -d "$QUESTIONS_DIR/$LANG"/*/ | xargs -n1 basename))
 for i in "${!repos[@]}"; do
   echo "    ${B}$((i+1))${R}. ${repos[$i]}"
 done
 echo ""
-
-read -p "  ${B}Pick [1-${#repos[@]}]:${R} " repo_choice
-REPO="${repos[$((repo_choice - 1))]}"
-
-if [ -z "$REPO" ]; then
-  echo "  ${RED}Invalid choice${R}"
-  exit 1
-fi
-echo "  ${G}✓${R} Repo: $REPO"
+read -p "  ${B}Pick [1-${#repos[@]}]:${R} " c
+REPO="${repos[$((c-1))]}"
+[ -z "$REPO" ] && echo "  ${RED}Invalid${R}" && exit 1
+echo "  ${G}✓${R} $REPO"
 echo ""
 
 # ============================================================
-# Step 4: Select questions
+# Step 4: Questions
 # ============================================================
-
-echo "  ${B}Step 4 — Select questions${R}"
+echo "  ${B}Step 4 — Questions${R}"
 echo ""
-
 questions=($(ls "$QUESTIONS_DIR/$LANG/$REPO"/*.md | sort))
 selected=()
-
 for i in "${!questions[@]}"; do
   qname=$(basename "${questions[$i]}" .md)
   read -p "  Run ${B}${qname}${R}? [Y/n] " yn
@@ -113,175 +87,133 @@ for i in "${!questions[@]}"; do
     echo "  ${D}✗${R} $qname"
   fi
 done
+[ ${#selected[@]} -eq 0 ] && echo "  ${RED}None selected${R}" && exit 1
 echo ""
 
-if [ ${#selected[@]} -eq 0 ]; then
-  echo "  ${RED}No questions selected.${R}"
-  exit 1
-fi
-
 # ============================================================
-# Step 5: Confirm and run
+# Step 5: Confirm
 # ============================================================
-
-echo "  ${B}Ready to run ${#selected[@]} question(s).${R}"
+echo "  ${B}${#selected[@]} question(s) with ${labels[$((c-1))]} on $REPO${R}"
 read -p "  ${B}Proceed? [Y/n]${R} " yn
-if [ "$yn" = "n" ]; then
-  echo "  Cancelled."
-  exit 0
-fi
+[ "$yn" = "n" ] && echo "  Cancelled." && exit 0
 
 echo ""
 echo "  ${D}───────────────────────────────────────────────────────${R}"
 echo ""
 
 # ============================================================
-# Measure token usage
+# Extract tokens from stream-json output
 # ============================================================
-
-measure() {
-  # Tokens: approximate as chars/3.5 (same heuristic as YATS TokenBudgetService)
-  local text="$1"
-  echo "${#text} / 3.5" | bc -l | xargs printf "%.0f"
+extract_tokens() {
+  local file="$1"
+  python3 -c "
+import json, sys
+input_tokens = 0
+output_tokens = 0
+cache_read = 0
+with open('$file') as f:
+  for line in f:
+    line = line.strip()
+    if not line: continue
+    try:
+      evt = json.loads(line)
+    except: continue
+    t = evt.get('type','')
+    # Cursor stream-json: result events have usage
+    if t == 'result':
+      u = evt.get('usage', {})
+      input_tokens += u.get('input_tokens', 0)
+      output_tokens += u.get('output_tokens', 0)
+      cache_read += u.get('cache_read_tokens', 0)
+    # Claude stream-json: message events with usage
+    if t == 'message' and 'usage' in evt:
+      u = evt['usage']
+      input_tokens += u.get('input_tokens', 0)
+      output_tokens += u.get('output_tokens', 0)
+      cache_read += u.get('cache_read_input_tokens', 0)
+print(json.dumps({'input': input_tokens, 'output': output_tokens, 'cache': cache_read, 'total': input_tokens + output_tokens + cache_read}))
+" 2>/dev/null || echo '{"input":0,"output":0,"cache":0,"total":0}'
 }
 
 # ============================================================
-# Run all selected questions
+# Run all questions
 # ============================================================
-
-results_json="[]"
 TIMESTAMP=$(date +%Y-%m-%dT%H:%M:%S)
+results_json="[]"
+
+# MCP config for YATS
+YATS_MCP="$AGENTS_DIR/yats-mcp.json"
+cat > "$YATS_MCP" << EOF
+{ "mcpServers": { "yats": { "url": "http://localhost:5555/mcp" } } }
+EOF
 
 for qfile in "${selected[@]}"; do
   qname=$(basename "$qfile" .md)
-  question=$(cat "$qfile")
+  echo "  ${B}${qname}${R}"
 
-  echo "  ${B}Running:${R} $qname"
-
-  # ---- WITHOUT YATS (baseline) ----
-  start_time=$(date +%s%3N)
-  
-  # Simulate what an LLM would do: read all relevant files via grep patterns
-  # This is a heuristic: we count tokens of all files that match the key terms
-  repo_path="$TARGETS_DIR/$REPO"
-  if [ ! -d "$repo_path" ]; then
-    # Clone if not already
-    repo_url=$(python3 -c "import json; data=json.load(open('$TARGETS_DIR/repos.json')); print([r['url'] for r in data.get('$LANG',[]) if r['name']=='$REPO'][0])" 2>/dev/null || echo "")
-    if [ -n "$repo_url" ]; then
-      echo "  ${D}Cloning $REPO...${R}"
-      git clone --depth 1 "$repo_url" "$repo_path" 2>/dev/null || true
-    fi
-  fi
-
-  # Estimate tokens without YATS: grep for key terms, read matching files
-  key_terms=$(grep -oE '"[^"]*"|`[^`]*`' "$qfile" | tr -d '"`' | head -5 | tr '\n' '|' | sed 's/|$//')
-  without_files=""
-  without_chars=0
-  if [ -d "$repo_path" ] && [ -n "$key_terms" ]; then
-    without_files=$(grep -rl --include="*.py" --include="*.ts" --include="*.go" --include="*.cs" --include="*.php" -E "$key_terms" "$repo_path" 2>/dev/null | head -10)
-    for f in $without_files; do
-      chars=$(wc -c < "$f" 2>/dev/null || echo 0)
-      without_chars=$((without_chars + chars))
-    done
-  fi
-  without_input_tokens=$(measure "$without_chars")
-
-  end_time=$(date +%s%3N)
-  without_time=$((end_time - start_time))
+  # ---- WITHOUT YATS ----
+  echo -n "  ${D}without YATS...${R} "
+  bash "$AGENTS_DIR/run-agent.sh" "$AGENT" "$qfile" "" > /tmp/yats-bench-without.jsonl 2>/dev/null || true
+  sleep 2
+  without=$(extract_tokens /tmp/yats-bench-without.jsonl)
+  without_in=$(echo "$without" | python3 -c "import json,sys; print(json.load(sys.stdin)['input'])")
+  without_out=$(echo "$without" | python3 -c "import json,sys; print(json.load(sys.stdin)['output'])")
+  without_total=$(echo "$without" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
 
   # ---- WITH YATS ----
-  start_time=$(date +%s%3N)
+  echo -n "${D}with YATS...${R} "
+  bash "$AGENTS_DIR/run-agent.sh" "$AGENT" "$qfile" "$YATS_MCP" > /tmp/yats-bench-with.jsonl 2>/dev/null || true
+  sleep 2
+  with=$(extract_tokens /tmp/yats-bench-with.jsonl)
+  with_in=$(echo "$with" | python3 -c "import json,sys; print(json.load(sys.stdin)['input'])")
+  with_out=$(echo "$with" | python3 -c "import json,sys; print(json.load(sys.stdin)['output'])")
+  with_total=$(echo "$with" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
 
-  # Ask the question via MCP tools through the agent
-  # For now, simulate by measuring the tokens the MCP tool calls would use
-  # Real implementation: call the agent's CLI with the question
-  with_input_tokens=0
-  with_output_tokens=0
-
-  # Find what MCP tools YATS would use
-  search_terms=$(echo "$question" | grep -oE '\b[A-Z][a-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+\b' | head -1 || echo "$question")
-  with_input_tokens=$(measure "${#search_terms}")
-
-  # Simulate MCP tool response size (typical YATS response ~500 chars)
-  with_output_tokens=$(measure "500")
-
-  end_time=$(date +%s%3N)
-  with_time=$((end_time - start_time))
-
-  # ---- Savings ----
-  total_without=$((without_input_tokens + 100))  # +100 for output tokens
-  total_with=$((with_input_tokens + with_output_tokens))
-  if [ $total_without -gt 0 ]; then
-    savings=$((100 - (total_with * 100 / total_without)))
+  if [ "$without_total" -gt 0 ]; then
+    savings=$((100 - (with_total * 100 / without_total)))
   else
     savings=0
   fi
 
-  echo "  ${G}${savings}% saved${R} (${total_without} → ${total_with} tokens)"
+  echo "${G}${savings}% saved${R} (${without_total} → ${with_total} tokens)"
 
-  # Append to results
   result=$(python3 -c "
 import json
 r = {
   'question': '$qname',
-  'without_yats': {'time_ms': $without_time, 'input_tokens': $without_input_tokens, 'output_tokens': 100},
-  'with_yats':    {'time_ms': $with_time,    'input_tokens': $with_input_tokens,   'output_tokens': $with_output_tokens},
+  'without_yats': {'input_tokens': $without_in, 'output_tokens': $without_out, 'total': $without_total},
+  'with_yats':    {'input_tokens': $with_in,    'output_tokens': $with_out,    'total': $with_total},
   'savings_pct': $savings
 }
 print(json.dumps(r))
-" 2>/dev/null || echo "{}")
-  
-  results_json=$(python3 -c "
-import json
-results = json.loads('$results_json')
-results.append($result)
-print(json.dumps(results))
-" 2>/dev/null || echo "$results_json")
-  
+")
+  results_json=$(python3 -c "import json; r=json.loads('$results_json'); r.append($result); print(json.dumps(r))")
   echo ""
 done
 
 # ============================================================
-# Save results
+# Save & display
 # ============================================================
-
-output_file="$RESULTS_DIR/${LANG}_${REPO}_${AGENT}_${TIMESTAMP}.json"
+output="$RESULTS_DIR/${LANG}_${REPO}_${AGENT}_${TIMESTAMP}.json"
 python3 -c "
 import json
-data = {
-  'agent': '$AGENT',
-  'repo': '$REPO',
-  'language': '$LANG',
-  'timestamp': '$TIMESTAMP',
-  'questions': json.loads('$results_json')
-}
-with open('$output_file', 'w') as f:
-  json.dump(data, f, indent=2)
-" 2>/dev/null
-
-# ============================================================
-# Show results table
-# ============================================================
+data = {'agent':'$AGENT','repo':'$REPO','language':'$LANG','timestamp':'$TIMESTAMP','questions':json.loads('$results_json')}
+with open('$output','w') as f: json.dump(data, f, indent=2)
+"
 
 echo "  ${D}───────────────────────────────────────────────────────${R}"
 echo ""
 echo "  ${B}Results${R}"
 echo ""
-
 python3 -c "
 import json
 data = json.loads('$results_json')
-
-print('  ┌──────────────────────────┬──────────┬──────────┬────────┬──────────┐')
-print('  │ Question                 │ W/o YATS │ With YATS│ Time   │ Savings  │')
-print('  ├──────────────────────────┼──────────┼──────────┼────────┼──────────┤')
+print('  ┌────────────────────────┬──────────┬──────────┬──────────┐')
+print('  │ Question               │ W/o YATS │ With YATS│ Savings  │')
+print('  ├────────────────────────┼──────────┼──────────┼──────────┤')
 for q in data:
-    wout = q['without_yats']['input_tokens'] + q['without_yats']['output_tokens']
-    wwith = q['with_yats']['input_tokens'] + q['with_yats']['output_tokens']
-    time_s = (q['with_yats']['time_ms'] / 1000)
-    print(f\"  │ {q['question'][:24]:<24} │ {wout:>5}t   │ {wwith:>5}t   │ {time_s:>4.1f}s  │ {q['savings_pct']:>3}%     │\")
-print('  └──────────────────────────┴──────────┴──────────┴────────┴──────────┘')
-print('')
-print(f\"  Results saved to $output_file\")
-print('')
-" 2>/dev/null || echo "  (Results saved to $output_file)"
+    print(f\"  │ {q['question'][:22]:<22} │ {q['without_yats']['total']:>5}t   │ {q['with_yats']['total']:>5}t   │ {q['savings_pct']:>3}%      │\")
+print('  └────────────────────────┴──────────┴──────────┴──────────┘')
+print(f\"\\n  Saved to $output\")
+"
+echo ""
