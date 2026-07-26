@@ -407,12 +407,11 @@ const LIST_REPOSITORIES: ToolDefinition = {
 
 const INDEX_REPOSITORY: ToolDefinition = {
   name: "index_repository",
-  description: "Index a repository so it becomes searchable. Call this before searching code in a repo that isn't indexed yet. Indexing extracts symbols, relationships, and builds the knowledge graph.",
+  description: "Index a repository so it becomes searchable. This tool tells you the command to run — the actual indexing happens via the 'yats index' CLI on your machine, which walks local files and sends them to the YATS server.",
   inputSchema: {
     type: "object",
     properties: {
       path: { type: "string", description: "Absolute path to the repository to index" },
-      skipDocs: { type: "boolean", description: "Set to true to skip documentation indexing. Useful when the repo has thousands of .md files." },
     },
     required: ["path"],
   },
@@ -789,74 +788,12 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const repoPath = args.path as string;
     if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
 
-    const skipDocs = args.skipDocs === true;
-
-    // Check for massive docs before indexing
-    if (!skipDocs) {
-      const docWarning = await checkDocsWarning(repoPath, deps);
-      if (docWarning) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              warning: "large_docs_detected",
-              message: docWarning,
-              hint: "Call index_repository again with skipDocs: true to skip docs, or skipDocs: false to include them.",
-            }, null, 2),
-          }],
-        };
-      }
-    }
-
-    // Check if already indexed
     const repoName = repoPath.split("/").pop() || repoPath;
-    const repos = await deps.graphRepository.listRepositories();
-    const existing = repos.find(r => r.name === repoName);
-    if (existing) {
-      // Already indexed — delete and re-index
-      await deps.graphRepository.clearRepository(repoName);
-      await deps.vectorRepository.clearVectorsByRepository(repoName);
-      await deps.graphRepository.deleteRepositoryNode(repoName);
-    }
-
-    // Launch indexing in background (don't await)
-    deps.indexer.indexRepository(repoPath, { skipDocs }).then((result) => {
-      console.error(JSON.stringify({
-        event: "index_complete",
-        repository: repoName,
-        symbolsFound: result.symbolsFound,
-        relationshipsFound: result.relationshipsFound,
-        duration: result.duration,
-      }));
-    }).catch((err: any) => {
-      console.error(JSON.stringify({
-        event: "index_error",
-        repository: repoName,
-        error: err.message,
-      }));
-    });
 
     return {
       content: [{
         type: "text",
-        text: JSON.stringify({
-          status: "indexing_started",
-          repository: repoName,
-          skipDocs,
-          message: `Indexing "${repoName}" has started in the background.`,
-          agentInstructions: {
-            informUser: `Tell the user: "Indexing ${repoName} has started. This will take several minutes (analyzing code + generating embeddings + storing relationships)."`,
-            polling: {
-              tool: "repository_summary",
-              args: { repository: repoName },
-              interval: "Every 20-30 seconds",
-              stopWhen: "relationships stop increasing between two consecutive checks",
-              notifyUserOnEachPoll: "Tell the user the current progress (symbols and relationships count) so they know it's advancing.",
-              onComplete: "Show the user a final summary with symbolsFound and relationshipsFound.",
-            },
-            alternative: "If the user doesn't want to wait, tell them they can ask for the status later using repository_summary.",
-          },
-        }, null, 2),
+        text: `Tell the user:\n\n"I'm going to index ${repoPath}. This will analyze your code, generate embeddings, and store the knowledge graph. It may take a few minutes depending on the repo size."\n\nAsk the user: "Docs indexing adds extra time (roughly ~30s per 200 markdown files with cloud embeddings). If the repo has a lot of docs, do you want to skip them for faster indexing?"\n\nIf the user wants to skip docs, run:\n\n  yats index ${repoPath} --skip-docs\n\nOtherwise, run:\n\n  yats index ${repoPath}\n\nAfter the command finishes, poll with:\n\n  repository_summary(repository: "${repoName}")\n\nWait until 'relationships' stops increasing between two consecutive checks. Then show the user the final summary.\n\nIf the user doesn't want to wait, tell them they can ask for the status anytime with 'repository_summary'.`,
       }],
     };
   });

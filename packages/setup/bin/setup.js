@@ -18,9 +18,12 @@ switch (cmd) {
     import("../src/setup.js").then(m => m.default());
     break;
   case "index":
-  case "add":
-    import("../src/indexer.js").then(m => m.default(args));
+  case "add": {
+    const skipDocs = args.includes("--skip-docs");
+    const cleanArgs = args.filter(a => a !== "--skip-docs");
+    import("../src/indexer.js").then(m => m.default(cleanArgs, { skipDocs }));
     break;
+  }
   case "status":
     import("../src/status.js").then(m => m.default());
     break;

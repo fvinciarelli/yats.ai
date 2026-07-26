@@ -27,7 +27,8 @@ async function walk(dir) {
   return files;
 }
 
-export default async function indexRepo(args) {
+export default async function indexRepo(args, options = {}) {
+  const skipDocs = options.skipDocs || false;
   const repoPath = args[0];
   if (!repoPath) {
     console.error("Usage: npx yats index <path>");
@@ -61,6 +62,10 @@ export default async function indexRepo(args) {
 
   for (const file of files) {
     const relPath = relative(repoPath, file);
+
+    // Skip docs if requested
+    if (skipDocs && relPath.endsWith(".md")) continue;
+
     try {
       const content = readFileSync(file, "utf-8");
       // Skip binary/large files

@@ -351,6 +351,14 @@ export class McpServer {
       this.logger.info(`SSE session closed: ${sessionId}`);
     });
 
+    // Prevent EPIPE crashes when client disconnects abruptly
+    res.on("error", (err: any) => {
+      if (err.code === "EPIPE") {
+        this.sessions.delete(sessionId);
+        this.logger.debug(`SSE session EPIPE (client disconnected): ${sessionId}`);
+      }
+    });
+
     // Keep alive every 30s
     const keepAlive = setInterval(() => {
       res.write(": keepalive\n\n");
