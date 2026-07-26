@@ -40,12 +40,10 @@ case "$agent" in
     ;;
 
   copilot-cli)
-    if check_cmd copilot || check_cmd gh; then
-      cmd="copilot"
-      check_cmd copilot || cmd="gh copilot"
-      $cmd -p "$question" 2>/dev/null
+    if check_cmd copilot; then
+      copilot -p "$question" 2>/dev/null
     else
-      echo "copilot CLI not installed." >&2
+      echo "copilot not installed: npm install -g @github/copilot" >&2
     fi
     ;;
 

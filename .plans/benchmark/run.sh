@@ -108,6 +108,9 @@ try:
       if t == 'turn.completed':
         u = evt.get('usage',{})
         total += u.get('input_tokens',0) + u.get('cached_input_tokens',0) + u.get('output_tokens',0) + u.get('reasoning_output_tokens',0)
+      # Copilot: assistant.usage events
+      if t == 'assistant.usage':
+        total += evt.get('inputTokens',0) + evt.get('outputTokens',0) + evt.get('cacheReadTokens',0)
 except: pass
 print(total)
 " 2>/dev/null || echo 0
