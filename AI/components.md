@@ -113,7 +113,15 @@
 - **File:** `application/services/indexer.service.ts`
 - **Responsibility:** Full indexing pipeline orchestrator
 - **Dependencies:** `GraphRepository`, `VectorRepository`, `EmbeddingGenerator`, `FileSystem`, `AnalyzerFactory`
-- **Key API:** `indexRepository(path) → IndexResult`, `indexFile(repo, path)`, `indexDocumentation(path) → number`, `incrementalIndex(path, commit) → IndexResult`
+- **Key API:** `indexRepository(path, options?) → IndexResult`, `indexFile(repo, path)`, `indexDocumentation(path) → number`, `incrementalIndex(path, commit) → IndexResult`, `ensureIndexed(path, options?)`
+- **Options:** `{ skipDocs?: boolean }` — skips documentation indexing when `true`
+
+### GlobalSymbolTable
+- **File:** `application/services/global-symbol-table.ts`
+- **Responsibility:** Resolves cross-file symbol references by name matching
+- **Key API:** `index(entries)`, `resolveCallTarget(targetId, sourceId) → string`, `resolveImportTarget(targetId, sourceId, metadata) → string`
+- **Resolution flow:** Maps `byName` (simple name → Set<fullId>), `byNamespace` (namespace → Set<fullId>), and `pathToNamespace`/`namespaceToPath`. `resolveRelationships()` rewrites target IDs for CALLS, IMPORTS, IMPLEMENTS, and INHERITS relationships.
+- **Exact-match preference in MCP tools:** `resolveSymbolId` prefers exact name matches over CONTAINS matches to avoid picking the wrong symbol (e.g. `GraphRepository` vs `Neo4jGraphRepository`).
 
 ### IncrementalIndexerService
 - **File:** `application/services/incremental-indexer.service.ts`
@@ -180,13 +188,26 @@
 - **File:** `server.ts`
 - **Responsibility:** MCP JSON-RPC server over stdio, HTTP+SSE, and Streamable HTTP
 - **Key API:** `start({ transport?, port? })` — blocks until shutdown
-- **Endpoints:** `/mcp` (Streamable HTTP), `/mcp/sse` (SSE), `/mcp/message` (SSE messages), `/health`
+- **Endpoints:** `/mcp` (Streamable HTTP; GET with `Accept: text/event-stream` opens SSE session), `/mcp/sse` (SSE), `/mcp/message` (SSE messages), `/health`
 - **Handles:** `initialize`, `tools/list`, `tools/call`, `shutdown`, `ping`
 
 ### MCP Tools
 - **File:** `tools/all-tools.ts`
-- **Responsibility:** 19 tool definitions + handler factory (read-only search & query)
-- **Tools:** `search_code`, `search_documentation`, `find_symbol`, `find_references`, `find_callers`, `find_callees`, `find_implementations`, `find_inheritors`, `find_tests`, `find_routes`, `find_configuration`, `expand_graph`, `related_symbols`, `list_symbols`, `repository_summary`, `architecture_summary`, `search_similar`, `list_repositories`, `index_repository`
+- **Responsibility:** 20 tool definitions + handler factory (read-only search & query, plus async indexing and deletion)
+- **Tools:** `search_code`, `search_documentation`, `find_symbol`, `find_references`, `find_callers`, `find_callees`, `find_implementations`, `find_inheritors`, `find_tests`, `find_routes`, `find_configuration`, `expand_graph`, `related_symbols`, `list_symbols`, `repository_summary`, `architecture_summary`, `search_similar`, `list_repositories`, `index_repository`, `delete_repository`
+
+#### `index_repository` (async)
+- Runs indexing in the background and returns immediately with `status: "indexing_started"`
+- Includes `agentInstructions` telling the AI agent how to poll progress via `repository_summary`
+- Parameter `skipDocs` (boolean): skips documentation indexing
+- Docs warning: if `skipDocs` is not set and the repo has >300 `.md` files, returns a warning asking the agent to confirm the doc indexing decision
+- Resolution of `IMPLEMENTS` and `INHERITS` relationships uses `resolveCallTarget` in `GlobalSymbolTable` for cross-file reference resolution
+- Symbol name resolution in tools uses exact-match preference (fixes `CONTAINS` matching returning wrong symbols)
+
+#### `delete_repository`
+- Deletes all indexed data for a repository without touching source files
+- Two-step confirmation: first call without `confirm` returns a warning with repo stats; call with `confirm: true` to execute
+- Accepts `repository` (name) or `path` (resolved to repo name)
 
 ### MCP Middleware
 - **Files:** `middleware/error-handler.ts`, `middleware/rate-limiter.ts`, `middleware/logger.ts`

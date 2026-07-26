@@ -37,7 +37,7 @@ yats/
 │   ├── infra/              ← Neo4j, Qdrant, embeddings, file system, git, DI
 │   ├── indexing/           ← Indexing pipeline: walker, language detector, indexer
 │   ├── retrieval/          ← Hybrid retrieval: rank, dedup, compress, token budget
-│   ├── mcp-server/         ← MCP JSON-RPC server (stdio + HTTP+SSE + Streamable HTTP), 19 tools
+│   ├── mcp-server/         ← MCP JSON-RPC server (stdio + HTTP+SSE + Streamable HTTP), 20 tools
 │   ├── cli/                ← CLI: yats list|index|search|serve|summary|clear
 │   ├── setup/              ← One-command setup wizard + bridge/stop/status scripts
 │   └── analyzers/

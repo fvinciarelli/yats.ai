@@ -23,3 +23,9 @@ Thumbs.db
 .plans
 AI/
 test_repo/
+artifacts/
+.codex 
+.pi
+
+obj/
+bin/

@@ -103,7 +103,7 @@ export class IndexerService implements Indexer {
   // running, reducing total wall-clock time significantly.
   // ============================================================
 
-  async indexRepository(repositoryPath: string): Promise<IndexResult> {
+  async indexRepository(repositoryPath: string, options?: { skipDocs?: boolean }): Promise<IndexResult> {
     const totalStart = Date.now();
     const repoName = this.getRepoName(repositoryPath);
     this.logger.info(`Indexing repository: ${repoName} at ${repositoryPath}`);
@@ -132,9 +132,8 @@ export class IndexerService implements Indexer {
     this.logger.info(`Walked ${files.length} files (${supportedFiles.length} indexable) in ${walkMs}ms`);
 
     // 2. Launch docs indexing in parallel with code pipeline (if enabled)
-    //    Docs are independent of code — they run concurrently so they
-    //    don't add to total time (they overlap with code analysis).
-    const indexDocs = process.env.INDEX_DOCS !== "false";
+    const skipDocs = options?.skipDocs === true;
+    const indexDocs = !skipDocs && process.env.INDEX_DOCS !== "false";
     let docsPromise: Promise<number> | null = null;
 
     if (indexDocs) {
@@ -504,7 +503,7 @@ export class IndexerService implements Indexer {
    *                  "reindexed" (was stale, just updated),
    *                  "fresh" (already up to date)
    */
-  async ensureIndexed(repositoryPath: string): Promise<{
+  async ensureIndexed(repositoryPath: string, options?: { skipDocs?: boolean }): Promise<{
     status: "indexed" | "reindexed" | "fresh";
     result?: IndexResult;
   }> {
@@ -516,7 +515,7 @@ export class IndexerService implements Indexer {
 
     if (!exists) {
       this.logger.info(`Repository "${repoName}" not indexed yet — full indexing...`);
-      const result = await this.indexRepository(repositoryPath);
+      const result = await this.indexRepository(repositoryPath, options);
       return { status: "indexed", result };
     }
 

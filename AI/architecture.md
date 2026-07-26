@@ -62,7 +62,7 @@ The project follows **Hexagonal Architecture (Ports & Adapters)** with **Domain-
 
 ### Adapters Layer
 
-- **MCP Server** (`@yats/mcp-server`): Primary driving adapter. JSON-RPC over stdio, HTTP+SSE, and Streamable HTTP. 19 tools.
+- **MCP Server** (`@yats/mcp-server`): Primary driving adapter. JSON-RPC over stdio, HTTP+SSE, and Streamable HTTP. 20 tools (including async `index_repository` and `delete_repository`).
 - **CLI** (`@yats/cli`): Secondary driving adapter. Commander-based CLI with `list`, `index`, `search`, `serve`, `summary`, `clear`.
 - **Bridge** (`packages/bridge`): Thin proxy that translates stdio MCP ↔ HTTP+SSE, for agents that only speak stdio.
 - **Setup** (`packages/setup`): One-command wizard (`npx yats-setup`) that configures Docker, clones repos, and starts services.

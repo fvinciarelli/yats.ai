@@ -52,6 +52,34 @@
 - **Missing:** Full subgraph with relationships for visualization/traversal
 - **Impact:** MCP clients can see connected symbols but not HOW they're connected
 
+## Recently Fixed
+
+### ✅ IMPLEMENTS and INHERITS cross-file resolution
+- **Was:** `resolveRelationships` in `GlobalSymbolTable` only handled CALLS and IMPORTS. IMPLEMENTS and INHERITS kept wrong target IDs (scoped to the current file), so Neo4j edges never matched their target interfaces/classes.
+- **Fix:** Added IMPLEMENTS and INHERITS to `resolveRelationships`, reusing `resolveCallTarget` logic (extract simple name, look up globally, filter by different file/namespace).
+
+### ✅ `extractHeritage` skipped by member processing errors
+- **Was:** In `TypeScriptAnalyzer.processNode`, `extractHeritage` was called AFTER `processClassMember`. If a class member triggered an error (e.g. invalid symbol ID from chained methods like `rows.filter(...)`), heritage extraction was skipped.
+- **Fix:** Moved `extractHeritage` before the member processing loop.
+
+### ✅ MCP `find_implementations` returning empty results
+- **Was:** `resolveSymbolId` used the first result from `findSymbolByName`, which uses CONTAINS matching. Searching "GraphRepository" returned "Neo4jGraphRepository" first, so the tool looked for implementations of a class instead of the interface.
+- **Fix:** `resolveSymbolId` now prefers exact name matches over CONTAINS matches.
+
+### ✅ Streamable HTTP SSE support on `/mcp`
+- **Was:** GET `/mcp` returned `{"status":"ok"}` JSON regardless of the `Accept` header. MCP clients (like pi-mcp-adapter) using Streamable HTTP transport expect GET with `Accept: text/event-stream` to open an SSE session.
+- **Fix:** GET `/mcp` now checks the `Accept` header; if it includes `text/event-stream`, it opens an SSE session via `handleSseConnect`.
+
+### ✅ Async `index_repository` MCP tool
+- **Was:** `index_repository` waited for the full indexing pipeline (walk → analyze → embed → store) before responding, causing MCP timeouts for large repos.
+- **Fix:** The tool now launches indexing in the background and returns immediately with `status: "indexing_started"` plus `agentInstructions` for polling progress via `repository_summary`.
+
+### ✅ `delete_repository` MCP tool
+- **New:** Two-step confirmation flow. First call without `confirm` returns a warning with repo stats. Second call with `confirm: true` executes the deletion (symbols, relationships, vectors, and Repository node).
+
+### ✅ `skipDocs` option on `index_repository`
+- **New:** Boolean parameter to skip documentation indexing. The tool also detects repos with >300 `.md` files and asks for confirmation before indexing docs.
+
 ## Reliability Risks
 
 ### 1. Single point of failure: Neo4j

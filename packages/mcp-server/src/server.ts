@@ -237,9 +237,19 @@ export class McpServer {
         return;
       }
 
-      // Streamable HTTP — MCP transport used by Copilot, VS Code
+      // Streamable HTTP — MCP transport used by Copilot, VS Code, pi-mcp-adapter
       if (url.pathname === "/mcp") {
-        if (req.method === "GET" || req.method === "DELETE") {
+        if (req.method === "DELETE") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "ok" }));
+          return;
+        }
+        if (req.method === "GET") {
+          const accept = req.headers["accept"] ?? "";
+          if (accept.includes("text/event-stream")) {
+            this.handleSseConnect(res);
+            return;
+          }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ status: "ok" }));
           return;

@@ -257,6 +257,11 @@ export function resolveRelationships(
         rel.sourceSymbolId,
         rel.metadata,
       );
+    } else if (
+      rel.kind === ("IMPLEMENTS" as RelationshipKind) ||
+      rel.kind === ("INHERITS" as RelationshipKind)
+    ) {
+      newTargetId = table.resolveCallTarget(rel.targetSymbolId, rel.sourceSymbolId);
     }
 
     if (newTargetId !== rel.targetSymbolId) {

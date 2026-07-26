@@ -561,6 +561,13 @@ export class Neo4jGraphRepository implements GraphRepository {
     );
   }
 
+  async deleteRepositoryNode(name: string): Promise<void> {
+    await this.connection.write(
+      `MATCH (r:Repository {name: $name}) DETACH DELETE r`,
+      { name },
+    );
+  }
+
   // ============================================================
   // Helpers
   // ============================================================

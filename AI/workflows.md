@@ -59,6 +59,51 @@ Each analyzer should detect architectural roles:
    ```
 4. If the tool needs a new dependency, add it to `McpDependencies` interface
 
+### Pattern: Async Tools (Long-Running Operations)
+
+For operations that take more than a few seconds (e.g. indexing), use the async pattern:
+
+```typescript
+handlers.set("my_async_tool", async (args) => {
+  // 1. Validate inputs
+  // 2. Launch work in background (don't await)
+  deps.someService.startLongOperation(args.param)
+    .then(result => console.error(JSON.stringify({ event: "complete", ...result })))
+    .catch(err => console.error(JSON.stringify({ event: "error", error: err.message })));
+
+  // 3. Return immediately with polling instructions
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        status: "started",
+        agentInstructions: {
+          polling: { tool: "some_status_tool", interval: "Every 20-30 seconds", stopWhen: "..." },
+          onComplete: "Show final summary.",
+          alternative: "User can check later.",
+        },
+      }),
+    }],
+  };
+});
+```
+
+### Pattern: Confirmation Tools (Destructive Operations)
+
+For destructive operations, require explicit confirmation:
+
+```typescript
+handlers.set("my_delete_tool", async (args) => {
+  if (!args.confirm) {
+    return { content: [{ type: "text",
+      text: "⚠️ About to delete X. Ask the user for confirmation, then call again with confirm: true."
+    }]};
+  }
+  await deps.someRepository.delete(args.target);
+  return { content: [{ type: "text", text: "✅ Deleted." }]};
+});
+```
+
 ---
 
 ## Indexing a Repository

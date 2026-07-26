@@ -53,4 +53,5 @@ export interface GraphRepository {
   findRepositoryByPath(rootPath: string): Promise<RepositoryInfo | null>;
   getLastIndexedCommit(name: string): Promise<string | null>;
   setLastIndexedCommit(name: string, commit: string): Promise<void>;
+  deleteRepositoryNode(name: string): Promise<void>;
 }

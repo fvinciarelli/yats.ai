@@ -56,6 +56,7 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     SEARCH_SIMILAR,
     LIST_REPOSITORIES,
     INDEX_REPOSITORY,
+    DELETE_REPOSITORY,
   ];
 }
 
@@ -411,8 +412,23 @@ const INDEX_REPOSITORY: ToolDefinition = {
     type: "object",
     properties: {
       path: { type: "string", description: "Absolute path to the repository to index" },
+      skipDocs: { type: "boolean", description: "Set to true to skip documentation indexing. Useful when the repo has thousands of .md files." },
     },
     required: ["path"],
+  },
+};
+
+const DELETE_REPOSITORY: ToolDefinition = {
+  name: "delete_repository",
+  description: "Delete an indexed repository from YATS (removes all symbols, relationships, and vectors). CAUTION: this is irreversible. The source code files are NOT deleted — only the indexed data.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      repository: { type: "string", description: "Exact name of the repository to delete (from list_repositories)" },
+      path: { type: "string", description: "Alternatively, resolve the repository by its path. If it matches an indexed repo, it will be deleted." },
+      confirm: { type: "boolean", description: "REQUIRED: set to true to confirm deletion. The first call without this returns a warning asking for confirmation." },
+    },
+    required: [],
   },
 };
 
@@ -492,6 +508,33 @@ function notIndexed(hint?: string): ToolResult {
   };
 }
 
+/**
+ * Check if the repository has a massive docs/ directory and return a warning.
+ * Returns null if docs are fine to index, or a warning string if there are too many.
+ */
+async function checkDocsWarning(
+  repoPath: string,
+  deps: McpDependencies,
+): Promise<string | null> {
+  const MAX_DOC_FILES = 300;
+  const docsDir = `${repoPath}/docs`;
+  try {
+    const exists = await deps.fileSystem.exists(docsDir);
+    if (!exists) return null;
+    const files = await deps.fileSystem.listFiles(docsDir);
+    const mdFiles = files.filter(f => f.endsWith(".md")).length;
+    if (mdFiles > MAX_DOC_FILES) {
+      return (
+        `docs/ has ${mdFiles} .md files (threshold: ${MAX_DOC_FILES}). ` +
+        `Indexing all of them will take a long time.\n\n` +
+        `- Call index_repository with skipDocs: true to skip documentation\n` +
+        `- Call index_repository with skipDocs: false (or omit it) to index docs anyway`
+      );
+    }
+  } catch { /* can't access docs — ignore */ }
+  return null;
+}
+
 // ============================================================
 // Resolve symbol ID from name
 // ============================================================
@@ -523,8 +566,10 @@ async function resolveSymbolId(
     };
   }
 
-  // Use the first match
-  return symbols[0]!.id;
+  // Prefer exact name match (findSymbolByName uses CONTAINS, so "Greeter"
+  // might return "SpanishGreeter" before "Greeter")
+  const exactMatch = symbols.find((s) => s.name === name);
+  return (exactMatch ?? symbols[0]!).id;
 }
 
 // ============================================================
@@ -744,13 +789,133 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const repoPath = args.path as string;
     if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
 
-    const { status, result } = await deps.indexer.ensureIndexed(repoPath);
+    const skipDocs = args.skipDocs === true;
+
+    // Check for massive docs before indexing
+    if (!skipDocs) {
+      const docWarning = await checkDocsWarning(repoPath, deps);
+      if (docWarning) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              warning: "large_docs_detected",
+              message: docWarning,
+              hint: "Call index_repository again with skipDocs: true to skip docs, or skipDocs: false to include them.",
+            }, null, 2),
+          }],
+        };
+      }
+    }
+
+    // Check if already indexed
+    const repoName = repoPath.split("/").pop() || repoPath;
+    const repos = await deps.graphRepository.listRepositories();
+    const existing = repos.find(r => r.name === repoName);
+    if (existing) {
+      // Already indexed — delete and re-index
+      await deps.graphRepository.clearRepository(repoName);
+      await deps.vectorRepository.clearVectorsByRepository(repoName);
+      await deps.graphRepository.deleteRepositoryNode(repoName);
+    }
+
+    // Launch indexing in background (don't await)
+    deps.indexer.indexRepository(repoPath, { skipDocs }).then((result) => {
+      console.error(JSON.stringify({
+        event: "index_complete",
+        repository: repoName,
+        symbolsFound: result.symbolsFound,
+        relationshipsFound: result.relationshipsFound,
+        duration: result.duration,
+      }));
+    }).catch((err: any) => {
+      console.error(JSON.stringify({
+        event: "index_error",
+        repository: repoName,
+        error: err.message,
+      }));
+    });
+
     return {
       content: [{
         type: "text",
-        text: JSON.stringify({ status, ...(result ?? {}) }, null, 2),
+        text: JSON.stringify({
+          status: "indexing_started",
+          repository: repoName,
+          skipDocs,
+          message: `Indexing "${repoName}" has started in the background.`,
+          agentInstructions: {
+            informUser: `Tell the user: "Indexing ${repoName} has started. This will take several minutes (analyzing code + generating embeddings + storing relationships)."`,
+            polling: {
+              tool: "repository_summary",
+              args: { repository: repoName },
+              interval: "Every 20-30 seconds",
+              stopWhen: "relationships stop increasing between two consecutive checks",
+              notifyUserOnEachPoll: "Tell the user the current progress (symbols and relationships count) so they know it's advancing.",
+              onComplete: "Show the user a final summary with symbolsFound and relationshipsFound.",
+            },
+            alternative: "If the user doesn't want to wait, tell them they can ask for the status later using repository_summary.",
+          },
+        }, null, 2),
       }],
     };
+  });
+
+  handlers.set("delete_repository", async (args) => {
+    const repoName = (args.repository as string) || undefined;
+    const repoPath = (args.path as string) || undefined;
+    const confirm = args.confirm === true;
+
+    // Resolve repository name
+    let targetName: string | null = null;
+    if (repoName) {
+      const repos = await deps.graphRepository.listRepositories();
+      const found = repos.find(r => r.name === repoName);
+      if (found) targetName = found.name;
+    } else if (repoPath) {
+      const repo = await deps.graphRepository.findRepositoryByPath(repoPath);
+      if (repo) targetName = repo.name;
+    }
+
+    if (!targetName) {
+      const hint = repoName || repoPath || "(nothing provided)";
+      return {
+        content: [{ type: "text", text: `Repository "${hint}" not found in indexed repos. Use list_repositories to see available repos.` }],
+        isError: true,
+      };
+    }
+
+    // Get summary for the confirmation message
+    let summary = "";
+    try {
+      const s = await deps.graphRepository.repositorySummary(targetName);
+      summary = ` (${s.totalSymbols} symbols, ${s.totalRelationships} relationships)`;
+    } catch { /* ignore */ }
+
+    if (!confirm) {
+      return {
+        content: [{
+          type: "text",
+          text: `⚠️  About to delete "${targetName}"${summary}.\n\nThis will permanently remove all indexed data (symbols, relationships, vectors). The source code files will NOT be affected.\n\nAsk the user for confirmation, then call delete_repository again with confirm: true.`,
+        }],
+      };
+    }
+
+    // Confirmed — delete
+    try {
+      await deps.graphRepository.clearRepository(targetName);
+      await deps.vectorRepository.clearVectorsByRepository(targetName);
+      // Also remove the Repository node itself
+      await deps.graphRepository.deleteRepositoryNode(targetName);
+      return {
+        content: [{ type: "text", text: `✅ Repository "${targetName}" deleted successfully${summary}.` }],
+      };
+    } catch (err: any) {
+      return {
+        content: [{ type: "text", text: `❌ Failed to delete "${targetName}": ${err.message}` }],
+        isError: true,
+      };
+    }
   });
 
   logger.info(`Registered ${handlers.size} tool handlers`);

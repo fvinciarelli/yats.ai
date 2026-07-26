@@ -145,6 +145,10 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         );
       }
 
+      // Check heritage (extends, implements) — do this BEFORE processing
+      // members so that errors in member processing don't skip heritage extraction
+      this.extractHeritage(node, sourceFile, id, filePath, repository, namespace, symbols, relationships);
+
       // Process class members
       ts.forEachChild(node, (member) => {
         this.processClassMember(
@@ -160,9 +164,6 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
           relationships,
         );
       });
-
-      // Check heritage (extends, implements)
-      this.extractHeritage(node, sourceFile, id, filePath, repository, namespace, symbols, relationships);
     }
 
     // Interface

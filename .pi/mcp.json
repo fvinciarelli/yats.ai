@@ -36,6 +36,10 @@
     "exa": {
       "url": "https://mcp.exa.ai/mcp",
       "lifecycle": "lazy"
+    },
+    "yats-stdio": {
+      "url": "http://localhost:5555/mcp",
+      "lifecycle": "lazy"
     }
   }
 }

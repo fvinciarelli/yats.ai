@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "YATS — Yet Another Token Saver. Index your code, talk to your AI.",
+  "author": "Franco Vinciarelli <vinciarellifranco@gmail.com>",
   "scripts": {
     "build": "pnpm -r run build",
     "build:watch": "pnpm -r run build:watch",
@@ -21,6 +22,7 @@
   },
   "packageManager": "pnpm@9.15.4",
   "devDependencies": {
+    "@openai/codex": "^0.145.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

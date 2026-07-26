@@ -112,6 +112,18 @@
 
 **VectorRepository:** Interface for Qdrant operations. Implemented by `QdrantVectorRepository`.
 
+## A (Additions)
+
+**Async Indexing:** `index_repository` launches background indexing and returns immediately. The agent polls `repository_summary` to track progress (symbols count, then relationships count until stable).
+
+**SkipDocs:** Boolean parameter on `index_repository` that skips documentation indexing (`.md` files). The tool warns if a repo has >300 markdown files.
+
+**Agent Instructions:** JSON field in `index_repository` response telling the AI agent how to poll, what interval to use, when to consider indexing complete, and what to tell the user.
+
+**Delete Repository:** MCP tool (`delete_repository`) that removes all indexed data for a repo. Uses a two-step confirmation flow: first call returns a warning, second call with `confirm: true` executes deletion.
+
+**Exact Match Preference:** `resolveSymbolId` in MCP tools prefers exact name matches over `CONTAINS` matches to avoid selecting the wrong symbol (e.g., picking `Neo4jGraphRepository` when searching for `GraphRepository`).
+
 ## Y
 
 **YATS (Yet Another Token Saver):** The project name. Indexes codebases, builds knowledge graphs, and serves MCP tools so LLMs query code without reading raw files — saving tokens.
