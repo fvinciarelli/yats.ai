@@ -3,7 +3,7 @@
   "version": "0.1.8",
   "description": "YATS — Yet Another Token Saver. One-command MCP server that indexes your codebase into a knowledge graph so AI agents (Claude, Cursor, Copilot) can search and navigate it without burning tokens.",
   "author": "Franco Vinciarelli <vinciarellifranco@gmail.com>",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fvinciarelli/yats.git"
