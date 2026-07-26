@@ -2,7 +2,7 @@
  * YATS Setup — One-command wizard to get YATS running on your machine.
  *
  * Usage:
- *   npx yats-setup
+ *   npx yats-toolkit
  *   curl -fsSL https://get.yats.site | bash
  *
  * Requirements: Docker (with compose plugin)
@@ -373,7 +373,7 @@ async function main() {
     console.log(`  ${RED}✗ Docker is not installed or not running.${R}`);
     console.log("");
     console.log(`  Please install Docker Desktop from ${C}https://docker.com${R}`);
-    console.log(`  Then re-run:  ${B}npx yats-setup${R}`);
+    console.log(`  Then re-run:  ${B}npx yats-toolkit${R}`);
     console.log("");
     process.exit(1);
   }
@@ -388,7 +388,7 @@ async function main() {
     console.log(`  To start fresh, run this first ${B}(destroys all indexed data):${R}`);
     console.log(`  ${C}docker compose -f ~/.yats/docker-compose.yml down -v${R}`);
     console.log("");
-    console.log(`  Then re-run ${B}npx yats-setup${R}`);
+    console.log(`  Then re-run ${B}npx yats-toolkit${R}`);
     console.log("");
     process.exit(0);
   }
@@ -548,7 +548,7 @@ async function main() {
   })();
   if (proceed.toLowerCase() === "n") {
     console.log("");
-    console.log(`  Setup cancelled. Run ${B}npx yats-setup${R} anytime to try again.`);
+    console.log(`  Setup cancelled. Run ${B}npx yats-toolkit${R} anytime to try again.`);
     console.log("");
     process.exit(0);
   }
