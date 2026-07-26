@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * YATS — Yet Another Token Saver
+ * YATS Toolkit — Code intelligence for AI agents.
  * 
  * Usage:
- *   npx yats setup              # One-time setup wizard
- *   npx yats index <path>       # Index a repository
- *   npx yats status             # Check indexed repos
- *   npx yats stop               # Stop all YATS services
- *   npx yats bridge             # MCP stdio ↔ HTTP proxy (for Copilot, Claude)
+ *   npx yats-toolkit setup      # One-time setup wizard
+ *   npx yats-toolkit index <p>   # Index a repository
+ *   npx yats-toolkit status      # Check indexed repos
+ *   npx yats-toolkit stop        # Stop all YATS services
+ *   npx yats-toolkit bridge      # MCP stdio ↔ HTTP proxy (for Copilot, Claude)
  */
 
 const cmd = process.argv[2] || "setup";
@@ -35,12 +35,12 @@ switch (cmd) {
     console.log("yats v0.1.0");
     break;
   default:
-    console.log(`YATS — Yet Another Token Saver`);
+    console.log(`YATS Toolkit — Code intelligence for AI agents`);
     console.log(``);
-    console.log(`  npx yats setup              Setup wizard`);
-    console.log(`  npx yats index <path>       Index a repository`);
-    console.log(`  npx yats status             Check indexed repos`);
-    console.log(`  npx yats stop               Stop YATS services`);
-    console.log(`  npx yats bridge             Stdio proxy for Copilot/Claude`);
+    console.log(`  npx yats-toolkit setup          Setup wizard`);
+    console.log(`  npx yats-toolkit index <path>   Index a repository`);
+    console.log(`  npx yats-toolkit status         Check indexed repos`);
+    console.log(`  npx yats-toolkit stop           Stop YATS services`);
+    console.log(`  npx yats-toolkit bridge         Stdio proxy for Copilot/Claude`);
     break;
 }
