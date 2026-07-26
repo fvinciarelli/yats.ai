@@ -213,6 +213,9 @@ export class McpServer {
     this.running = true;
 
     const server = http.createServer(async (req, res) => {
+      // Prevent EPIPE crashes when client disconnects abruptly
+      res.on("error", () => {});
+      
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
       // CORS headers for browser-based MCP clients
