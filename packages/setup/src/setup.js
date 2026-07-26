@@ -298,7 +298,8 @@ async function checkPort(port) {
 
 async function checkYatsRunning() {
   return new Promise((resolve) => {
-    const proc = spawn("docker", ["ps", "--format", "{{.Names}}", "--filter", "name=yats"], { stdio: "pipe" });
+    // Only match the YATS setup containers (not dev containers)
+    const proc = spawn("docker", ["ps", "--format", "{{.Names}}", "--filter", "name=yats-yats"], { stdio: "pipe" });
     let out = "";
     proc.stdout.on("data", (d) => (out += d));
     proc.on("close", () => resolve(out.trim().length > 0));
@@ -383,12 +384,12 @@ async function main() {
   // Check for existing YATS containers BEFORE the wizard
   const existingContainers = await checkYatsRunning();
   if (existingContainers) {
-    console.log(`  ${Y}YATS containers are already running.${R}`);
+    console.log(`  ${Y}YATS is already running on this machine.${R}`);
     console.log("");
-    console.log(`  To start fresh, run this first ${B}(destroys all indexed data):${R}`);
-    console.log(`  ${C}docker compose -f ~/.yats/docker-compose.yml down -v${R}`);
+    console.log(`  To start fresh ${B}(destroys all indexed data):${R}`);
+    console.log(`  ${C}cd ~/.yats && docker compose down -v${R}`);
     console.log("");
-    console.log(`  Then re-run ${B}npx yats-toolkit${R}`);
+    console.log(`  To reconnect your AI agent, just point it at ${C}http://localhost:5555/mcp${R}`);
     console.log("");
     process.exit(0);
   }
