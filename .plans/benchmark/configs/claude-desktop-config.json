@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "yats": {
+      "command": "node",
+      "args": [
+        "/ruta/a/yats/packages/setup/src/bridge.js"
+      ]
+    }
+  }
+}
