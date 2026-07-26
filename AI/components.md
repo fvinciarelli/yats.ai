@@ -189,6 +189,7 @@
 - **Responsibility:** MCP JSON-RPC server over stdio, HTTP+SSE, and Streamable HTTP
 - **Key API:** `start({ transport?, port? })` — blocks until shutdown
 - **Endpoints:** `/mcp` (Streamable HTTP; GET with `Accept: text/event-stream` opens SSE session), `/mcp/sse` (SSE), `/mcp/message` (SSE messages), `/health`
+- **Error handling:** EPIPE errors (client disconnects) are caught via `res.on("error")` on every request and on SSE sessions, preventing server crashes during long operations
 - **Handles:** `initialize`, `tools/list`, `tools/call`, `shutdown`, `ping`
 
 ### MCP Tools
@@ -196,13 +197,11 @@
 - **Responsibility:** 20 tool definitions + handler factory (read-only search & query, plus async indexing and deletion)
 - **Tools:** `search_code`, `search_documentation`, `find_symbol`, `find_references`, `find_callers`, `find_callees`, `find_implementations`, `find_inheritors`, `find_tests`, `find_routes`, `find_configuration`, `expand_graph`, `related_symbols`, `list_symbols`, `repository_summary`, `architecture_summary`, `search_similar`, `list_repositories`, `index_repository`, `delete_repository`
 
-#### `index_repository` (async)
-- Runs indexing in the background and returns immediately with `status: "indexing_started"`
-- Includes `agentInstructions` telling the AI agent how to poll progress via `repository_summary`
-- Parameter `skipDocs` (boolean): skips documentation indexing
-- Docs warning: if `skipDocs` is not set and the repo has >300 `.md` files, returns a warning asking the agent to confirm the doc indexing decision
-- Resolution of `IMPLEMENTS` and `INHERITS` relationships uses `resolveCallTarget` in `GlobalSymbolTable` for cross-file reference resolution
-- Symbol name resolution in tools uses exact-match preference (fixes `CONTAINS` matching returning wrong symbols)
+#### `index_repository` (delegates to CLI)
+- Does NOT index directly — returns instructions for the AI agent to run `yats index <path>` on the user's machine
+- The `yats` CLI walks local files and sends them to the YATS server via HTTP, so no Docker volume mounts are needed
+- Agent instructions include: what to tell the user, docs skip option (`--skip-docs`, ~30s per 200 .md files), polling with `repository_summary`, and stop condition (relationships stable)
+- Parameter `skipDocs` (boolean): passed as `--skip-docs` to the CLI; skips documentation indexing
 
 #### `delete_repository`
 - Deletes all indexed data for a repository without touching source files
