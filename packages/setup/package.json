@@ -38,7 +38,8 @@
   },
   "files": [
     "bin/",
-    "src/"
+    "src/",
+    "README.md"
   ],
   "scripts": {
     "start": "node bin/setup.js"
