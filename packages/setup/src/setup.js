@@ -132,24 +132,56 @@ const OLLAMA_SERVICE = `  ollama:
 // UI helpers
 // ============================================================
 
+const W = 52; // inner box width
+
+/** Strip ANSI codes to count visible chars */
+function visibleLen(s) {
+  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+/** Pad a string to exactly W visible chars */
+function pad(s) {
+  const vlen = visibleLen(s);
+  const total = W + (s.length - vlen); // account for ANSI codes
+  return s + " ".repeat(Math.max(0, W - vlen));
+}
+
+/** Center text within width, preserving ANSI codes */
+function center(text, width = W) {
+  const vlen = visibleLen(text);
+  const left = Math.floor((width - vlen) / 2);
+  const right = width - vlen - left;
+  return " ".repeat(left) + text + " ".repeat(right);
+}
+
+/** Draw a box with centered lines */
+function box(lines, width = W) {
+  const top = `  ╔${"═".repeat(width + 2)}╗`;
+  const bottom = `  ╚${"═".repeat(width + 2)}╝`;
+  console.log(top);
+  for (const line of lines) {
+    if (line === "") {
+      console.log(`  ║ ${" ".repeat(width)} ║`);
+    } else {
+      console.log(`  ║ ${pad(line)} ║`);
+    }
+  }
+  console.log(bottom);
+}
+
 function header() {
-  const W = 48; // inner width
-  const pad = (s) => {
-    const visible = s.replace(/\x1b\[[0-9;]*m/g, "").length;
-    return s + " ".repeat(Math.max(0, W - visible));
-  };
   console.log("");
-  console.log(`  ╔${"═".repeat(W + 2)}╗`);
-  console.log(`  ║ ${pad(`${B}YATS  Setup${R}`)} ║`);
-  console.log(`  ║ ${" ".repeat(W)} ║`);
-  console.log(`  ║ ${pad(`${D}Yet Another Token Saver${R}`)} ║`);
-  console.log(`  ║ ${pad(`${D}by Franco Vinciarelli${R}`)} ║`);
-  console.log(`  ╚${"═".repeat(W + 2)}╝`);
+  box([
+    center(`${B}YATS  Setup${R}`),
+    "",
+    center(`${D}Yet Another Token Saver — v${YATS_VERSION}${R}`),
+    center(`${D}by Franco Vinciarelli${R}`),
+  ]);
   console.log("");
 }
 
 function step(title) {
-  console.log(`  ${B}${title}${R}`);
+  console.log(`  ${C}▸${R} ${B}${title}${R}`);
   console.log("");
 }
 
@@ -240,7 +272,8 @@ async function choose(prompt, options) {
 }
 
 function divider() {
-  console.log(`  ───────────────────────────────────────────────────────`);
+  console.log(`  ${D}───────────────────────────────────────────────────────${R}`);
+  console.log("");
 }
 
 // ============================================================
@@ -495,23 +528,20 @@ async function main() {
   console.log("");
 
   // Step 5: Confirm
-  step(`Step ${pathsToIndex.length ? "5" : "4"} — Confirm`);
+  step(`Step ${pathsToIndex.length ? "6" : "5"} — Confirm`);
   const providerName = provider === "ollama"
     ? `Ollama (${ollamaModel})`
     : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
-  console.log(`  ┌──────────────────────────────────────────────────────┐`);
-  console.log(`  │                                                      │`);
-  console.log(`  │  ${B}Provider:${R}     ${providerName.padEnd(39)}│`);
-  console.log(`  │  ${B}Port:${R}         ${String(mcpPort).padEnd(39)}│`);
-  if (pathsToIndex.length) {
-    console.log(`  │  ${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)").padEnd(39)}│`);
-  }
-  console.log(`  │  ${B}Batch:${R}       ${String(batchSize).padEnd(39)}│`);
-  console.log(`  │  ${B}Index docs:${R}  ${(indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No").padEnd(39)}│`);
-  console.log(`  │  ${B}API calls:${R}    ${(provider === "ollama" ? "None (runs locally)" : `To ${provider} API`).padEnd(39)}│`);
-  console.log(`  │  ${B}Disk needed:${R}  ${(provider === "ollama" ? "~3GB" : "~1GB").padEnd(39)}│`);
-  console.log(`  │                                                      │`);
-  console.log(`  └──────────────────────────────────────────────────────┘`);
+
+  box([
+    `${B}Provider:${R}     ${providerName}`,
+    `${B}Port:${R}         ${String(mcpPort)}`,
+    ...(pathsToIndex.length ? [`${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)")}`] : []),
+    `${B}Batch:${R}        ${String(batchSize)}`,
+    `${B}Index docs:${R}   ${indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No"}`,
+    `${B}API calls:${R}    ${provider === "ollama" ? "None (runs locally)" : `To ${provider} API`}`,
+    `${B}Disk needed:${R}  ${provider === "ollama" ? "~3GB" : "~1GB"}`,
+  ]);
   console.log("");
 
   const proceed = await (() => {
@@ -619,15 +649,14 @@ async function main() {
   console.log("");
   console.log(`  ${B}MCP configuration for your AI agent:${R}`);
   console.log("");
-  console.log(`  ┌──────────────────────────────────────────────────────┐`);
-  console.log(`  │                                                      │`);
-  console.log(`  │  ${B}For Cursor, Zed, Cline, Continue.dev, Roo Code:${R}     │`);
-  console.log(`  │  { "url": "http://localhost:${mcpPort}/mcp/sse" }        │`);
-  console.log(`  │                                                      │`);
-  console.log(`  │  ${B}For Copilot, Claude Desktop (stdio only):${R}           │`);
-  console.log(`  │  { "command": "npx", "args": ["yats-bridge"] }       │`);
-  console.log(`  │                                                      │`);
-  console.log(`  └──────────────────────────────────────────────────────┘`);
+
+  box([
+    `${B}For Cursor, Zed, Cline, Continue.dev, Roo Code:${R}`,
+    `{ "url": "http://localhost:${mcpPort}/mcp/sse" }`,
+    "",
+    `${B}For Copilot, Claude Desktop (stdio only):${R}`,
+    `{ "command": "npx", "args": ["yats-bridge"] }`,
+  ]);
   console.log("");
   console.log(`  Config saved to ${C}${MCP_CONFIG_FILE}${R}`);
   divider();
