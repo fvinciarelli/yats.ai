@@ -75,9 +75,7 @@ const EMBEDDED_COMPOSE = `services:
     restart: unless-stopped
   __OLLAMA_PLACEHOLDER__
   yats:
-    image: yats:local
-    # TODO: switch to published image before release
-    # image: ghcr.io/fvinciarelli/yats:latest
+    image: ghcr.io/fvinciarelli/yats:latest
     ports: ["__MCP_PORT__:__MCP_PORT__"]
     environment:
       - NEO4J_URI=bolt://neo4j:7687
@@ -571,39 +569,23 @@ async function main() {
   const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp/sse` } } };
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
-  // Build the YATS Docker image (needed for yats:local)
-  const dockerfilePath = join(import.meta.dirname, "..", "..", "..", "docker", "Dockerfile");
-  const buildContext = join(import.meta.dirname, "..", "..", "..");
-
-  if (existsSync(dockerfilePath)) {
-    const sBuild = spinner("Building YATS image (all languages)...");
-    try {
-      await runCmd("docker", [
-        "build", "-f", dockerfilePath, "-t", "yats:local",
-        "--build-arg", "INCLUDE_GO=true",
-        "--build-arg", "INCLUDE_CSHARP=true",
-        "--build-arg", "INCLUDE_PYTHON=true",
-        "--build-arg", "INCLUDE_PHP=true",
-        buildContext,
-      ]);
-      sBuild.done(true);
-    } catch {
-      sBuild.done(false);
-      console.log(`  ${RED}Failed to build YATS image. Is Docker running?${R}`);
-      process.exit(1);
-    }
-  } else {
-    // Published package flow: pull from registry
-    console.log(`  ${D}(Pre-built image — pulling from registry)${R}`);
-  }
-
-  // Start services
-  const sPull = spinner("Starting Docker services...");
+  // Pull the YATS Docker image from GitHub Container Registry
+  const sPull = spinner("Pulling YATS image from registry...");
   try {
-    await runCmd("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d"]);
+    await runCmd("docker", ["pull", "ghcr.io/fvinciarelli/yats:latest"]);
     sPull.done(true);
   } catch {
     sPull.done(false);
+    console.log(`  ${RED}Failed to pull YATS image. Is Docker running and internet accessible?${R}`);
+    process.exit(1);
+  }
+
+  const sUp = spinner("Starting services (Neo4j, Qdrant, YATS)...");
+  try {
+    await runCmd("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d"]);
+    sUp.done(true);
+  } catch {
+    sUp.done(false);
     console.log(`  ${RED}Failed to start Docker services. Check docker logs.${R}`);
     process.exit(1);
   }
