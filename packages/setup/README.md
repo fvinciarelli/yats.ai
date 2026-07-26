@@ -114,19 +114,34 @@ TypeScript, JavaScript, Python, Go, C#, PHP — plus universal fallback via Tree
 
 ## Architecture
 
-Built on a layered monorepo (pnpm workspaces):
+See the [GitHub repository](https://github.com/fvinciarelli/yats) for the full architecture and source code.
 
+## CLI Reference
+
+```bash
+yats setup
 ```
-packages/
-├── shared/          Domain models, ports, DTOs
-├── infra/           Neo4j, Qdrant, embeddings (OpenAI, Ollama, Mistral, Voyage)
-├── indexing/        Pipeline: walk → analyze → embed → store
-├── retrieval/       Hybrid: vector + graph → rank → dedup → compress
-├── mcp-server/      20 MCP tools over stdio, HTTP+SSE, Streamable HTTP
-├── cli/             CLI: index, search, serve, clear
-├── setup/           One-command installer (this package)
-└── analyzers/       Per-language AST analyzers (TS, Python, Go, C#, PHP, Tree-sitter)
+Runs the one-time setup wizard. Detects if YATS is already running, asks for embedding provider (Ollama/OpenAI/Mistral/Voyage), API keys if needed, batch size, docs indexing preference, optional pre-index directories, and MCP port. Generates `~/.yats/docker-compose.yml` and starts all services.
+
+```bash
+yats index <path> [--skip-docs]
 ```
+Indexes a repository. Walks the directory locally and sends each file to the YATS server. Use `--skip-docs` to skip documentation files for faster indexing (~30s saved per 200 .md files with cloud embeddings).
+
+```bash
+yats status
+```
+Checks which repositories are indexed and shows a summary (symbol count, relationship count).
+
+```bash
+yats stop
+```
+Stops all YATS Docker services without removing data.
+
+```bash
+yats bridge
+```
+Starts an MCP stdio ↔ HTTP proxy. Useful for AI agents that only support stdio transport (Copilot, Claude Desktop). Connects to the YATS server at `localhost:5555` by default.
 
 ## License
 
