@@ -20,16 +20,12 @@ npx yats-toolkit
 ## How it works
 
 ```
-Your code → Analyzer (AST) → Symbols + Relationships
-                                  ↓
-                     Neo4j (knowledge graph) + Qdrant (vectors)
-                                  ↓
-                     MCP Server → AI agent queries, not reads
+Your code → Analyzer → Knowledge graph → MCP Server → AI agent queries
 ```
 
-1. **Index** your repos (`yats index ~/my-project`)
+1. **Index** your repos — during setup, via CLI, or just ask your AI agent
 2. **Configure** your AI agent with the MCP endpoint
-3. **Ask** questions about your code — YATS answers in < 50ms
+3. **Ask** questions about your code — YATS answers instantly
 
 ## Quick Start
 
@@ -38,16 +34,29 @@ Your code → Analyzer (AST) → Symbols + Relationships
 npx yats-toolkit
 
 # The wizard will:
-# 1. Pull the YATS Docker image from ghcr.io
-# 2. Start Neo4j + Qdrant + YATS MCP server
-# 3. Configure everything automatically
+# 1. Pull the YATS Docker image
+# 2. Start the YATS MCP server
+# 3. Optionally pre-index directories you select
+# 4. Configure everything automatically
 ```
 
-After setup, add repos:
+### Adding repositories
+
+You can add repos in three ways:
+
+**During setup** — the wizard asks if you want to pre-index any directories.
+
+**From the terminal:**
 ```bash
 yats index ~/work/backend
 yats index ~/work/frontend
 ```
+
+**From your AI agent** — just ask it to index a repo:
+```
+"index /home/user/my-project"
+```
+The agent will use the `index_repository` MCP tool, which tells it to run `yats index` and then polls until complete.
 
 ## MCP Configuration
 
