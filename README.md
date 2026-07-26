@@ -85,7 +85,7 @@ See the [GitHub repository](https://github.com/fvinciarelli/yats) for full archi
 
 ## License
 
-Free for individuals and organizations with fewer than 50 developers.
+Free for individuals and organizations with fewer than 10 developers.
 Companies with 50+ developers need a commercial license — [see tiers](LICENSE).
 
 ## Links
