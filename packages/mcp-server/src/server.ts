@@ -320,6 +320,14 @@ export class McpServer {
       }
     });
 
+    // Global EPIPE handler — last line of defense
+    process.on("uncaughtException", (err) => {
+      if ((err as any).code === "EPIPE" || (err as any).code === "ECONNRESET") {
+        return; // swallow silently
+      }
+      throw err;
+    });
+
     server.listen(port, () => {
       this.logger.info(`MCP server listening on http://localhost:${port} (HTTP+SSE)`);
     });

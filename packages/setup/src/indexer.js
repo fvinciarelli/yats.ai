@@ -57,34 +57,43 @@ export default async function indexRepo(args, options = {}) {
   // Walk and send files
   console.log(`Indexing ${repoPath}...`);
   const files = await walk(repoPath);
-  let sent = 0;
-  let errors = 0;
-
+  // Send files concurrently in batches
+  const CONCURRENCY = 10;
+  const batch = [];
+  
   for (const file of files) {
     const relPath = relative(repoPath, file);
-
-    // Skip docs if requested
     if (skipDocs && relPath.endsWith(".md")) continue;
+    batch.push(file);
+  }
 
-    try {
-      const content = readFileSync(file, "utf-8");
-      // Skip binary/large files
-      if (content.includes("\0") || content.length > 1_000_000) continue;
+  let sent = 0;
+  let errors = 0;
+  const total = batch.length;
 
-      const res = await fetch(`${YATS_URL}/index/file`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoName, filePath: relPath, content }),
-      });
-      if (res.ok) {
-        sent++;
-        process.stdout.write(`\r  ${sent}/${files.length} files`);
-      } else {
-        errors++;
+  for (let i = 0; i < batch.length; i += CONCURRENCY) {
+    const chunk = batch.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(chunk.map(async (file) => {
+      const relPath = relative(repoPath, file);
+      try {
+        const content = readFileSync(file, "utf-8");
+        if (content.includes("\0") || content.length > 1_000_000) return { ok: true, skipped: true };
+        const res = await fetch(`${YATS_URL}/index/file`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repoName, filePath: relPath, content }),
+        });
+        return { ok: res.ok, skipped: false };
+      } catch {
+        return { ok: false, skipped: false };
       }
-    } catch {
-      errors++;
+    }));
+    
+    for (const r of results) {
+      if (r.ok) sent++;
+      else if (!r.skipped) errors++;
     }
+    process.stdout.write(`\r  ${sent + errors}/${total} files`);
   }
   console.log(`\r  ✓ ${sent} files indexed${errors > 0 ? `, ${errors} skipped` : ""}`);
   console.log(``);
