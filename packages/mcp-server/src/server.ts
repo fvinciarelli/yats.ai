@@ -313,6 +313,13 @@ export class McpServer {
       this.logger.error(`HTTP server error: ${err.message}`);
     });
 
+    // Prevent EPIPE crashes from abrupt client disconnects
+    server.on("clientError", (err, socket) => {
+      if (err.code === "EPIPE" || err.code === "ECONNRESET") {
+        socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+      }
+    });
+
     server.listen(port, () => {
       this.logger.info(`MCP server listening on http://localhost:${port} (HTTP+SSE)`);
     });
