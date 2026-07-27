@@ -788,6 +788,16 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const repoPath = args.path as string;
     if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
 
+    // Reject dangerous paths that would scan the entire filesystem
+    const dangerous = ["/", "/root", "/etc", "/dev", "/proc", "/sys", "/var", "/usr", "/home", "/tmp"];
+    const isWindowsRoot = /^[A-Z]:\?$/i.test(repoPath);
+    if (dangerous.includes(repoPath) || isWindowsRoot || repoPath === "/" || !repoPath.includes("/") || repoPath.length < 3) {
+      return {
+        content: [{ type: "text", text: `Refusing to index "${repoPath}" — this would scan the entire filesystem. Please provide a specific project path like /home/user/my-project or C:\\Users\\user\\project.` }],
+        isError: true,
+      };
+    }
+
     const repoName = repoPath.split("/").pop() || repoPath;
 
     return {
