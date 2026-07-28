@@ -5,6 +5,7 @@
 agent="$1"
 question_file="$2"
 mcp_config="$3"
+model="${YATS_BENCH_MODEL:-sonnet}"
 question=$(cat "$question_file")
 
 # Check if agent CLI is available
@@ -29,9 +30,9 @@ case "$agent" in
   claude-cli)
     if check_cmd claude; then
       if [ -n "$mcp_config" ]; then
-        claude -p "$question" --output-format stream-json --verbose 2>/dev/null
+        claude -p "$question" --model "$model" --output-format stream-json --verbose --dangerously-skip-permissions --mcp-config "$mcp_config" 2>/dev/null
       else
-        claude -p "$question" --output-format stream-json --verbose 2>/dev/null
+        claude -p "$question" --model "$model" --output-format stream-json --verbose --dangerously-skip-permissions 2>/dev/null
       fi
     else
       echo '{"type":"message","usage":{"input_tokens":0,"output_tokens":0}}'

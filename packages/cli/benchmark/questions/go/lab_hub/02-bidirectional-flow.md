@@ -1,0 +1,1 @@
+How does the bidirectional flow work in Hub Lab? Trace both paths: (1) orders from LIS to analyzer and (2) results from analyzer back to LIS. What are the key components and how do they handle the different protocols, validation, and the audit trail?

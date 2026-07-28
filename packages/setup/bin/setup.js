@@ -45,5 +45,8 @@ switch (cmd) {
     console.log(`  yats status             Check indexed repos`);
     console.log(`  yats stop               Stop YATS services`);
     console.log(`  yats bridge             Stdio proxy for Copilot/Claude`);
+    console.log(`  yats benchmark          AI agent token comparison`);
+    console.log(`  yats search <query>     Search indexed code`);
+    console.log(`  yats serve              Start MCP server`);
     break;
 }

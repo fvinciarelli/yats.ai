@@ -1,5 +1,16 @@
 import "dotenv/config";
 import "reflect-metadata";
+
+// Global handler: prevent crashes from Neo4j bolt EPIPE during indexing
+process.on("uncaughtException", (err: any) => {
+  if (err.code === "EPIPE" || err.code === "ECONNRESET") {
+    console.error(`[yats] Caught ${err.code}, ignoring (connection dropped)`);
+    return;
+  }
+  console.error("[yats] Fatal:", err);
+  process.exit(1);
+});
+
 import { Command } from "commander";
 import { createLogger, Language } from "@yats/shared";
 import { container, initializeConnections, shutdownConnections, TOKENS } from "@yats/infra";
@@ -18,6 +29,7 @@ import { PythonAnalyzer } from "@yats/analyzer-python";
 import { IndexerService } from "@yats/indexing";
 import { RetrieverService } from "@yats/retrieval";
 import { McpServer } from "@yats/mcp-server";
+import { runBenchmark } from "./commands/benchmark.js";
 
 const logger = createLogger("cli");
 const program = new Command();
@@ -97,14 +109,15 @@ program
   .description("Index a repository (full or incremental)")
   .option("--incremental", "Only index changed files")
   .option("--since <commit>", "Git commit to index from")
-  .action(async (repoPath: string, options: { incremental?: boolean; since?: string }) => {
+  .option("--skip-docs", "Skip documentation files for faster indexing")
+  .action(async (repoPath: string, options: { incremental?: boolean; since?: string; skipDocs?: boolean }) => {
     try {
       const { indexer } = await bootstrap();
       logger.info(`Indexing: ${repoPath}`);
 
       const result = options.incremental && options.since
         ? await indexer.incrementalIndex(repoPath, options.since)
-        : await indexer.indexRepository(repoPath);
+        : await indexer.indexRepository(repoPath, { skipDocs: options.skipDocs });
 
       const t = result.timings;
       console.log(JSON.stringify(result, null, 2));
@@ -210,6 +223,18 @@ program
       console.error(`❌ Clear failed: ${err.message}`);
     } finally {
       await shutdownConnections();
+    }
+  });
+
+program
+  .command("benchmark")
+  .description("Run AI agent benchmark — compare token usage with/without YATS")
+  .action(async () => {
+    try {
+      // Benchmark doesn't use the full DI container (just agent CLIs)
+      await runBenchmark();
+    } catch (err: any) {
+      console.error(`❌ Benchmark failed: ${err.message}`);
     }
   });
 

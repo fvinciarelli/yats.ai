@@ -1,0 +1,30 @@
+{
+  "tag": "BASELINE",
+  "tokens": {
+    "input_tokens": 779,
+    "output_tokens": 9786,
+    "cache_creation_input_tokens": 66960,
+    "cache_read_input_tokens": 784782
+  },
+  "total_tokens": 862307,
+  "cost_usd": 0.211887,
+  "turns": 3,
+  "strategy": {
+    "agent_spawns": 1,
+    "yats_queries": 0,
+    "file_reads": 18,
+    "bash_commands": 33,
+    "other": 0,
+    "tool_breakdown": {
+      "Bash": 33,
+      "Read": 18,
+      "Agent": 1
+    }
+  },
+  "content_chars": 113510,
+  "models": [
+    "claude-haiku-4-5-20251001"
+  ],
+  "errors": 0,
+  "permission_denials": 0
+}

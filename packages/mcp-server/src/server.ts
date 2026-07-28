@@ -29,6 +29,7 @@ export type JsonRpcResponse = {
     message: string;
     data?: unknown;
   };
+  _sessionId?: string;
 };
 
 interface SseSession {
@@ -90,10 +91,11 @@ export class McpServer {
             jsonrpc: "2.0",
             id,
             result: {
-              protocolVersion: "2024-11-05",
+              protocolVersion: "2025-03-26",
               capabilities: { tools: {} },
               serverInfo: { name: "yats", version: "0.1.0" },
             },
+            _sessionId: crypto.randomUUID(),
           };
 
         case "tools/list":
@@ -242,6 +244,7 @@ export class McpServer {
 
       // Streamable HTTP — MCP transport used by Copilot, VS Code, pi-mcp-adapter
       if (url.pathname === "/mcp") {
+        this.logger.info(`MCP: ${req.method} ${req.url} Accept=${req.headers["accept"]} Session=${req.headers["mcp-session-id"] || "none"}`);
         if (req.method === "DELETE") {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ status: "ok" }));
@@ -250,7 +253,9 @@ export class McpServer {
         if (req.method === "GET") {
           const accept = req.headers["accept"] ?? "";
           if (accept.includes("text/event-stream")) {
-            this.handleSseConnect(res);
+            const existingSessionId = req.headers["mcp-session-id"] as string | undefined;
+            this.logger.info(`SSE connect: sessionId header=${existingSessionId || "none"}`);
+            this.handleSseConnect(res, existingSessionId);
             return;
           }
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -261,9 +266,16 @@ export class McpServer {
           const body = await this.readBody(req);
           try {
             const request = JSON.parse(body) as JsonRpcRequest;
+            this.logger.info(`MCP request: ${request.method} id=${request.id}`);
             const response = await this.handleRequest(request);
             if (response) {
-              res.writeHead(200, { "Content-Type": "application/json" });
+              const sessionId = (response as any)._sessionId;
+              delete (response as any)._sessionId;
+              const headers: Record<string, string> = { "Content-Type": "application/json" };
+              if (sessionId) {
+                headers["Mcp-Session-Id"] = sessionId;
+              }
+              res.writeHead(200, headers);
               res.end(JSON.stringify(response));
             } else {
               res.writeHead(202);
@@ -313,6 +325,10 @@ export class McpServer {
       this.logger.error(`HTTP server error: ${err.message}`);
     });
 
+    // Keep connections alive longer — MCP tools/call can arrive seconds after tools/list
+    server.keepAliveTimeout = 300_000; // 5 minutes
+    server.headersTimeout = 310_000;
+
     // Prevent EPIPE crashes from abrupt client disconnects
     server.on("clientError", (err, socket) => {
       if ((err as any).code === "EPIPE" || (err as any).code === "ECONNRESET") {
@@ -346,22 +362,23 @@ export class McpServer {
     });
   }
 
-  private handleSseConnect(res: http.ServerResponse): void {
-    const sessionId = crypto.randomUUID();
+  private handleSseConnect(res: http.ServerResponse, existingSessionId?: string): void {
+    const sessionId = existingSessionId || crypto.randomUUID();
+    const isNew = !existingSessionId;
 
-    // SSE headers
+    // SSE headers for Streamable HTTP (no legacy "event: endpoint")
+    // JSON-RPC goes via POST /mcp, SSE is only for server→client notifications
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
 
-    // First message: the endpoint URL for this session
-    const endpointUrl = `/mcp/message?sessionId=${sessionId}`;
-    res.write(`event: endpoint\ndata: ${endpointUrl}\n\n`);
-
     this.sessions.set(sessionId, { id: sessionId, res });
-    this.logger.info(`SSE session opened: ${sessionId}`);
+    this.logger.info(`SSE session ${isNew ? "opened" : "attached"}: ${sessionId}`);
+
+    // Send initial comment to signal stream is alive
+    res.write(": connected\n\n");
 
     // Clean up on close
     res.on("close", () => {
@@ -380,7 +397,7 @@ export class McpServer {
     // Keep alive every 30s
     const keepAlive = setInterval(() => {
       res.write(": keepalive\n\n");
-    }, 30_000);
+    }, 3_000);
 
     res.on("close", () => clearInterval(keepAlive));
   }

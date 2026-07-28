@@ -412,6 +412,7 @@ const INDEX_REPOSITORY: ToolDefinition = {
     type: "object",
     properties: {
       path: { type: "string", description: "Absolute path to the repository to index" },
+      skipDocs: { type: "boolean", description: "Skip documentation files (markdown, etc.) for faster indexing. Use true for large repos with lots of docs." },
     },
     required: ["path"],
   },
@@ -798,12 +799,14 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
       };
     }
 
+    const skipDocs = args.skipDocs === true;
     const repoName = repoPath.split("/").pop() || repoPath;
+    const skipDocsFlag = skipDocs ? " --skip-docs" : "";
 
     return {
       content: [{
         type: "text",
-        text: `Tell the user:\n\n"I'm going to index ${repoPath}. This will analyze your code, generate embeddings, and store the knowledge graph. It may take a few minutes depending on the repo size."\n\nAsk the user: "Docs indexing adds extra time (roughly ~30s per 200 markdown files with cloud embeddings). If the repo has a lot of docs, do you want to skip them for faster indexing?"\n\nIf the user wants to skip docs, run:\n\n  yats index ${repoPath} --skip-docs\n\nOtherwise, run:\n\n  yats index ${repoPath}\n\nAfter the command finishes, poll with:\n\n  repository_summary(repository: "${repoName}")\n\nWait until 'relationships' stops increasing between two consecutive checks. Then show the user the final summary.\n\nIf the user doesn't want to wait, tell them they can ask for the status anytime with 'repository_summary'.`,
+        text: `Tell the user:\n\n"I'm going to index ${repoPath}. This will analyze your code, generate embeddings, and store the knowledge graph. It may take a few minutes depending on the repo size."\n\nTell the user to run:\n\n  yats index ${repoPath}${skipDocsFlag}\n\nAfter the command finishes, poll with:\n\n  repository_summary(repository: "${repoName}")\n\nWait until 'relationships' stops increasing between two consecutive checks. Then show the user the final summary.\n\nIf the user doesn't want to wait, tell them they can ask for the status anytime with 'repository_summary'.`,
       }],
     };
   });

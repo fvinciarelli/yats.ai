@@ -143,6 +143,13 @@ yats bridge
 ```
 Starts an MCP stdio ↔ HTTP proxy. Useful for AI agents that only support stdio transport (Copilot, Claude Desktop). Connects to the YATS server at `localhost:5555` by default.
 
+```bash
+yats benchmark
+```
+Runs an interactive AI agent benchmark. Compares token usage answering the same
+codebase questions with and without YATS. Supports Claude CLI and Codex.
+Automatically clones test repos, indexes them, and saves results with averages.
+
 ## License
 
 MIT © Franco Vinciarelli

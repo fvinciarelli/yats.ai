@@ -1,0 +1,35 @@
+{
+  "tag": "YATS",
+  "tokens": {
+    "input_tokens": 663,
+    "output_tokens": 4030,
+    "cache_creation_input_tokens": 29131,
+    "cache_read_input_tokens": 507093
+  },
+  "total_tokens": 540917,
+  "cost_usd": 0.107936,
+  "turns": 22,
+  "strategy": {
+    "agent_spawns": 0,
+    "yats_queries": 10,
+    "file_reads": 6,
+    "bash_commands": 1,
+    "other": 3,
+    "tool_breakdown": {
+      "mcp__yats__search_code": 7,
+      "Read": 6,
+      "ToolSearch": 2,
+      "Skill": 1,
+      "mcp__yats__find_symbol": 1,
+      "mcp__yats__related_symbols": 1,
+      "mcp__yats__find_callers": 1,
+      "Bash": 1
+    }
+  },
+  "content_chars": 58531,
+  "models": [
+    "claude-haiku-4-5-20251001"
+  ],
+  "errors": 0,
+  "permission_denials": 0
+}
