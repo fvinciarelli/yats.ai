@@ -2326,7 +2326,7 @@ Context Files: What to read first
   - [ ] packages/indexing/package.json
   - [ ] packages/retrieval/package.json
   - [ ] packages/mcp-server/package.json
-  - [ ] packages/cli/package.json
+  - [ ] packages/dev-cli/package.json
   - [ ] packages/analyzers/analyzer-interface/package.json
   - [ ] packages/analyzers/analyzer-csharp/package.json
   - [ ] packages/analyzers/analyzer-typescript/package.json
@@ -3577,8 +3577,8 @@ Context Files: What to read first
   - Neo4j/Qdrant connections configurable
 - **Dependencies:** T-004
 - **Definition of Done:**
-  - [ ] packages/cli/src/index.ts
-  - [ ] packages/cli/src/config.ts
+  - [ ] packages/dev-cli/src/index.ts
+  - [ ] packages/dev-cli/src/config.ts
   - [ ] Commander program with subcommands
   - [ ] Unit tests for config loading
 - **Suggested Tests:**
@@ -3598,7 +3598,7 @@ Context Files: What to read first
   - `--watch` flag starts incremental indexing
 - **Dependencies:** T-040, T-043, T-073
 - **Definition of Done:**
-  - [ ] packages/cli/src/commands/index.ts
+  - [ ] packages/dev-cli/src/commands/index.ts
   - [ ] Progress reporting
   - [ ] Integration test with fixture repo
 - **Suggested Tests:** Run index on fixture repo, verify exit code 0, verify output
@@ -3616,7 +3616,7 @@ Context Files: What to read first
   - Results show symbol name, kind, file, score, snippet
 - **Dependencies:** T-049, T-073
 - **Definition of Done:**
-  - [ ] packages/cli/src/commands/search.ts
+  - [ ] packages/dev-cli/src/commands/search.ts
   - [ ] Terminal formatting (chalk for colors)
   - [ ] Integration test
 - **Estimated Complexity:** M
@@ -3632,7 +3632,7 @@ Context Files: What to read first
   - Graceful shutdown
 - **Dependencies:** T-072, T-073
 - **Definition of Done:**
-  - [ ] packages/cli/src/commands/serve.ts
+  - [ ] packages/dev-cli/src/commands/serve.ts
   - [ ] Integration test: start serve, verify tools/list works
 - **Estimated Complexity:** S
 
@@ -3647,8 +3647,8 @@ Context Files: What to read first
   - Confirmation prompt for clean
 - **Dependencies:** T-017, T-073
 - **Definition of Done:**
-  - [ ] packages/cli/src/commands/graph-stats.ts
-  - [ ] packages/cli/src/commands/clean.ts
+  - [ ] packages/dev-cli/src/commands/graph-stats.ts
+  - [ ] packages/dev-cli/src/commands/clean.ts
   - [ ] Integration tests
 - **Estimated Complexity:** S
 

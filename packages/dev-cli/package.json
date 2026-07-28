@@ -1,11 +1,11 @@
 {
-  "name": "@yats/cli",
+  "name": "@yats/dev-cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "yats": "./dist/index.js"
+    "yats-dev": "./dist/index.js"
   },
   "types": "./dist/index.d.ts",
   "exports": {
@@ -33,7 +33,6 @@
     "@yats/mcp-server": "workspace:^",
     "@yats/retrieval": "workspace:^",
     "@yats/shared": "workspace:*",
-    "chalk": "^5.6.2",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "reflect-metadata": "^0.2.2"

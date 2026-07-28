@@ -2,23 +2,28 @@
 
 Copyright (c) 2026 Franco Vinciarelli
 
+---
+
 ## Free License
 
 Permission is hereby granted, free of charge, to any person or organization
-with fewer than 25 developers to use, copy, modify, merge, publish, distribute,
-and/or sublicense copies of the Software, subject to the following conditions:
+with **fewer than 25 developers** to use, copy, modify, merge, publish,
+distribute, and/or sublicense copies of the Software, subject to the
+conditions below.
 
-1. The above copyright notice and this permission notice shall be included in
-   all copies or substantial portions of the Software.
+A "developer" means any individual who writes, reviews, tests, or deploys
+code as part of their work for the organization, whether employee or
+independent contractor. The 25-developer threshold is measured across the
+entire organization and all its affiliates.
 
-2. "Developer" means any individual who writes, reviews, tests, or deploys code
-   as part of their work, whether employee or contractor.
+---
 
 ## Commercial License
 
-Organizations with 50 or more developers must purchase a commercial license.
+Organizations with **25 or more developers** must purchase a commercial
+license. The fee is flat per organization — not per developer, not per seat.
 
-| Developers in organization | Annual license fee (EUR, flat for the entire org) |
+| Developers in organization | Annual license fee (EUR) |
 |---|---|
 | < 25 | Free |
 | 25 – 149 | €150 |
@@ -26,16 +31,93 @@ Organizations with 50 or more developers must purchase a commercial license.
 | 500 – 999 | €800 |
 | 1,000+ | Contact for pricing |
 
-Commercial licenses include priority support, SLA guarantees, and access to
-premium features. Contact vinciarellifranco@gmail.com for licensing.
+Commercial licenses grant the same rights as the Free License. A commercial
+license does **not** include support, SLAs, warranties, or additional
+obligations from the Licensor.
 
-## Enforcement
+To purchase: vinciarellifranco@gmail.com
 
-Use in violation of these terms constitutes copyright infringement.
-The author reserves the right to audit compliance.
+---
 
-## Disclaimer
+## No Support
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+**The Licensor provides no support.** No email support, no response time
+commitments, no bug fixes, no updates, no SLA of any kind — under any license
+tier, free or paid.
+
+The Licensor may, at their sole discretion and without obligation, publish
+updates, patches, or new versions. Any such updates are subject to these
+same terms.
+
+---
+
+## Warranty Disclaimer
+
+**THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.**
+
+**No advice or information, whether oral or written, obtained from the
+Licensor or elsewhere shall create any warranty not expressly stated in
+this License.**
+
+The entire risk as to the quality and performance of the Software is with
+you. Should the Software prove defective, you assume the cost of all
+necessary servicing, repair, or correction.
+
+---
+
+## Limitation of Liability
+
+**TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE
+LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE SOFTWARE.**
+
+This includes, without limitation:
+
+- Loss of data, data corruption, or data breaches
+- Loss of source code
+- Loss of revenue, profit, or business opportunity
+- Business interruption
+- Indirect, incidental, special, consequential, or punitive damages
+- Damages from third-party claims
+- Any damages whatsoever, even if the Licensor has been advised of the
+  possibility of such damages
+
+If any jurisdiction does not allow the exclusion or limitation of certain
+liabilities, the above exclusions and limitations shall apply to the
+maximum extent permitted by law in that jurisdiction.
+
+---
+
+## Conditions
+
+1. The above copyright notice and this entire License shall be included in
+   all copies or substantial portions of the Software.
+
+2. This License does not grant permission to use the name, trademarks,
+   service marks, or branding of the Licensor except as required for
+   reasonable and customary use in describing the origin of the Software.
+
+3. The Licensor reserves the right to audit compliance. Organizations using
+   the Software must, upon request, confirm the number of developers in
+   their organization.
+
+---
+
+## Termination
+
+This License and the rights granted hereunder terminate automatically if
+you fail to comply with any of its terms. Upon termination, you must cease
+all use and destroy all copies of the Software.
+
+Sections covering Warranty Disclaimer, Limitation of Liability, and No
+Support survive any termination.
+
+---
+
+## Governing Law
+
+This License shall be governed by and construed in accordance with the
+laws of Spain, without regard to conflict of law principles.

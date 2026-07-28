@@ -38,4 +38,4 @@ echo "  Embedding provider: ${EMBEDDING_PROVIDER:-ollama}"
 echo ""
 
 # Start the MCP server in HTTP mode
-exec node packages/cli/dist/index.js serve --http --port "${YATS_PORT:-5555}"
+exec node packages/dev-cli/dist/index.js start --http --port "${YATS_PORT:-5555}"

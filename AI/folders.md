@@ -12,8 +12,8 @@ yats/
 │   ├── indexing/                ← Indexing application
 │   ├── retrieval/               ← Retrieval application
 │   ├── mcp-server/              ← MCP server adapter (stdio + HTTP+SSE + Streamable HTTP)
-│   ├── cli/                     ← CLI adapter (yats)
-│   ├── setup/                   ← Setup wizard, bridge, status, stop scripts
+│   ├── dev-cli/                 ← Dev server CLI (yats-dev serve)
+│   ├── yats-toolkit/            ← User-facing toolkit: setup, index, search, benchmark, bridge
 │   └── analyzers/               ← Language analyzer plugins
 ├── package.json                 ← Root workspace config (name: "yats")
 ├── pnpm-workspace.yaml          ← Workspace definition
@@ -167,38 +167,47 @@ mcp-server/src/
 
 ---
 
-## `packages/cli/` — CLI Adapter
+## `packages/dev-cli/` — Development CLI
 
-**Purpose:** Human-operated CLI for indexing, searching, and running the MCP server.
+**Purpose:** Local development server. Starts the MCP server with direct database access.
 
 ```
-cli/src/
-├── index.ts        ← Commander-based CLI (list, index, search, serve, summary, clear)
-└── commands/
+dev-cli/src/
+├── index.ts        ← Commander-based CLI (serve only)
 ```
+
+**Rules:**
+- ✅ Local development, testing
+- ❌ Never: business logic (delegate to services)
 
 ---
 
-## `packages/setup/` — Setup Wizard & Thin Scripts
+## `packages/yats-toolkit/` — User-Facing Toolkit
 
-**Purpose:** One-command setup wizard and thin CLI scripts that interact with the Docker-based MCP server.
+**Purpose:** One-command setup wizard and all user-facing CLI commands. Thin scripts that interact with the Docker-based MCP server via HTTP. Published to npm as `yats-toolkit`.
 
 ```
-setup/src/
-├── setup.js        ← YATS Setup wizard: detects Docker, writes compose file, starts services
-├── bridge.js       ← MCP stdio ↔ HTTP proxy (yats-bridge)
-├── indexer.js      ← HTTP client to trigger indexing via POST /index
-├── status.js       ← Health check and service status
-└── stop.js         ← Stop all YATS services
+yats-toolkit/
+├── bin/
+│   └── setup.js        ← Entry point — dispatches all commands
+├── src/
+│   ├── setup.js        ← YATS Setup wizard: detects Docker, writes compose file, starts services
+│   ├── indexer.js      ← HTTP client to trigger indexing via POST
+│   ├── search.js       ← Thin HTTP client → search_code MCP tool
+│   ├── list.js         ← Thin HTTP client → list_repositories MCP tool
+│   ├── summary.js      ← Thin HTTP client → repository_summary MCP tool
+│   ├── clear.js        ← Thin HTTP client → delete_repository MCP tool
+│   ├── status.js       ← Health check and service status
+│   ├── stop.js         ← Stop all YATS services
+│   ├── bridge.js       ← MCP stdio ↔ HTTP proxy (yats-bridge)
+│   └── benchmark.js    ← AI agent token comparison (zero deps)
+└── benchmark/          ← Benchmark assets (shell scripts, prompts, configs)
 ```
 
 **Rules:**
 - ✅ Thin scripts, HTTP calls to the YATS MCP server
+- ✅ Zero npm dependencies (Node.js built-ins only)
 - ❌ Never: business logic, direct DB access
-
-**Rules:**
-- ✅ CLI parsing, human-readable output, bootstrapping
-- ❌ Never: business logic (delegate to services)
 
 ---
 

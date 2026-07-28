@@ -97,9 +97,14 @@ Add this to your AI agent's MCP config:
 ```bash
 yats setup           # Run the setup wizard
 yats index <path>    # Index a repository
+yats search <query>  # Search indexed code
+yats list            # List indexed repositories
+yats summary <repo>  # Show repository summary
+yats clear <repo>    # Delete indexed data (needs confirmation)
 yats status          # Check what's indexed
 yats stop            # Stop all YATS services
 yats bridge          # MCP stdio ↔ HTTP proxy (for CLI-only agents)
+yats benchmark       # AI agent token comparison
 ```
 
 ## Requirements
@@ -142,6 +147,26 @@ Stops all YATS Docker services without removing data.
 yats bridge
 ```
 Starts an MCP stdio ↔ HTTP proxy. Useful for AI agents that only support stdio transport (Copilot, Claude Desktop). Connects to the YATS server at `localhost:5555` by default.
+
+```bash
+yats search <query> [--repo=<name>] [--limit=<n>]
+```
+Searches indexed code using natural language. Uses the `search_code` MCP tool. Results include symbol name, kind, file, line, score, and snippet.
+
+```bash
+yats list
+```
+Lists all indexed repositories with their root paths. Calls `list_repositories` MCP tool.
+
+```bash
+yats summary <repository>
+```
+Shows a detailed summary: symbol counts by kind, relationship counts, and languages. Calls `repository_summary` MCP tool.
+
+```bash
+yats clear <repository>
+```
+Deletes all indexed data for a repository (symbols, relationships, vectors). Uses two-step confirmation via the `delete_repository` MCP tool. Source code files are NOT affected.
 
 ```bash
 yats benchmark

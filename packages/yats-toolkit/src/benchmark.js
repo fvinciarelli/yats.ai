@@ -1,59 +1,70 @@
-import { createLogger } from "@yats/shared";
+/**
+ * yats benchmark — AI agent token comparison
+ * Measures token usage answering codebase questions with and without YATS.
+ * Uses only Node.js built-ins (zero dependencies).
+ */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import * as readline from "node:readline";
 
-const logger = createLogger("benchmark");
+// Simple inline logger (replaces @yats/shared dependency)
+const logger = {
+  info: (msg) => console.error(`[benchmark] ${msg}`),
+  warn: (msg) => console.error(`[benchmark] ⚠ ${msg}`),
+  error: (msg) => console.error(`[benchmark] ❌ ${msg}`),
+};
 
 // ============================================================
-// Types
+// Types (JSDoc for clarity, no TypeScript needed)
 // ============================================================
 
-interface AgentConfig {
-  name: string;
-  cli: string;
-  checkCmd: string;
-  installHint: string;
-  needsApiKey: string;
-  needsSkill: boolean;
-  needsMcpConfig: boolean;
-  runCmd: (prompt: string, repoDir: string, hasMcp: boolean) => string[];
-}
+/**
+ * @typedef {Object} AgentConfig
+ * @property {string} name
+ * @property {string} cli
+ * @property {string} checkCmd
+ * @property {string} installHint
+ * @property {string} needsApiKey
+ * @property {boolean} needsSkill
+ * @property {boolean} needsMcpConfig
+ * @property {(prompt: string, repoDir: string, hasMcp: boolean) => string[]} runCmd
+ */
 
-interface RepoConfig {
-  name: string;
-  url: string;
-  defaultPath: string;
-  language: string;
-  questions: string[];
-}
+/**
+ * @typedef {Object} RepoConfig
+ * @property {string} name
+ * @property {string} url
+ * @property {string} defaultPath
+ * @property {string} language
+ * @property {string[]} questions
+ */
 
-interface RunResult {
-  run: number;
-  withYats: boolean;
-  tokens: number;
-  cost: number;
-  outputTokens: number;
-  cacheRead: number;
-  cacheWrite: number;
-  toolCalls: Record<string, number>;
-  agentSpawns: number;
-  fileReads: number;
-  bashCmds: number;
-  yatsQueries: number;
-  contentChars: number;
-  duration: number;
-  error?: string;
-  logFile: string;
-}
+/**
+ * @typedef {Object} RunResult
+ * @property {number} run
+ * @property {boolean} withYats
+ * @property {number} tokens
+ * @property {number} cost
+ * @property {number} outputTokens
+ * @property {number} cacheRead
+ * @property {number} cacheWrite
+ * @property {Record<string, number>} toolCalls
+ * @property {number} agentSpawns
+ * @property {number} fileReads
+ * @property {number} bashCmds
+ * @property {number} yatsQueries
+ * @property {number} contentChars
+ * @property {number} duration
+ * @property {string} [error]
+ * @property {string} logFile
+ */
 
 // ============================================================
 // Configuration
 // ============================================================
 
-const KNOWN_REPOS: RepoConfig[] = [
+const KNOWN_REPOS = [
   {
     name: "fastapi",
     url: "https://github.com/tiangolo/fastapi.git",
@@ -76,7 +87,7 @@ const KNOWN_REPOS: RepoConfig[] = [
   },
 ];
 
-const KNOWN_AGENTS: AgentConfig[] = [
+const KNOWN_AGENTS = [
   {
     name: "claude",
     cli: "claude",
@@ -85,8 +96,8 @@ const KNOWN_AGENTS: AgentConfig[] = [
     needsApiKey: "ANTHROPIC_API_KEY",
     needsSkill: true,
     needsMcpConfig: true,
-    runCmd: (prompt: string, repoDir: string, hasMcp: boolean) => {
-      const args = [
+    runCmd: (prompt, repoDir, hasMcp) => {
+      return [
         "-p", prompt,
         "--model", process.env.YATS_BENCH_MODEL ?? "haiku",
         "--output-format", "stream-json",
@@ -94,7 +105,6 @@ const KNOWN_AGENTS: AgentConfig[] = [
         "--dangerously-skip-permissions",
         ...(hasMcp ? ["--mcp-config", "/tmp/yats-bench-mcp.json"] : []),
       ];
-      return args;
     },
   },
   {
@@ -105,13 +115,12 @@ const KNOWN_AGENTS: AgentConfig[] = [
     needsApiKey: "OPENAI_API_KEY",
     needsSkill: false,
     needsMcpConfig: false,
-    runCmd: (prompt: string, repoDir: string, hasMcp: boolean) => {
-      const args = [
+    runCmd: (prompt, repoDir, hasMcp) => {
+      return [
         "exec", "--json",
         ...(hasMcp ? [] : ["-c", "mcp_servers.yats.enabled=false"]),
         prompt,
       ];
-      return args;
     },
   },
 ];
@@ -120,22 +129,21 @@ const KNOWN_AGENTS: AgentConfig[] = [
 // Interactive wizard
 // ============================================================
 
-const ask = (rl: readline.Interface, question: string): Promise<string> =>
-  new Promise((resolve) => rl.question(question, resolve));
+const ask = (rl, question) => new Promise((resolve) => rl.question(question, resolve));
 
-async function selectAgent(rl: readline.Interface): Promise<AgentConfig> {
+async function selectAgent(rl) {
   console.log("\n  Available agents:");
   KNOWN_AGENTS.forEach((a, i) => console.log(`    ${i + 1}. ${a.name}`));
   const choice = await ask(rl, "\n  Pick agent [1-2]: ");
   const idx = parseInt(choice) - 1;
   if (isNaN(idx) || idx < 0 || idx >= KNOWN_AGENTS.length) {
     console.log("  Invalid. Defaulting to claude.");
-    return KNOWN_AGENTS[0]!;
+    return KNOWN_AGENTS[0];
   }
-  return KNOWN_AGENTS[idx]!;
+  return KNOWN_AGENTS[idx];
 }
 
-async function selectRepo(rl: readline.Interface): Promise<RepoConfig> {
+async function selectRepo(rl) {
   console.log("\n  Available repos:");
   KNOWN_REPOS.forEach((r, i) => {
     const exists = fs.existsSync(r.defaultPath);
@@ -145,12 +153,12 @@ async function selectRepo(rl: readline.Interface): Promise<RepoConfig> {
   const idx = parseInt(choice) - 1;
   if (isNaN(idx) || idx < 0 || idx >= KNOWN_REPOS.length) {
     console.log("  Invalid. Defaulting to lab_hub.");
-    return KNOWN_REPOS[1]!;
+    return KNOWN_REPOS[1];
   }
-  return KNOWN_REPOS[idx]!;
+  return KNOWN_REPOS[idx];
 }
 
-async function selectQuestion(rl: readline.Interface, repo: RepoConfig): Promise<string> {
+async function selectQuestion(rl, repo) {
   console.log("\n  Questions:");
   repo.questions.forEach((q, i) => {
     console.log(`    ${i + 1}. ${q.slice(0, 80)}...`);
@@ -158,12 +166,12 @@ async function selectQuestion(rl: readline.Interface, repo: RepoConfig): Promise
   const choice = await ask(rl, "\n  Pick question [1]: ");
   const idx = parseInt(choice || "1") - 1;
   if (isNaN(idx) || idx < 0 || idx >= repo.questions.length) {
-    return repo.questions[0]!;
+    return repo.questions[0];
   }
-  return repo.questions[idx]!;
+  return repo.questions[idx];
 }
 
-async function selectRuns(rl: readline.Interface): Promise<number> {
+async function selectRuns(rl) {
   const choice = await ask(rl, "\n  Number of runs per condition [1]: ");
   const n = parseInt(choice || "1");
   return isNaN(n) || n < 1 ? 1 : Math.min(n, 5);
@@ -173,7 +181,7 @@ async function selectRuns(rl: readline.Interface): Promise<number> {
 // Setup
 // ============================================================
 
-function ensureRepo(repo: RepoConfig): string {
+function ensureRepo(repo) {
   const repoPath = repo.defaultPath;
   if (!fs.existsSync(repoPath)) {
     console.log(`\n  Cloning ${repo.name} from ${repo.url}...`);
@@ -190,7 +198,7 @@ function ensureRepo(repo: RepoConfig): string {
   return repoPath;
 }
 
-function setupAgent(agent: AgentConfig, repoPath: string, withYats: boolean): void {
+function setupAgent(agent, repoPath, withYats) {
   // Skill for Claude
   if (agent.needsSkill && withYats) {
     const skillDir = path.join(repoPath, ".claude", "skills", "yats");
@@ -214,7 +222,6 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
 4. Only then Read files at the line YATS gave you
 `);
   } else if (!withYats) {
-    // Remove skill for baseline
     const skillDir = path.join(repoPath, ".claude", "skills", "yats");
     if (fs.existsSync(skillDir)) {
       fs.rmSync(skillDir, { recursive: true });
@@ -230,7 +237,6 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
     };
     fs.writeFileSync("/tmp/yats-bench-mcp.json", JSON.stringify(mcpConfig));
 
-    // Claude project config
     const claudeJson = {
       env: { API_TIMEOUT_MS: "3000000" },
       permissions: { defaultMode: "default" },
@@ -245,7 +251,6 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
     const claudeJsonPath = path.join(process.env.HOME ?? "/tmp", ".claude.json");
     fs.writeFileSync(claudeJsonPath, JSON.stringify(claudeJson));
   } else if (agent.name === "claude") {
-    // Clean config for baseline
     const claudeJsonPath = path.join(process.env.HOME ?? "/tmp", ".claude.json");
     fs.writeFileSync(claudeJsonPath, JSON.stringify({
       env: { API_TIMEOUT_MS: "3000000" },
@@ -255,7 +260,7 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
   }
 }
 
-function checkAgent(agent: AgentConfig): void {
+function checkAgent(agent) {
   try {
     execSync(agent.checkCmd, { stdio: "pipe" });
     console.log(`  ✓ ${agent.name} CLI found`);
@@ -275,14 +280,7 @@ function checkAgent(agent: AgentConfig): void {
 // Run
 // ============================================================
 
-function runAgent(
-  agent: AgentConfig,
-  prompt: string,
-  repoPath: string,
-  withYats: boolean,
-  logFile: string,
-  timeoutSec: number = 180,
-): Promise<{ exitCode: number; signal: string | null }> {
+function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 180) {
   const args = agent.runCmd(prompt, repoPath, withYats);
 
   return new Promise((resolve) => {
@@ -307,7 +305,7 @@ function runAgent(
 // Parse results
 // ============================================================
 
-function parseResult(logFile: string): Partial<RunResult> {
+function parseResult(logFile) {
   try {
     const content = fs.readFileSync(logFile, "utf-8");
     const lines = content.trim().split("\n");
@@ -317,17 +315,17 @@ function parseResult(logFile: string): Partial<RunResult> {
       })
       .filter(Boolean);
 
-    const results = events.filter((e: any) => e.type === "result");
+    const results = events.filter((e) => e.type === "result");
     if (!results.length) return { error: "No result events found", logFile };
 
-    const last = results[results.length - 1] as any;
+    const last = results[results.length - 1];
     const modelUsage = last.modelUsage ?? {};
 
     let tokens = 0;
     let outputTokens = 0;
     let cacheRead = 0;
     let cacheWrite = 0;
-    for (const mu of Object.values(modelUsage) as any[]) {
+    for (const mu of Object.values(modelUsage)) {
       tokens += (mu.inputTokens ?? 0) + (mu.outputTokens ?? 0) +
                 (mu.cacheReadInputTokens ?? 0) + (mu.cacheCreationInputTokens ?? 0);
       outputTokens += mu.outputTokens ?? 0;
@@ -336,10 +334,10 @@ function parseResult(logFile: string): Partial<RunResult> {
     }
 
     // Tool calls
-    const toolCalls: Record<string, number> = {};
+    const toolCalls = {};
     for (const e of events) {
-      if ((e as any).type === "assistant") {
-        for (const c of (e as any).message?.content ?? []) {
+      if (e.type === "assistant") {
+        for (const c of e.message?.content ?? []) {
           if (c.type === "tool_use") {
             toolCalls[c.name] = (toolCalls[c.name] ?? 0) + 1;
           }
@@ -354,14 +352,13 @@ function parseResult(logFile: string): Partial<RunResult> {
     const bashCmds = toolCalls["Bash"] ?? 0;
     const agentSpawns = (toolCalls["Agent"] ?? 0) + (toolCalls["Task"] ?? 0);
 
-    // Content chars
     let contentChars = 0;
     for (const e of events) {
-      if ((e as any).type === "user") {
-        for (const c of (e as any).message?.content ?? []) {
+      if (e.type === "user") {
+        for (const c of e.message?.content ?? []) {
           if (c.type === "tool_result") {
             let t = c.content ?? "";
-            if (Array.isArray(t)) t = t.map((x: any) => x.text ?? "").join("");
+            if (Array.isArray(t)) t = t.map((x) => x.text ?? "").join("");
             contentChars += String(t).length;
           }
         }
@@ -383,7 +380,7 @@ function parseResult(logFile: string): Partial<RunResult> {
       duration: last.duration_ms ?? 0,
       logFile,
     };
-  } catch (err: any) {
+  } catch (err) {
     return { error: err.message, logFile };
   }
 }
@@ -392,11 +389,7 @@ function parseResult(logFile: string): Partial<RunResult> {
 // Output
 // ============================================================
 
-function printTable(
-  title: string,
-  runs: RunResult[],
-  withYats: boolean,
-): void {
+function printTable(title, runs, withYats) {
   const label = withYats ? "With YATS" : "Baseline";
   console.log(`\n  ${title} — ${label}`);
   console.log("  ┌──────┬──────────┬────────┬───────┬──────┬──────┬──────┬──────────┐");
@@ -408,8 +401,7 @@ function printTable(
       `  │  ${String(r.run).padEnd(4)} │ ${String(r.tokens).padStart(8)} │ $${r.cost.toFixed(3).padStart(4)} │ ${String(r.outputTokens).padStart(5)} │ ${String(r.fileReads).padStart(4)} │ ${String(r.bashCmds).padStart(4)} │ ${String(r.yatsQueries).padStart(4)} │ ${status.padEnd(8)} │`,
     );
   }
-  // Average
-  const avg = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
   const good = runs.filter((r) => !r.error);
   if (good.length) {
     console.log("  ├──────┼──────────┼────────┼───────┼──────┼──────┼──────┼──────────┤");
@@ -420,12 +412,12 @@ function printTable(
   console.log("  └──────┴──────────┴────────┴───────┴──────┴──────┴──────┴──────────┘");
 }
 
-function printComparison(baseline: RunResult[], yats: RunResult[]): void {
+function printComparison(baseline, yats) {
   const goodB = baseline.filter((r) => !r.error);
   const goodY = yats.filter((r) => !r.error);
   if (!goodB.length || !goodY.length) return;
 
-  const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const tB = avg(goodB.map((r) => r.tokens));
   const tY = avg(goodY.map((r) => r.tokens));
   const cB = avg(goodB.map((r) => r.cost));
@@ -454,7 +446,7 @@ function printComparison(baseline: RunResult[], yats: RunResult[]): void {
 // Main entry
 // ============================================================
 
-export async function runBenchmark(): Promise<void> {
+export async function runBenchmark() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   console.log("\n  ╔══════════════════════════════════════════════════╗");
@@ -481,17 +473,14 @@ export async function runBenchmark(): Promise<void> {
 
   // 6. Ensure repo is indexed
   console.log(`\n  Checking if ${repo.name} is indexed...`);
-  // TODO: check via MCP call
 
-  // Prep results dir
-  // Results: saved to ./benchmark/results in user's working directory
   const resultsDir = path.join(process.cwd(), "benchmark", "results");
   fs.mkdirSync(resultsDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
   // 7. Run baseline
   console.log(`\n  ═══════ BASELINE (${numRuns} runs) ═══════`);
-  const baselineResults: RunResult[] = [];
+  const baselineResults = [];
   for (let i = 1; i <= numRuns; i++) {
     console.log(`\n  ▶ Run ${i}/${numRuns} — BASELINE...`);
     setupAgent(agent, repoPath, false);
@@ -516,7 +505,7 @@ export async function runBenchmark(): Promise<void> {
       error: result.error,
       logFile,
     });
-    const r = baselineResults[baselineResults.length - 1]!;
+    const r = baselineResults[baselineResults.length - 1];
     if (r.error) {
       console.log(`    ❌ Error: ${r.error}`);
     } else {
@@ -526,7 +515,7 @@ export async function runBenchmark(): Promise<void> {
 
   // 8. Run YATS
   console.log(`\n  ═══════ WITH YATS (${numRuns} runs) ═══════`);
-  const yatsResults: RunResult[] = [];
+  const yatsResults = [];
   for (let i = 1; i <= numRuns; i++) {
     console.log(`\n  ▶ Run ${i}/${numRuns} — YATS...`);
     setupAgent(agent, repoPath, true);
@@ -551,7 +540,7 @@ export async function runBenchmark(): Promise<void> {
       error: result.error,
       logFile,
     });
-    const r = yatsResults[yatsResults.length - 1]!;
+    const r = yatsResults[yatsResults.length - 1];
     if (r.error) {
       console.log(`    ❌ Error: ${r.error}`);
     } else {

@@ -51,7 +51,7 @@ COPY packages/infra/package.json packages/infra/
 COPY packages/indexing/package.json packages/indexing/
 COPY packages/retrieval/package.json packages/retrieval/
 COPY packages/mcp-server/package.json packages/mcp-server/
-COPY packages/cli/package.json packages/cli/
+COPY packages/dev-cli/package.json packages/dev-cli/
 COPY packages/analyzers/analyzer-interface/package.json packages/analyzers/analyzer-interface/
 COPY packages/analyzers/analyzer-typescript/package.json packages/analyzers/analyzer-typescript/
 COPY packages/analyzers/analyzer-go/package.json packages/analyzers/analyzer-go/
@@ -72,8 +72,8 @@ COPY packages/retrieval/src packages/retrieval/src
 COPY packages/retrieval/tsconfig.json packages/retrieval/
 COPY packages/mcp-server/src packages/mcp-server/src
 COPY packages/mcp-server/tsconfig.json packages/mcp-server/
-COPY packages/cli/src packages/cli/src
-COPY packages/cli/tsconfig.json packages/cli/
+COPY packages/dev-cli/src packages/dev-cli/src
+COPY packages/dev-cli/tsconfig.json packages/dev-cli/
 COPY packages/analyzers/analyzer-interface/src packages/analyzers/analyzer-interface/src
 COPY packages/analyzers/analyzer-interface/tsconfig.json packages/analyzers/analyzer-interface/
 COPY packages/analyzers/analyzer-typescript/src packages/analyzers/analyzer-typescript/src
