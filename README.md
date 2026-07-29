@@ -106,19 +106,41 @@ TypeScript, JavaScript, Python, Go, C#, PHP — plus universal fallback via Tree
 
 ## Benchmarks
 
-Run your own token savings comparison:
+We measure YATS transparently. Every test is reproducible — same questions, same repos, public raw data.
+
+### What we compare
+
+| | Without YATS | With YATS |
+|---|---|---|
+| **Agent config** | Default — reads files with grep/Read | MCP connected to YATS + behavior instructions ([`connect/`](./connect/)) |
+| **How the agent works** | Greps codebase, reads files one by one, guesses relationships | Calls `search_code` → `find_symbol` → `expand_graph` — answers from the knowledge graph |
+
+Each agent answers the **same question twice**, on a **fresh session** each time. We count every token — system prompts, tool calls, sub-agents, everything.
+
+### Why two kinds of repos
+
+We test against **popular repos** (FastAPI, Django, NestJS) that the agent might know from training, and **non-popular repos** (lab_hub, internal projects) that force the agent to actually read and understand the code — not answer from memory.
+
+### Results
+
+| Agent | Repo | Without YATS | With YATS | Savings |
+|-------|------|-------------|-----------|---------|
+| Codex | lab_hub (Go) | 100,000 tokens | 27,000 tokens | **73%** |
+| Copilot | lab_hub (Go) | 1.19 credits | 0.40 credits | **66%** |
+| Claude | lab_hub (Go) | 862,307 tokens | 540,917 tokens | **37%** |
+| Gemini | Django (Python) | 115,122 tokens | 63,851 tokens | **45%** |
+
+**Savings range: 37% – 73%.** Lower savings happen when the agent double-checks YATS results by reading files anyway (Copilot, Claude). Higher savings when the agent trusts MCP tools directly (Codex).
+
+All results, raw agent logs, questions, and configs: [`packages/yats-toolkit/benchmark/results/`](./packages/yats-toolkit/benchmark/results/)
+
+### Run your own
 
 ```bash
 yats benchmark
 ```
 
-Interactive wizard that:
-1. Pick an AI agent (Cursor, Claude CLI, Copilot CLI, Codex, or Gemini CLI)
-2. Pick a repo (auto-clones from GitHub, auto-indexes in YATS)
-3. Pick your questions
-4. Runs each **without YATS** (agent reads files directly) and **with YATS** (agent queries the graph)
-5. Shows token savings side-by-side
-6. Saves results to `benchmark/results/`
+Interactive wizard — pick your agent, pick a repo, we clone it, index it, run the questions, and show you the savings. You don't have to trust our numbers.
 
 ---
 
