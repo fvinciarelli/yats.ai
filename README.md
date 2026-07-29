@@ -130,6 +130,8 @@ We test against **popular repos** (FastAPI, Django, NestJS) that the agent might
 | Claude | lab_hub (Go) | claude-haiku-4-5 | 862k tokens · $0.212 | 541k tokens · $0.108 | **37%** tokens · **49%** cost |
 | Gemini | Django (Python) | gemini-flash-latest | 115,122 tokens | 63,851 tokens | **45%** |
 
+> *Cost data only available for Claude (reported directly by the API). Codex tokens include DeepSeek pricing (not OpenAI). Copilot reports AI credits, not dollars. Gemini free tier has no cost data. Token counts are always accurate across all agents — cost depends on your model and plan.*
+
 **Savings range: 37% – 73%.** Lower savings happen when the agent double-checks YATS results by reading files anyway (Copilot, Claude). Higher savings when the agent trusts MCP tools directly (Codex).
 
 All results, raw agent logs, questions, and configs: [`packages/yats-toolkit/benchmark/results/`](./packages/yats-toolkit/benchmark/results/)
