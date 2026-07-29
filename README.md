@@ -47,15 +47,21 @@ npx yats-toolkit
 
 The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/Mistral/Voyage), which directories to pre-index, and writes the MCP config automatically.
 
-**Then configure your AI agent:** see [`connect/`](./connect/) — pick your agent, copy two files, done.
+---
 
-| Agent | Transport | Guide |
-|-------|-----------|-------|
-| Claude Code | stdio bridge | [`connect/claude/`](./connect/claude/) |
-| Gemini CLI | stdio bridge | [`connect/gemini/`](./connect/gemini/) |
-| Copilot CLI | stdio bridge | [`connect/copilot/`](./connect/copilot/) |
-| Codex CLI | stdio bridge | [`connect/codex/`](./connect/codex/) |
-| Cursor | HTTP | [`connect/cursor/`](./connect/cursor/) |
+## Connect your AI agent
+
+👉 **Go to [`connect/`](./connect/)** — pick your agent, copy two files into your repo, done.
+
+| Agent | Transport | Files to copy |
+|-------|-----------|---------------|
+| **Claude Code** | stdio bridge | [`SKILL.md`](./connect/claude/SKILL.md) → `.claude/skills/yats/` · [`mcp.json`](./connect/claude/mcp.json) → `.mcp.json` |
+| **Gemini CLI** | stdio bridge | [`GEMINI.md`](./connect/gemini/GEMINI.md) → repo root · [`mcp.json`](./connect/gemini/mcp.json) → `.gemini/settings.json` |
+| **Copilot CLI** | stdio bridge | [`instructions.md`](./connect/copilot/instructions.md) → `.github/` · [`mcp.json`](./connect/copilot/mcp.json) → `.copilot/` |
+| **Codex CLI** | stdio bridge | [`AGENTS.md`](./connect/codex/AGENTS.md) → repo root · [`config.toml`](./connect/codex/config.toml) → `.codex/` |
+| **Cursor** | HTTP | [`rules.mdc`](./connect/cursor/rules.mdc) → `.cursor/rules/` · [`mcp.json`](./connect/cursor/mcp.json) → `.cursor/` |
+
+Each agent folder has a **README** explaining what each file does and exactly where to place it.
 
 That's it. Ask your agent: *"How does authentication work in this project?"* and YATS answers from the knowledge graph.
 
@@ -107,11 +113,11 @@ yats benchmark
 ```
 
 Interactive wizard that:
-1. Picks an AI agent (Claude CLI or Codex)
-2. Picks a repo (auto-clones if needed)
-3. Asks your codebase question
-4. Runs it **without YATS** (agent reads files directly) and **with YATS** (agent queries the graph)
-5. Shows side-by-side token, cost, file read, and bash comparison
+1. Pick an AI agent (Cursor, Claude CLI, Copilot CLI, Codex, or Gemini CLI)
+2. Pick a repo (auto-clones from GitHub, auto-indexes in YATS)
+3. Pick your questions
+4. Runs each **without YATS** (agent reads files directly) and **with YATS** (agent queries the graph)
+5. Shows token savings side-by-side
 6. Saves results to `benchmark/results/`
 
 ---
