@@ -8,6 +8,14 @@ mcp_config="$3"
 model="${YATS_BENCH_MODEL:-sonnet}"
 question=$(cat "$question_file")
 
+# Change to repo directory so the agent works in the right context
+if [ -n "$YATS_BENCH_REPO_DIR" ] && [ -d "$YATS_BENCH_REPO_DIR" ]; then
+  cd "$YATS_BENCH_REPO_DIR" || true
+fi
+
+# Export repo name for MCP bridge auto-injection
+export YATS_DEFAULT_REPO="${YATS_BENCH_REPO_NAME:-$YATS_DEFAULT_REPO}"
+
 # Check if agent CLI is available
 check_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -42,20 +50,27 @@ case "$agent" in
 
   copilot-cli)
     if check_cmd copilot; then
-      # Copilot uses ~/.copilot/mcp-servers.json format
+      # Copilot MCP: handles both HTTP and stdio bridge formats
       if [ -n "$mcp_config" ]; then
         mkdir -p ~/.copilot
         python3 -c "
 import json
 with open('$mcp_config') as f:
-  std = json.load(f)
-servers = [{'name': k, 'type': 'http', 'url': v['url']} for k,v in std.get('mcpServers',{}).items()]
+    std = json.load(f)
+servers = []
+for k, v in std.get('mcpServers', {}).items():
+    if 'command' in v:
+        # stdio bridge format (local process)
+        servers.append({'name': k, 'type': 'local', 'command': v['command'], 'args': v.get('args', [])})
+    elif 'url' in v:
+        # HTTP format
+        servers.append({'name': k, 'type': 'http', 'url': v['url']})
 with open('/tmp/copilot-mcp.json', 'w') as f:
-  json.dump({'servers': servers}, f)
+    json.dump({'servers': servers}, f)
 " 2>/dev/null
-        copilot -p "$question" --mcp-config /tmp/copilot-mcp.json --allow-all-tools 2>/dev/null
+        copilot -p "$question" --mcp-config /tmp/copilot-mcp.json --output-format json --allow-all 2>/dev/null
       else
-        copilot -p "$question" --allow-all-tools 2>/dev/null
+        copilot -p "$question" --output-format json --allow-all 2>/dev/null
       fi
     else
       echo "copilot not installed: npm install -g @github/copilot" >&2
@@ -75,6 +90,27 @@ with open('/tmp/copilot-mcp.json', 'w') as f:
       fi
     else
       echo "codex not installed." >&2
+    fi
+    ;;
+
+  gemini)
+    if check_cmd gemini; then
+      gemini_model="${YATS_BENCH_GEMINI_MODEL:-gemini-flash-latest}"
+      if [ -n "$mcp_config" ]; then
+        # Write MCP config to .gemini/settings.json (repo root)
+        export GEMINI_CLI_TRUST_WORKSPACE=true
+        mkdir -p .gemini
+        cp "$mcp_config" .gemini/settings.json
+        gemini -p "$question" --model "$gemini_model" --output-format stream-json --yolo 2>/dev/null
+      else
+        # Baseline: no MCP config
+        rm -f .gemini/settings.json
+        export GEMINI_CLI_TRUST_WORKSPACE=true
+        gemini -p "$question" --model "$gemini_model" --output-format stream-json --yolo 2>/dev/null
+      fi
+    else
+      echo '{"type":"result","usage":{"input_tokens":0,"output_tokens":0}}'
+      echo "gemini not installed." >&2
     fi
     ;;
 esac

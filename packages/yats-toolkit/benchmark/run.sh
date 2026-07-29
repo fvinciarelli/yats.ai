@@ -20,8 +20,8 @@ echo -e ""
 # Step 1: Agent
 echo -e "  ${B}Step 1 — AI Agent${R}"
 echo -e ""
-agents=("cursor" "claude-cli" "copilot-cli" "codex")
-labels=("Cursor" "Claude CLI" "GitHub Copilot CLI" "VS Code Codex")
+agents=("cursor" "claude-cli" "copilot-cli" "codex" "gemini")
+labels=("Cursor" "Claude CLI" "GitHub Copilot CLI" "VS Code Codex" "Gemini CLI")
 for i in "${!labels[@]}"; do
   echo -e "    ${B}$((i+1))${R}. ${labels[$i]}"
 done
@@ -60,6 +60,62 @@ REPO="${repos[$((c-1))]}"
 echo -e "  ${G}✓${R} $REPO"
 echo -e ""
 
+# Step 3.5: Working directory for repo clone
+echo -e "  ${B}Step 3.5 — Working directory${R}"
+echo -e "  ${D}Directory where repos will be cloned for the agent to work on${R}"
+echo -e ""
+default_workdir="${YATS_BENCH_WORKDIR:-$HOME/yats-bench-repos}"
+read -p "  Path [${default_workdir}]: " workdir_input
+WORKDIR="${workdir_input:-$default_workdir}"
+mkdir -p "$WORKDIR"
+echo -e "  ${G}✓${R} $WORKDIR"
+echo -e ""
+
+# Clone repo if needed
+REPO_DIR="$WORKDIR/$REPO"
+REPO_URL=$(python3 -c "
+import json
+with open('$BENCH_DIR/targets/repos.json') as f:
+    data = json.load(f)
+for r in data.get('$LANG', []):
+    if r['name'] == '$REPO':
+        print(r['url'])
+        break
+" 2>/dev/null)
+
+if [ ! -d "$REPO_DIR/.git" ]; then
+  if [ -n "$REPO_URL" ]; then
+    echo -e "  ${D}Cloning $REPO from $REPO_URL...${R}"
+    git clone --depth 1 "$REPO_URL" "$REPO_DIR" 2>&1 | tail -1
+    echo -e "  ${G}✓${R} Cloned to $REPO_DIR"
+  else
+    echo -e "  ${Y}⚠ No URL in targets/repos.json — using existing $REPO_DIR if any${R}"
+  fi
+else
+  echo -e "  ${G}✓${R} Repo already exists at $REPO_DIR"
+fi
+echo -e ""
+
+# Index repo in YATS if needed
+YATS_HEALTH=$(curl -s -m 3 http://localhost:5555/health 2>/dev/null || echo '')
+if [ -n "$YATS_HEALTH" ]; then
+  echo -e "  ${D}Checking if $REPO is indexed...${R}"
+  if yats list 2>/dev/null | grep -q "^  $REPO "; then
+    echo -e "  ${G}✓${R} Already indexed"
+  else
+    echo -e "  ${D}Indexing $REPO (this may take a while)...${R}"
+    yats index "$REPO_DIR" 2>&1 | tail -3
+    echo -e "  ${G}✓${R} Indexed as '$REPO'"
+  fi
+else
+  echo -e "  ${Y}⚠ YATS not running — skip indexing. Start with: yats start${R}"
+fi
+echo -e ""
+
+# Export for run-agent.sh
+export YATS_BENCH_REPO_DIR="$REPO_DIR"
+export YATS_BENCH_REPO_NAME="$REPO"
+
 # Step 4: Questions
 echo -e "  ${B}Step 4 — Questions${R}"
 echo -e ""
@@ -92,6 +148,7 @@ extract_tokens() {
   python3 -c "
 import json
 total = 0
+nanoaiu = 0
 try:
   with open('$1') as f:
     for line in f:
@@ -108,10 +165,19 @@ try:
       if t == 'turn.completed':
         u = evt.get('usage',{})
         total += u.get('input_tokens',0) + u.get('cached_input_tokens',0) + u.get('output_tokens',0) + u.get('reasoning_output_tokens',0)
-      # Copilot: assistant.usage events
+      # Copilot: assistant.usage events OR nanoAiu from usage_checkpoint
       if t == 'assistant.usage':
         total += evt.get('inputTokens',0) + evt.get('outputTokens',0) + evt.get('cacheReadTokens',0)
+      if t == 'session.usage_checkpoint':
+        nanoaiu = evt.get('data',{}).get('totalNanoAiu', 0)
+      # Gemini: result events with stats
+      if t == 'result':
+        s = evt.get('stats',{})
+        total += s.get('input_tokens',0) + s.get('output_tokens',0)
 except: pass
+# If Copilot, use nanoAiu as the metric (no token events)
+if nanoaiu > 0 and total == 0:
+  total = nanoaiu
 print(total)
 " 2>/dev/null || echo 0
 }
@@ -120,9 +186,24 @@ TIMESTAMP=$(date +%Y-%m-%dT%H:%M:%S)
 results_json="[]"
 
 YATS_MCP="$AGENTS_DIR/yats-mcp.json"
-cat > "$YATS_MCP" << 'MCPEOF'
+# Gemini, Copilot, and Codex use stdio bridge; Cursor and Claude use HTTP
+if [ "$AGENT" = "gemini" ] || [ "$AGENT" = "copilot-cli" ] || [ "$AGENT" = "codex" ]; then
+  cat > "$YATS_MCP" << 'MCPEOF'
+{
+  "mcpServers": {
+    "yats": {
+      "command": "node",
+      "args": ["/home/franco/cosas/code_indexer/packages/yats-toolkit/benchmark/adapters/mcp-bridge-stdio.cjs", "--stdio"],
+      "trust": true
+    }
+  }
+}
+MCPEOF
+else
+  cat > "$YATS_MCP" << 'MCPEOF'
 { "mcpServers": { "yats": { "url": "http://localhost:5555/mcp" } } }
 MCPEOF
+fi
 
 for qfile in "${selected[@]}"; do
   qname=$(basename "$qfile" .md)

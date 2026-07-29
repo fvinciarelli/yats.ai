@@ -174,7 +174,11 @@ async function startStdio() {
         const result = await callYatsTool(toolName, toolArgs);
         const resultText = result.map((c) => c.text || "").join("\n");
         log(`stdio result: ${resultText.slice(0, 200)}`);
-        respond({ jsonrpc: "2.0", id, result: { content: result } });
+        // Gemini CLI expects structuredContent (record), not just content (array)
+        respond({ jsonrpc: "2.0", id, result: {
+          content: result,
+          structuredContent: { result: resultText },
+        }});
       } else if (method === "shutdown") {
         respond({ jsonrpc: "2.0", id, result: {} });
         process.exit(0);

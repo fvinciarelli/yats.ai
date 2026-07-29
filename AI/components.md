@@ -275,15 +275,24 @@
 
 ### Benchmark Wizard (`run.sh`)
 - **Responsibility:** Interactive wizard to run AI agent benchmarks
-- **Agents:** Cursor, Claude CLI, Copilot CLI, Codex
-- **Metrics:** Tokens (input/output), cost, tool calls, file reads
-- **Output:** JSONL logs + summary reports in `results/`
+- **Agents:** Cursor, Claude CLI, Copilot CLI, Codex, Gemini CLI
+- **Flow:** Select agent → language → repo → workdir → auto-clone from `targets/repos.json` → auto-index in YATS → run questions from repo directory
+- **Metrics:** Tokens (input/output) for Cursor/Claude/Codex/Gemini; nanoAiu for Copilot
+- **Output:** JSONL logs + summary JSON in `results/`
 
-### MCP Bridge stdio (`adapters/mcp-bridge-stdio.cjs`)
-- **Responsibility:** Wraps YATS MCP as a stdio MCP server for Codex
+### MCP Bridge stdio — benchmark (`adapters/mcp-bridge-stdio.cjs`)
+- **Responsibility:** Standalone copy used by the benchmark wizard for isolated testing
 - **Deps:** Zero (Node.js built-ins: http, https, readline)
 - **Protocol:** MCP JSON-RPC over stdin/stdout
-- **Usage:** Codex spawns via `command: node, args: [bridge.cjs, --stdio]`
+- **Features:** Auto-inject repository, structuredContent for Gemini, tool forwarding
+
+### YATS Bridge — production (`src/bridge.js`, command: `yats bridge`)
+- **Responsibility:** MCP stdio server for production use by AI agents
+- **Deps:** Zero (Node.js built-ins)
+- **Protocol:** MCP JSON-RPC over stdin/stdout, forwarding to YATS via Streamable HTTP
+- **Features:** Auto-inject repository from `YATS_DEFAULT_REPO` or cwd basename, structuredContent for Gemini CLI, pending queue for async responses
+- **Usage:** `yats bridge [--port N] [--url http://...]`
+- **Agent configs:** Copilot (`type: local`), Gemini (`.gemini/settings.json`), Codex (`.codex/config.toml`), Claude Desktop
 
 ### MCP Bridge HTTP (`adapters/mcp-openai-bridge.cjs`)
 - **Responsibility:** OpenAI-compatible HTTP proxy with MCP tool injection
@@ -310,5 +319,15 @@
 ### .cursorrules (Cursor)
 - **Responsibility:** Project rules for YATS MCP usage
 - **Location:** `.cursor/rules/yats.mdc` or `.cursorrules`
+
+### GEMINI.md (Gemini CLI)
+- **Responsibility:** Instructions for Gemini CLI to use YATS MCP tools
+- **Location:** `GEMINI.md` in repo root
+- **Content:** Tool list, golden rule (YATS first, files second), 3-step workflow
+
+### .gemini/settings.json (Gemini CLI MCP)
+- **Responsibility:** MCP stdio bridge configuration for Gemini
+- **Key settings:** `command: node`, `args: [bridge.cjs, --stdio]`, `trust: true`
+- **Env required:** `GEMINI_CLI_TRUST_WORKSPACE=true`
 
 [← Back to README](./README.md)

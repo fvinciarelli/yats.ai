@@ -176,18 +176,51 @@
 
 ## Recently Completed
 
-### ✅ Gemini CLI + YATS MCP stdio (2026-07-29)
+### ✅ Bridge de producción reescrito (2026-07-29)
+- **Was:** `yats bridge` usaba SSE (`/mcp/sse` + `/mcp/message`) con manejo de sesiones complejo y esperaba un evento `endpoint` que el servidor no emitía. Era un proxy ciego sin transformaciones.
+- **Now:** Reescrito con el código probado del benchmark (`mcp-bridge-stdio.cjs`). Usa Streamable HTTP (`POST /mcp`), sin sesiones. Auto-inyecta `repository` desde `YATS_DEFAULT_REPO` o el `cwd`. Añade `structuredContent` para compatibilidad con Gemini CLI. Maneja `initialize`, `tools/list`, `tools/call`, `shutdown`. Cola de operaciones pendientes para no cortar respuestas asíncronas. Cero dependencias.
+
+### ✅ Benchmark: Gemini CLI integrado (2026-07-29)
+- Gemini CLI 0.53.0 conectado vía MCP stdio bridge (`GEMINI_CLI_TRUST_WORKSPACE=true`)
+- Añadido como 5º agente en `run.sh` y `run-agent.sh`
+- `extract_tokens()` soporta `stats.input_tokens`/`output_tokens` de Gemini
+- MCP tools funcionan correctamente tras añadir `structuredContent` al bridge
+- `GEMINI.md` y `.gemini/settings.json` generados automáticamente
+- **Resultado parcial:** 45% ahorro (115k → 64k tokens) — limitado por rate limit de API gratuita
+
+### ✅ Benchmark: Copilot medido correctamente (2026-07-29)
+- **Descubrimiento:** Copilot CLI 1.0.75 NO reporta tokens en su JSONL (`--output-format json`). La métrica real es `totalNanoAiu` (nano AI units) del evento `session.usage_checkpoint`.
+- Los "tokens" del output de texto son poco confiables. El benchmark ahora captura nanoAiu para Copilot.
+- Copilot se conecta vía stdio bridge (no HTTP) — corregido en `run.sh` y `run-agent.sh`.
+- Copilot verificaba doble (MCP + archivo), comportamiento documentado.
+
+### ✅ Benchmark: clone + cd + index automático (2026-07-29)
+- `run.sh` ahora pregunta directorio de trabajo (default `~/yats-bench-repos`)
+- Clona el repo desde `targets/repos.json` si no existe (`git clone --depth 1`)
+- Lo indexa en YATS (`yats index <dir>`) con el nombre correcto (basename del dir)
+- `run-agent.sh` hace `cd` al repo antes de ejecutar el agente
+- Exporta `YATS_BENCH_REPO_DIR` y `YATS_BENCH_REPO_NAME` para que el bridge inyecte el repo correcto
+- El agente trabaja exactamente como si el usuario hubiera abierto el IDE en ese repo
+
+### ✅ MCP transport unificado (2026-07-29)
+- **stdio bridge:** Gemini, Copilot, Codex (proceso local, más confiable)
+- **HTTP directo:** Claude, Cursor (URL `http://localhost:5555/mcp`)
+- `run.sh` genera la config MCP correcta según el agente
+- `run-agent.sh` convierte formatos según lo que espera cada agente
+
+### ✅ Gemini CLI + YATS MCP stdio (anterior, 2026-07-29)
 - **Gemini CLI 0.53.0** connected via MCP stdio bridge (`GEMINI_CLI_TRUST_WORKSPACE=true`)
 - 16 YATS tools discovered and connected
 - 3 tool calls executed: `list_repositories`, `find_symbol`, `search_code`
-- Minor parameter format mismatch (Gemini→YATS) — tools called but return schema errors
+- Minor parameter format mismatch (Gemini→YATS) — fixed with `structuredContent` in bridge
 - Config: `.gemini/settings.json` with `command: node, args: [bridge.cjs, --stdio]`
 - Instructions: `GEMINI.md` in repo root
 
-### ✅ Copilot CLI partial integration
-- Copilot CLI 1.0.75 recognizes YATS from `.github/copilot-instructions.md`
-- MCP via HTTP and stdio attempted but not fully working (uses grep fallback)
-- Agent instructions template created in `docs/agents_instructions/copilot/`
+### ✅ Copilot CLI integration (2026-07-29)
+- Copilot CLI 1.0.75 conecta vía MCP stdio bridge (no HTTP)
+- YATS tools descubiertas y usadas correctamente (`search_code`, `find_symbol`)
+- Hace doble verificación (MCP + lectura de archivo) — comportamiento documentado
+- Métrica real es `nanoAiu`, no tokens del output de texto
 
 ### ✅ Agent instructions for all 5 agents
 - `docs/agents_instructions/` now covers: Claude (SKILL.md), Codex (AGENTS.md + config.toml), Cursor (.cursorrules), Copilot (copilot-instructions.md), Gemini (GEMINI.md + settings.json)
@@ -199,9 +232,9 @@
 - Full report: `packages/yats-toolkit/benchmark/results/codex-mcp-stdio-benchmark.md`
 
 ### ✅ MCP Bridge adapters
-- `adapters/mcp-bridge-stdio.cjs` — stdio MCP server wrapping YATS tools. Codex spawns as subprocess.
-- `adapters/mcp-openai-bridge.cjs` — HTTP proxy that injects MCP tools as OpenAI functions. Works with any OpenAI-compatible client (tested with Aider + DeepSeek).
-- Both zero dependencies (Node.js built-ins only).
+- `src/bridge.js` (`yats bridge`) — MCP stdio server para producción. Auto-inyecta repo, `structuredContent`, zero deps. Usado por Copilot, Gemini, Codex, Claude Desktop.
+- `adapters/mcp-bridge-stdio.cjs` — copia del benchmark, usada por `run.sh` para pruebas aisladas.
+- `adapters/mcp-openai-bridge.cjs` — HTTP proxy que inyecta MCP tools como OpenAI functions.
 
 ### ✅ Agent instructions (`docs/agents_instructions/`)
 - `claude/SKILL.md` — YATS skill with auto-invocation
@@ -209,11 +242,11 @@
 - `cursor/.cursorrules` — rules for YATS tool usage
 - Users can customize for their repos (repo name, max calls, domain knowledge).
 
-### ✅ Benchmark cleanup
-- Removed Aider from benchmark (not suitable for Q&A — code editor, not agent)
-- Removed `codex-bridge` workaround (MCP stdio is the proper solution)
-- Removed `mcpm-aider` dependency (doesn't exist on PyPI; replaced by our own bridges)
-- Wizard now has 4 agents: Cursor, Claude CLI, Copilot CLI, Codex
+### ✅ Benchmark wizard: 5 agentes (2026-07-29)
+- Agentes: Cursor, Claude CLI, Copilot CLI, Codex, Gemini CLI
+- Auto-clone, auto-index, ejecución desde directorio del repo
+- Métricas: tokens (Cursor, Claude, Codex, Gemini) + nanoAiu (Copilot)
+- Resultados: Codex 73%, Copilot 66% (créditos), Claude 37%, Gemini 45% (parcial)
 
 ### ✅ DeepSeek as LLM backend
 - Bridge supports DeepSeek API via `YATS_BRIDGE_UPSTREAM_URL`
