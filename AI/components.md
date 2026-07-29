@@ -300,34 +300,19 @@
 - **Features:** Tool interception, limit enforcement (max 3 calls), model mapping
 - **Usage:** Any OpenAI-compatible client (`--api-base http://localhost:8000/v1/`)
 
-## Agent Instructions (`docs/agents_instructions/`)
+## Agent Connection Files (`connect/`)
 
-### SKILL.md (Claude Code)
-- **Responsibility:** YATS skill with auto-invocation for code questions
-- **Location:** `.claude/skills/yats/SKILL.md`
-- **Content:** Workflow (search_code → find_symbol → expand_graph), golden rule
+### connect/README.md
+- **Responsibility:** Index — "Pick your agent" with table of transport types and config locations
 
-### AGENTS.md (Codex CLI)
-- **Responsibility:** Orientation file loaded at session start
-- **Location:** `AGENTS.md` in repo root
-- **Content:** MCP tool list, max 3 calls rule, anti-subagent instruction
+### Per-agent folders (`connect/<agent>/`)
+Each folder contains:
+- **README.md** — explains what each file does and where to copy it
+- **Instructions file** — teaches the agent to use YATS tools (SKILL.md, GEMINI.md, AGENTS.md, rules.mdc, instructions.md)
+- **Config file** — MCP connection config (mcp.json or config.toml)
 
-### config.toml (Codex CLI MCP)
-- **Responsibility:** MCP stdio bridge configuration
-- **Key setting:** `multi_agent = false` (forces direct MCP usage, no subagents)
-
-### .cursorrules (Cursor)
-- **Responsibility:** Project rules for YATS MCP usage
-- **Location:** `.cursor/rules/yats.mdc` or `.cursorrules`
-
-### GEMINI.md (Gemini CLI)
-- **Responsibility:** Instructions for Gemini CLI to use YATS MCP tools
-- **Location:** `GEMINI.md` in repo root
-- **Content:** Tool list, golden rule (YATS first, files second), 3-step workflow
-
-### .gemini/settings.json (Gemini CLI MCP)
-- **Responsibility:** MCP stdio bridge configuration for Gemini
-- **Key settings:** `command: node`, `args: [bridge.cjs, --stdio]`, `trust: true`
-- **Env required:** `GEMINI_CLI_TRUST_WORKSPACE=true`
+**Transport per agent:**
+- Claude, Gemini, Copilot, Codex: stdio bridge (`yats bridge`)
+- Cursor: HTTP direct (`http://localhost:5555/mcp`)
 
 [← Back to README](./README.md)

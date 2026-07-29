@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "yats": {
-      "command": "node",
-      "args": ["/home/franco/cosas/code_indexer/packages/yats-toolkit/benchmark/adapters/mcp-bridge-stdio.cjs", "--stdio"],
-      "trust": true
-    }
-  }
-}

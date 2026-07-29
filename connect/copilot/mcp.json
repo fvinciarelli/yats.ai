@@ -1,0 +1,10 @@
+{
+  "servers": [
+    {
+      "name": "yats",
+      "type": "local",
+      "command": "yats",
+      "args": ["bridge"]
+    }
+  ]
+}

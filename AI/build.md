@@ -211,11 +211,10 @@ bash agents/run-agent.sh codex questions/go/lab_hub/01-protocol-translation.md
 ### Codex + MCP stdio setup
 ```bash
 # 1. Copy config to repo
-cp docs/agents_instructions/codex/config.toml .codex/config.toml
-# Edit the bridge path to point to your mcp-bridge-stdio.cjs
+cp connect/codex/config.toml .codex/config.toml
 
 # 2. Copy AGENTS.md to repo root
-cp docs/agents_instructions/codex/AGENTS.md ./AGENTS.md
+cp connect/codex/AGENTS.md ./AGENTS.md
 
 # 3. Run benchmark
 codex exec --json "your question about the code"

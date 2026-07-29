@@ -169,14 +169,8 @@
 
 ## Decision 11: Agent instructions as reusable docs (2026-07-29)
 
-**Decision:** Orientation files (SKILL.md, AGENTS.md, .cursorrules) live in `docs/agents_instructions/` as templates users copy to their repos. Not bundled in the benchmark folder.
+**Decision:** Orientation files (SKILL.md, AGENTS.md, .cursorrules) live in `connect/<agent>/` as templates users copy to their repos. Each agent folder has a README explaining what each file does and where to place it.
 
-**Rationale:**
-- Users need to customize instructions per repo (repo name, max calls, domain knowledge).
-- Templates are the starting point, not the final config.
-- Keeping them in `docs/` signals they're user-facing documentation, not benchmark internals.
-- Each agent reads instructions differently: Claude uses `.claude/skills/`, Codex reads `AGENTS.md` from repo root, Cursor uses `.cursorrules`.
-
-**Trade-off:** Users must manually copy files. A future `yats setup --agent codex` command could automate this.
+**Trade-off:** Users must manually copy files. The `yats setup` wizard handles this automatically.
 
 [← Back to README](./README.md)

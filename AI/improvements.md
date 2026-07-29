@@ -171,7 +171,7 @@
 | Go analyzer | Not planned | ✅ Done (subprocess bridge) |
 | File tools (read/write/edit) | In MCP tools | Removed (search-only philosophy) |
 | MCP stdio bridge for Codex | Not planned | ✅ Done (see below) |
-| Agent instructions (SKILL.md, AGENTS.md) | Not planned | ✅ Done in `docs/agents_instructions/` |
+| Agent instructions (SKILL.md, AGENTS.md) | Not planned | ✅ Done in `connect/` |
 | Benchmark suite | Not planned | ✅ Done in `packages/yats-toolkit/benchmark/` |
 
 ## Recently Completed
@@ -223,7 +223,7 @@
 - Métrica real es `nanoAiu`, no tokens del output de texto
 
 ### ✅ Agent instructions for all 5 agents
-- `docs/agents_instructions/` now covers: Claude (SKILL.md), Codex (AGENTS.md + config.toml), Cursor (.cursorrules), Copilot (copilot-instructions.md), Gemini (GEMINI.md + settings.json)
+- `connect/` now covers: Claude (SKILL.md + mcp.json), Codex (AGENTS.md + config.toml), Cursor (rules.mdc + mcp.json), Copilot (instructions.md + mcp.json), Gemini (GEMINI.md + mcp.json)
 
 ### ✅ Benchmark: Codex + YATS MCP stdio (2026-07-29)
 - **Result:** 73% token reduction (100k → 27k) for symbol lookup
@@ -236,11 +236,9 @@
 - `adapters/mcp-bridge-stdio.cjs` — copia del benchmark, usada por `run.sh` para pruebas aisladas.
 - `adapters/mcp-openai-bridge.cjs` — HTTP proxy que inyecta MCP tools como OpenAI functions.
 
-### ✅ Agent instructions (`docs/agents_instructions/`)
-- `claude/SKILL.md` — YATS skill with auto-invocation
-- `codex/AGENTS.md` + `config.toml` — orientation + MCP stdio config
-- `cursor/.cursorrules` — rules for YATS tool usage
-- Users can customize for their repos (repo name, max calls, domain knowledge).
+### ✅ Agent instructions (`connect/`)
+- `connect/` — pick your agent, copy two files. Covers Claude, Gemini, Copilot, Codex, Cursor.
+- Each agent folder has: instructions file (behavior) + config file (connection) + README explaining both.
 
 ### ✅ Benchmark wizard: 5 agentes (2026-07-29)
 - Agentes: Cursor, Claude CLI, Copilot CLI, Codex, Gemini CLI

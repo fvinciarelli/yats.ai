@@ -47,24 +47,15 @@ npx yats-toolkit
 
 The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/Mistral/Voyage), which directories to pre-index, and writes the MCP config automatically.
 
-**Then configure your AI agent:**
+**Then configure your AI agent:** see [`connect/`](./connect/) — pick your agent, copy two files, done.
 
-```json
-{
-  "mcpServers": {
-    "yats": { "url": "http://localhost:5555/mcp" }
-  }
-}
-```
-
-| Agent | Config file |
-|---|---|
-| Cursor | `.cursor/mcp.json` |
-| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| VS Code Copilot | `.vscode/mcp.json` |
-| Continue.dev | `~/.continue/config.json` |
-| Zed | `.zed/mcp.json` |
-| Codex | `~/.codex/config.toml` |
+| Agent | Transport | Guide |
+|-------|-----------|-------|
+| Claude Code | stdio bridge | [`connect/claude/`](./connect/claude/) |
+| Gemini CLI | stdio bridge | [`connect/gemini/`](./connect/gemini/) |
+| Copilot CLI | stdio bridge | [`connect/copilot/`](./connect/copilot/) |
+| Codex CLI | stdio bridge | [`connect/codex/`](./connect/codex/) |
+| Cursor | HTTP | [`connect/cursor/`](./connect/cursor/) |
 
 That's it. Ask your agent: *"How does authentication work in this project?"* and YATS answers from the knowledge graph.
 
