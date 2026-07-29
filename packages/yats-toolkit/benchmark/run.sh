@@ -150,6 +150,7 @@ import json
 total = 0
 nanoaiu = 0
 model = ''
+cost = 0
 try:
   with open('$1') as f:
     for line in f:
@@ -181,6 +182,9 @@ try:
         total += evt.get('inputTokens',0) + evt.get('outputTokens',0) + evt.get('cacheReadTokens',0)
       if t == 'session.usage_checkpoint':
         nanoaiu = evt.get('data',{}).get('totalNanoAiu', 0)
+      # Claude: total_cost_usd in wrapper events
+      if 'total_cost_usd' in evt:
+        cost = max(cost, evt.get('total_cost_usd', 0))
       # Gemini: result events with stats
       if t == 'result':
         s = evt.get('stats',{})
@@ -193,7 +197,7 @@ except: pass
 # If Copilot, use nanoAiu as the metric (no token events)
 if nanoaiu > 0 and total == 0:
   total = nanoaiu
-print(json.dumps({'tokens': total, 'model': model}))
+print(json.dumps({'tokens': total, 'model': model, 'cost': cost}))
 " 2>/dev/null || echo '{"tokens":0,"model":""}'
 }
 
@@ -237,6 +241,8 @@ for qfile in "${selected[@]}"; do
   with_result=$(extract_tokens_and_model /tmp/yats-bench-with.jsonl)
   with_total=$(echo "$with_result" | python3 -c "import json,sys; print(json.load(sys.stdin)['tokens'])" 2>/dev/null || echo 0)
   with_model=$(echo "$with_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('model',''))" 2>/dev/null || echo "")
+  without_cost=$(echo "$without_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('cost',0))" 2>/dev/null || echo 0)
+  with_cost=$(echo "$with_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('cost',0))" 2>/dev/null || echo 0)
 
   if [ "$without_total" -gt 0 ]; then
     savings=$((100 - (with_total * 100 / without_total)))
@@ -248,7 +254,7 @@ for qfile in "${selected[@]}"; do
 
   result=$(python3 -c "
 import json
-r = {'question':'$qname','without_tokens':$without_total,'with_tokens':$with_total,'savings_pct':$savings,'model':'$with_model' if '$with_model' else '$without_model'}
+r = {'question':'$qname','without_tokens':$without_total,'with_tokens':$with_total,'savings_pct':$savings,'model':'$with_model' if '$with_model' else '$without_model','without_cost':$without_cost,'with_cost':$with_cost}
 print(json.dumps(r))
 " 2>/dev/null)
   results_json=$(python3 -c "import json; r=json.loads('$results_json'); r.append($result); print(json.dumps(r))" 2>/dev/null)
