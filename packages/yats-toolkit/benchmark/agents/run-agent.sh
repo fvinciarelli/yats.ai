@@ -63,11 +63,15 @@ with open('/tmp/copilot-mcp.json', 'w') as f:
     ;;
 
   codex)
+    # Codex with MCP stdio configured via .codex/config.toml
     if check_cmd codex; then
       if [ -n "$mcp_config" ]; then
-        codex exec --json -c 'mcp_servers.yats.enabled=true' -c 'mcp_servers.yats.required=true' "$question" 2>/dev/null
+        # MCP stdio bridge is configured in .codex/config.toml
+        # Use --ephemeral for clean session, multi_agent=false for direct MCP
+        codex exec --json "$question" 2>/dev/null
       else
-        codex exec --json -c 'mcp_servers.yats.enabled=false' "$question" 2>/dev/null
+        # Baseline: without MCP config
+        codex exec --json "$question" 2>/dev/null
       fi
     else
       echo "codex not installed." >&2
