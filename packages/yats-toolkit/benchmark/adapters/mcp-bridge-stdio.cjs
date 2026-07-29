@@ -21,7 +21,11 @@ const YATS_BRIDGE_UPSTREAM_KEY = process.env.YATS_BRIDGE_UPSTREAM_KEY || process
 const PORT = parseInt(process.env.YATS_BRIDGE_PORT || "8000", 10);
 
 // ── Logger ───────────────────────────────────────────────
-const log = (msg) => process.stderr.write(`[bridge] ${msg}\n`);
+const log = (msg) => {
+  process.stderr.write(`[bridge] ${msg}\n`);
+  // Also write to file for debugging Gemini
+  try { require("node:fs").appendFileSync("/tmp/gemini-bridge.log", `[${new Date().toISOString()}] ${msg}\n`); } catch {}
+};
 
 // ── MCP: fetch tools from YATS ──────────────────────────
 async function fetchYatsTools() {
@@ -130,10 +134,11 @@ async function startStdio() {
   rl.on("line", async (line) => {
     line = line.trim();
     if (!line) return;
+    log(`RAW: ${line.slice(0, 500)}`);
 
     let request;
     try { request = JSON.parse(line); }
-    catch { return; }
+    catch (e) { log(`PARSE ERROR: ${e.message} — line: ${line.slice(0, 100)}`); return; }
 
     const { id, method, params } = request;
     log(`stdio: ${method} id=${id}`);
@@ -153,8 +158,22 @@ async function startStdio() {
       } else if (method === "tools/call") {
         const toolName = params?.name;
         const toolArgs = params?.arguments || {};
-        log(`stdio tool call: ${toolName}(${JSON.stringify(toolArgs).slice(0, 100)})`);
+        
+        // Inject default repository if missing (Gemini doesn't always pass it)
+        const needsRepo = ["search_code", "find_symbol", "find_callers", "find_callees",
+          "find_references", "find_implementations", "find_inheritors", "find_routes",
+          "find_configuration", "expand_graph", "related_symbols", "list_symbols",
+          "repository_summary", "architecture_summary"];
+        if (needsRepo.includes(toolName) && !toolArgs.repository && !toolArgs.path) {
+          const defaultRepo = process.env.YATS_DEFAULT_REPO || "lab_hub";
+          toolArgs.repository = defaultRepo;
+          log(`stdio: injected repository="${defaultRepo}"`);
+        }
+        
+        log(`stdio tool call: ${toolName} ARGS=${JSON.stringify(toolArgs).slice(0, 300)}`);
         const result = await callYatsTool(toolName, toolArgs);
+        const resultText = result.map((c) => c.text || "").join("\n");
+        log(`stdio result: ${resultText.slice(0, 200)}`);
         respond({ jsonrpc: "2.0", id, result: { content: result } });
       } else if (method === "shutdown") {
         respond({ jsonrpc: "2.0", id, result: {} });
