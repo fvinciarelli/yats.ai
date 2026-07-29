@@ -123,12 +123,12 @@ We test against **popular repos** (FastAPI, Django, NestJS) that the agent might
 
 ### Results
 
-| Agent | Repo | Without YATS | With YATS | Savings |
-|-------|------|-------------|-----------|---------|
-| Codex | lab_hub (Go) | 100,000 tokens | 27,000 tokens | **73%** |
-| Copilot | lab_hub (Go) | 1.19 credits | 0.40 credits | **66%** |
-| Claude | lab_hub (Go) | 862,307 tokens | 540,917 tokens | **37%** |
-| Gemini | Django (Python) | 115,122 tokens | 63,851 tokens | **45%** |
+| Agent | Repo | Model | Without YATS | With YATS | Savings |
+|-------|------|-------|-------------|-----------|---------|
+| Codex | lab_hub (Go) | gpt-4.1-mini | 100,000 tokens | 27,000 tokens | **73%** |
+| Copilot | lab_hub (Go) | GPT-based | 1.19 credits | 0.40 credits | **66%** |
+| Claude | lab_hub (Go) | claude-haiku-4-5 | 862,307 tokens | 540,917 tokens | **37%** |
+| Gemini | Django (Python) | gemini-flash-latest | 115,122 tokens | 63,851 tokens | **45%** |
 
 **Savings range: 37% – 73%.** Lower savings happen when the agent double-checks YATS results by reading files anyway (Copilot, Claude). Higher savings when the agent trusts MCP tools directly (Codex).
 

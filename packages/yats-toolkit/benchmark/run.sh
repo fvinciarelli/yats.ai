@@ -144,11 +144,12 @@ echo -e "  ${D}─────────────────────�
 echo -e ""
 
 # Extract tokens from stream-json
-extract_tokens() {
+extract_tokens_and_model() {
   python3 -c "
 import json
 total = 0
 nanoaiu = 0
+model = ''
 try:
   with open('$1') as f:
     for line in f:
@@ -157,6 +158,16 @@ try:
       try: evt = json.loads(line)
       except: continue
       t = evt.get('type','')
+      # Capture model from first init/system event
+      if not model:
+        if t == 'init':
+          model = evt.get('model','')
+        elif t == 'system' and evt.get('subtype') == 'init':
+          model = evt.get('model','')
+        elif t == 'session.tools_updated':
+          model = evt.get('data',{}).get('model','')
+        elif t == 'tool.execution_start':
+          model = evt.get('data',{}).get('model','')
       # Cursor/Claude: result events
       if t in ('result','message'):
         u = evt.get('usage',{})
@@ -174,12 +185,16 @@ try:
       if t == 'result':
         s = evt.get('stats',{})
         total += s.get('input_tokens',0) + s.get('output_tokens',0)
+        if not model:
+          models = s.get('models',{})
+          if models:
+            model = list(models.keys())[0]
 except: pass
 # If Copilot, use nanoAiu as the metric (no token events)
 if nanoaiu > 0 and total == 0:
   total = nanoaiu
-print(total)
-" 2>/dev/null || echo 0
+print(json.dumps({'tokens': total, 'model': model}))
+" 2>/dev/null || echo '{"tokens":0,"model":""}'
 }
 
 TIMESTAMP=$(date +%Y-%m-%dT%H:%M:%S)
@@ -212,12 +227,16 @@ for qfile in "${selected[@]}"; do
   # Without YATS
   echo -ne "  ${D}without YATS...${R} "
   bash "$AGENTS_DIR/run-agent.sh" "$AGENT" "$qfile" "" > /tmp/yats-bench-without.jsonl 2>/dev/null || true
-  without_total=$(extract_tokens /tmp/yats-bench-without.jsonl)
+  without_result=$(extract_tokens_and_model /tmp/yats-bench-without.jsonl)
+  without_total=$(echo "$without_result" | python3 -c "import json,sys; print(json.load(sys.stdin)['tokens'])" 2>/dev/null || echo 0)
+  without_model=$(echo "$without_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('model',''))" 2>/dev/null || echo "")
 
   # With YATS
   echo -ne "${D}with YATS...${R} "
   bash "$AGENTS_DIR/run-agent.sh" "$AGENT" "$qfile" "$YATS_MCP" > /tmp/yats-bench-with.jsonl 2>/dev/null || true
-  with_total=$(extract_tokens /tmp/yats-bench-with.jsonl)
+  with_result=$(extract_tokens_and_model /tmp/yats-bench-with.jsonl)
+  with_total=$(echo "$with_result" | python3 -c "import json,sys; print(json.load(sys.stdin)['tokens'])" 2>/dev/null || echo 0)
+  with_model=$(echo "$with_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('model',''))" 2>/dev/null || echo "")
 
   if [ "$without_total" -gt 0 ]; then
     savings=$((100 - (with_total * 100 / without_total)))
@@ -229,7 +248,7 @@ for qfile in "${selected[@]}"; do
 
   result=$(python3 -c "
 import json
-r = {'question':'$qname','without_tokens':$without_total,'with_tokens':$with_total,'savings_pct':$savings}
+r = {'question':'$qname','without_tokens':$without_total,'with_tokens':$with_total,'savings_pct':$savings,'model':'$with_model' if '$with_model' else '$without_model'}
 print(json.dumps(r))
 " 2>/dev/null)
   results_json=$(python3 -c "import json; r=json.loads('$results_json'); r.append($result); print(json.dumps(r))" 2>/dev/null)
@@ -252,12 +271,12 @@ echo -e ""
 python3 -c "
 import json
 data = json.loads('$results_json')
-print('  ┌────────────────────────┬──────────┬──────────┬──────────┐')
-print('  │ Question               │ W/o YATS │ With YATS│ Savings  │')
-print('  ├────────────────────────┼──────────┼──────────┼──────────┤')
+print('  ┌────────────────────────┬──────────┬──────────┬──────────┬──────────────────────┐')
+print('  │ Question               │ W/o YATS │ With YATS│ Savings  │ Model                │')
+print('  ├────────────────────────┼──────────┼──────────┼──────────┼──────────────────────┤')
 for q in data:
     print(f\"  │ {q['question'][:22]:<22} │ {q['without_tokens']:>5}t   │ {q['with_tokens']:>5}t   │ {q['savings_pct']:>3}%      │\")
-print('  └────────────────────────┴──────────┴──────────┴──────────┘')
+print('  └────────────────────────┴──────────┴──────────┴──────────┴──────────────────────┘')
 print(f\"\\n  Saved to $output\")
 " 2>/dev/null
 echo -e ""
