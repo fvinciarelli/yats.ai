@@ -140,7 +140,27 @@ All results, raw agent logs, questions, and configs: [`packages/yats-toolkit/ben
 yats benchmark
 ```
 
-Interactive wizard — pick your agent, pick a repo, we clone it, index it, run the questions, and show you the savings. You don't have to trust our numbers.
+Interactive wizard. In 5 steps:
+
+1. **Pick your agent** — Cursor, Claude, Copilot, Codex, or Gemini
+2. **Pick a language and repo** — the wizard auto-clones it from GitHub
+3. **Pick a working directory** — where the agent will "see" the code (just like your IDE)
+4. **YATS auto-indexes the repo** — symbols, calls, inheritance, embeddings
+5. **The agent answers each question twice** — without YATS (grep + file reads) and with YATS (MCP tools). Fresh session each time.
+
+At the end you get a table comparing tokens, credits, or AI units side by side.
+
+**No agent installed?** Each one takes 2 minutes to set up. Pick yours:
+
+- [Claude Code](./connect/claude/) — `npm install -g @anthropic-ai/claude-code`
+- [Gemini CLI](./connect/gemini/) — `npm install -g @google/gemini-cli`
+- [Copilot CLI](./connect/copilot/) — `npm install -g @github/copilot`
+- [Codex CLI](./connect/codex/) — see [codex](https://github.com/openai/codex)
+- [Cursor](./connect/cursor/) — `cursor-agent` from [cursor.com](https://cursor.com)
+
+**Just want to browse results?** Raw logs, questions, and configs: [`benchmark/results/`](./packages/yats-toolkit/benchmark/results/)
+
+You don't have to trust our numbers.
 
 ---
 
