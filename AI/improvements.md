@@ -185,7 +185,7 @@
 - Añadido como 5º agente en `run.sh` y `run-agent.sh`
 - `extract_tokens()` soporta `stats.input_tokens`/`output_tokens` de Gemini
 - MCP tools funcionan correctamente tras añadir `structuredContent` al bridge
-- `GEMINI.md` y `.gemini/settings.json` generados automáticamente
+- Archivos de configuración en `connect/gemini/` (GEMINI.md + mcp.json)
 - **Resultado parcial:** 45% ahorro (115k → 64k tokens) — limitado por rate limit de API gratuita
 
 ### ✅ Benchmark: Copilot medido correctamente (2026-07-29)
@@ -213,8 +213,7 @@
 - 16 YATS tools discovered and connected
 - 3 tool calls executed: `list_repositories`, `find_symbol`, `search_code`
 - Minor parameter format mismatch (Gemini→YATS) — fixed with `structuredContent` in bridge
-- Config: `.gemini/settings.json` with `command: node, args: [bridge.cjs, --stdio]`
-- Instructions: `GEMINI.md` in repo root
+- Config and instructions now in `connect/gemini/`
 
 ### ✅ Copilot CLI integration (2026-07-29)
 - Copilot CLI 1.0.75 conecta vía MCP stdio bridge (no HTTP)
@@ -243,8 +242,9 @@
 ### ✅ Benchmark wizard: 5 agentes (2026-07-29)
 - Agentes: Cursor, Claude CLI, Copilot CLI, Codex, Gemini CLI
 - Auto-clone, auto-index, ejecución desde directorio del repo
-- Métricas: tokens (Cursor, Claude, Codex, Gemini) + nanoAiu (Copilot)
-- Resultados: Codex 73%, Copilot 66% (créditos), Claude 37%, Gemini 45% (parcial)
+- Métricas: tokens (todos) + nanoAiu (Copilot) + cost (Claude, cuando disponible)
+- Captura modelo usado por cada agente
+- Resultados: Codex 73%, Copilot 66% (créditos), Claude 37% + 49% cost, Gemini 45% (parcial)
 
 ### ✅ DeepSeek as LLM backend
 - Bridge supports DeepSeek API via `YATS_BRIDGE_UPSTREAM_URL`

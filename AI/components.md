@@ -277,8 +277,8 @@
 - **Responsibility:** Interactive wizard to run AI agent benchmarks
 - **Agents:** Cursor, Claude CLI, Copilot CLI, Codex, Gemini CLI
 - **Flow:** Select agent → language → repo → workdir → auto-clone from `targets/repos.json` → auto-index in YATS → run questions from repo directory
-- **Metrics:** Tokens (input/output) for Cursor/Claude/Codex/Gemini; nanoAiu for Copilot
-- **Output:** JSONL logs + summary JSON in `results/`
+- **Metrics:** Tokens (all agents), nanoAiu (Copilot), cost in USD (Claude and others when reported by API). Model name captured per run.
+- **Output:** JSONL logs + summary JSON in `results/`, includes model, tokens, and cost fields
 
 ### MCP Bridge stdio — benchmark (`adapters/mcp-bridge-stdio.cjs`)
 - **Responsibility:** Standalone copy used by the benchmark wizard for isolated testing
@@ -292,7 +292,7 @@
 - **Protocol:** MCP JSON-RPC over stdin/stdout, forwarding to YATS via Streamable HTTP
 - **Features:** Auto-inject repository from `YATS_DEFAULT_REPO` or cwd basename, structuredContent for Gemini CLI, pending queue for async responses
 - **Usage:** `yats bridge [--port N] [--url http://...]`
-- **Agent configs:** Copilot (`type: local`), Gemini (`.gemini/settings.json`), Codex (`.codex/config.toml`), Claude Desktop
+- **Agent configs:** Copilot (`type: local`, [`mcp.json`](../../connect/copilot/mcp.json)), Gemini ([`mcp.json`](../../connect/gemini/mcp.json)), Codex ([`config.toml`](../../connect/codex/config.toml)), Claude Desktop ([`mcp.json`](../../connect/claude/mcp.json))
 
 ### MCP Bridge HTTP (`adapters/mcp-openai-bridge.cjs`)
 - **Responsibility:** OpenAI-compatible HTTP proxy with MCP tool injection
