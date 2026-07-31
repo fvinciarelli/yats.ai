@@ -54,10 +54,19 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
 
   constructor(bridgeDir?: string) {
     super();
-    this.bridgeDir = bridgeDir ?? path.join(
-      import.meta.dirname,
-      "csharp-bridge",
-    );
+    // When imported from dist/, import.meta.dirname is .../dist/.
+    // When imported via tsx (source), it's .../src/.
+    // Normalize: if we're in dist/, go up one level and into src/csharp-bridge/.
+    if (bridgeDir) {
+      this.bridgeDir = bridgeDir;
+    } else {
+      const dir = import.meta.dirname;
+      if (dir.endsWith("/dist")) {
+        this.bridgeDir = path.join(dir, "..", "src", "csharp-bridge");
+      } else {
+        this.bridgeDir = path.join(dir, "csharp-bridge");
+      }
+    }
   }
 
   canAnalyze(filePath: string, _content: string): boolean {
@@ -71,7 +80,7 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
     repositoryName: string,
   ): Promise<AnalysisResult> {
     try {
-      return await this.analyzeWithBridge(filePath, repositoryName);
+      return await this.analyzeWithBridge(filePath, content, repositoryName);
     } catch {
       return this.analyzeFallback(filePath, content, repositoryName);
     }
@@ -79,6 +88,7 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
 
   private async analyzeWithBridge(
     filePath: string,
+    content: string,
     repositoryName: string,
   ): Promise<AnalysisResult> {
     // In Docker: use pre-compiled binary. In dev: use "dotnet run".
@@ -90,8 +100,8 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
     const useBinary = bridgeBin && fs.existsSync(bridgeBin) && fs.statSync(bridgeBin).size > 0;
     const cmd = useBinary ? bridgeBin! : "dotnet";
     const args = useBinary
-      ? ["--file", filePath, "--repo", repositoryName]
-      : ["run", "--project", this.bridgeDir, "--", "--file", filePath, "--repo", repositoryName];
+      ? ["--file", filePath, "--repo", repositoryName, "--stdin"]
+      : ["run", "--no-build", "--project", this.bridgeDir, "--", "--file", filePath, "--repo", repositoryName, "--stdin"];
 
     return new Promise((resolve, reject) => {
       const proc = spawn(cmd, args, {
@@ -133,6 +143,10 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
       });
 
       proc.on("error", reject);
+
+      // Write content to stdin and close (bridge uses --stdin mode)
+      proc.stdin!.write(content);
+      proc.stdin!.end();
     });
   }
 
@@ -212,24 +226,68 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
     return { symbols, relationships, errors: [], warnings: [] };
   }
 
+  /**
+   * Map bridge kind strings (UPPERCASE) to SymbolKind enum values (lowercase).
+   */
+  private static readonly KIND_MAP: Record<string, SymbolKind> = {
+    CLASS: SymbolKind.CLASS,
+    INTERFACE: SymbolKind.INTERFACE,
+    ENUM: SymbolKind.ENUM,
+    STRUCT: SymbolKind.STRUCT,
+    RECORD: SymbolKind.RECORD,
+    METHOD: SymbolKind.METHOD,
+    FUNCTION: SymbolKind.FUNCTION,
+    CONSTRUCTOR: SymbolKind.CONSTRUCTOR,
+    DESTRUCTOR: SymbolKind.METHOD,
+    PROPERTY: SymbolKind.PROPERTY,
+    FIELD: SymbolKind.FIELD,
+    CONSTANT: SymbolKind.CONSTANT,
+    ENUM_MEMBER: SymbolKind.FIELD,
+    DELEGATE: SymbolKind.TYPE_ALIAS,
+    EVENT: SymbolKind.EVENT,
+    CONTROLLER: SymbolKind.CONTROLLER,
+    SERVICE: SymbolKind.SERVICE,
+    REPOSITORY: SymbolKind.REPOSITORY,
+    DTO: SymbolKind.DTO,
+    ENTITY: SymbolKind.ENTITY,
+    COMMAND: SymbolKind.COMMAND,
+    QUERY: SymbolKind.QUERY,
+    MIDDLEWARE: SymbolKind.MIDDLEWARE,
+    GUARD: SymbolKind.GUARD,
+    INTERCEPTOR: SymbolKind.INTERCEPTOR,
+    PROVIDER: SymbolKind.PROVIDER,
+    FACTORY: SymbolKind.FACTORY,
+    CONFIG: SymbolKind.CONFIG,
+    MIGRATION: SymbolKind.MIGRATION,
+    TEST: SymbolKind.TEST,
+    ROUTE: SymbolKind.ROUTE,
+    VALIDATOR: SymbolKind.SERVICE,
+    EXCEPTION: SymbolKind.CLASS,
+    EXTENSION_METHOD: SymbolKind.METHOD,
+  };
+
   private normalizeSymbols(raw: RawCSharpSymbol[]): Symbol[] {
-    return raw.map((r) => ({
-      id: r.id,
-      name: r.name,
-      kind: (r.kind as SymbolKind) || SymbolKind.CLASS,
-      language: Language.CSHARP,
-      location: r.location ?? {
-        repository: "", relativePath: "", startLine: 1, endLine: 1,
-        startColumn: 0, endColumn: 0,
-      },
-      namespace: r.namespace ?? "",
-      parentClass: r.parentClass ?? null,
-      signature: r.signature ?? null,
-      docComment: r.docComment ?? null,
-      sourceSnippet: r.sourceSnippet ?? "",
-      contentHash: r.contentHash ?? "",
-      metadata: r.metadata ?? {},
-    }));
+    return raw.map((r) => {
+      // Use contentHash from bridge if available, compute it if not
+      const hash = r.contentHash || (r.sourceSnippet ? hashContent(r.sourceSnippet) : "");
+      return {
+        id: r.id,
+        name: r.name,
+        kind: CSharpAnalyzer.KIND_MAP[r.kind] || SymbolKind.CLASS,
+        language: Language.CSHARP,
+        location: r.location ?? {
+          repository: "", relativePath: "", startLine: 1, endLine: 1,
+          startColumn: 0, endColumn: 0,
+        },
+        namespace: r.namespace ?? "",
+        parentClass: r.parentClass ?? null,
+        signature: r.signature ?? null,
+        docComment: r.docComment ?? null,
+        sourceSnippet: r.sourceSnippet ?? "",
+        contentHash: hash,
+        metadata: r.metadata ?? {},
+      };
+    });
   }
 
   private normalizeRelationships(raw: RawCSharpRelationship[]): Relationship[] {
@@ -237,6 +295,7 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
       id: r.id,
       sourceSymbolId: r.sourceSymbolId,
       targetSymbolId: r.targetSymbolId,
+      // Bridge outputs UPPERCASE which matches RelationshipKind enum values directly
       kind: (r.kind as RelationshipKind) || RelationshipKind.REFERENCES,
       metadata: r.metadata ?? {},
     }));

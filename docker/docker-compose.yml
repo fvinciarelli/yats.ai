@@ -79,15 +79,16 @@ services:
   # YATS — MCP Server
   # ============================================
   yats:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      args:
-        INCLUDE_GO: "${INCLUDE_GO:-true}"
-        INCLUDE_CSHARP: "${INCLUDE_CSHARP:-true}"
-        INCLUDE_PYTHON: "${INCLUDE_PYTHON:-true}"
-        INCLUDE_PHP: "${INCLUDE_PHP:-true}"
-    image: yats:local
+    image: ghcr.io/fvinciarelli/yats:${YATS_VERSION:-latest}
+    # Uncomment below and comment 'image' above to build locally instead:
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
+    #   args:
+    #     INCLUDE_GO: "${INCLUDE_GO:-true}"
+    #     INCLUDE_CSHARP: "${INCLUDE_CSHARP:-true}"
+    #     INCLUDE_PYTHON: "${INCLUDE_PYTHON:-true}"
+    #     INCLUDE_PHP: "${INCLUDE_PHP:-true}"
     ports:
       - "${YATS_PORT:-5555}:5555"
     environment:

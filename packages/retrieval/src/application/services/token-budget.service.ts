@@ -46,9 +46,9 @@ export class TokenBudgetService {
         }
         // If signature doesn't fit either, skip this item
       }
-      // No more budget
+      // Item doesn't fit, skip and try next ones
       else {
-        break;
+        continue;
       }
     }
 

@@ -12,8 +12,9 @@
     { "name": "terraform", "url": "https://github.com/hashicorp/terraform", "desc": "Terraform IaC tool" }
   ],
   "csharp": [
-    { "name": "aspnetcore", "url": "https://github.com/dotnet/aspnetcore", "desc": "ASP.NET Core" },
-    { "name": "AutoMapper", "url": "https://github.com/AutoMapper/AutoMapper", "desc": "AutoMapper object mapper" }
+    { "name": "MediatR", "url": "https://github.com/jbogard/MediatR", "desc": "MediatR CQRS/Mediator library" },
+    { "name": "eShopOnWeb", "url": "https://github.com/dotnet-architecture/eShopOnWeb", "desc": "Microsoft clean architecture reference app" },
+    { "name": "Carter", "url": "https://github.com/CarterCommunity/Carter", "desc": "Minimal APIs framework for ASP.NET Core" }
   ],
   "php": [
     { "name": "laravel", "url": "https://github.com/laravel/framework", "desc": "Laravel PHP framework" },

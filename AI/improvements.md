@@ -2,15 +2,35 @@
 
 ## Missing Features
 
-### C# Roslyn Analyzer (T-030 to T-032)
-- **Status:** Placeholder only (`packages/analyzers/analyzer-csharp/src/index.ts` is a stub)
-- **What's needed:** A .NET 8 console project that accepts `--file <path>`, parses with Roslyn, outputs JSON. Then a Node.js wrapper like `PhpAnalyzer`.
-- **Estimated effort:** 2-3 coding sessions
+### ✅ C# Roslyn Analyzer (T-030 to T-032) — fixed 2026-07-30
+- **Status:** ✅ Complete. Full Roslyn bridge with `CSharpSyntaxWalker` + Node.js wrapper + regex fallback.
+- **Bridge:** .NET 8 console app at `src/csharp-bridge/`. Extracts: classes, interfaces, enums (with members), structs, records, methods, constructors, destructors, properties, fields, constants, events, delegates, using directives. Produces CONTAINS, CALLS, INHERITS, IMPLEMENTS, IMPORTS relationships. SHA256 content hashes. Generic type params in signatures.
+- **Node.js wrapper:** `CSharpAnalyzer` spawns bridge with proper kind mapping (UPPERCASE → SymbolKind enum). Content hash computed in bridge + fallback. Regex fallback when dotnet not available.
+- **Tests:** 16 tests covering bridge + fallback (CONTAINS, CALLS, fields, enums, events, delegates, records, method scoping).
+- **Integration:** Registered in `dev-cli` via `AnalyzerFactory`. Extensions `.cs`, `.csx`.
 
 ### Integration Test Suite (T-083)
 - **Status:** No end-to-end tests exist
 - **What's needed:** Test fixtures (small repos in each language), Docker Compose test environment, full pipeline: index → search → verify results
 - **Estimated effort:** 3-4 coding sessions
+
+### Release pipeline & versionado (🆕 2026-07-29)
+- **Status:** No hay releases, tags, ni CI/CD de publicación. El repo evoluciona sin versionado.
+- **Problema:** YATS se consume en 3 canales distintos que deben estar sincronizados:
+  - `yats-toolkit` (npm) → `npx yats-toolkit`
+  - Docker images (server) → `docker compose up`
+  - `connect/` (instrucciones + configs para agents) → copiar archivos al repo del usuario
+- **Estrategia propuesta:** Un solo tag de repo (`v0.2.0`) que orquesta todo:
+  - npm: `yats-toolkit@0.2.0`
+  - docker: `fvinciarelli/yats-server:0.2.0`
+  - `connect/` versionado implícitamente por el tag (accesible vía GitHub raw URL)
+- **Esquema de versionado:** SemVer laxo en 0.x (todo puede romper), estricto a partir de 1.0.0
+- **Qué falta:**
+  1. `.github/workflows/release.yml` — CI que se dispare con tags, corra tests, publique npm + docker, genere GitHub Release
+  2. `CHANGELOG.md` — mantenerlo al día
+  3. Versionar `docker-compose.yml` para que use tags en vez de `build: .`
+  4. Decidir si paquetes internos (`@yats/shared`, `@yats/indexing`, etc.) se publican o quedan privados
+- **Estimated effort:** 1-2 coding sessions
 
 ## Technical Debt
 
@@ -29,30 +49,48 @@
 - **Better approach:** Use `tiktoken` or a model-specific tokenizer
 - **Risk:** Budget may be off by 30-50% for code with dense symbols
 
-### 4. No Neo4j query parameterization validation
+### ✅ TokenBudgetService: `break` en vez de `continue` (🆕 encontrado 2026-07-29 → ✅ fixed 2026-07-30)
+- **Was:** `fitWithinBudget()` usaba `break` cuando un item no entraba en el presupuesto y no tenía signature de fallback. Esto cortaba todo el loop y descartaba items subsiguientes que sí entrarían.
+- **Fix:** Cambiado `break` por `continue` para saltar solo el item problemático, no todos los que vienen después.
+- **Location:** `packages/retrieval/src/application/services/token-budget.service.ts` ~línea 38
+- **Test:** Actualizado test `"skips items when neither snippet nor signature fits, continues with next"` — ahora verifica que el segundo item sí se incluye.
+
+### 5. No Neo4j query parameterization validation
 - **Current state:** Cypher queries use parameterized inputs (safe from injection), but there's no validation that required parameters exist
 - **Risk:** A missing parameter causes a confusing Neo4j error rather than a clear validation error
 
-### 5. `SimpleGitAdapter` uses `execSync`
+### 6. `SimpleGitAdapter` uses `execSync`
 - **Current state:** Blocking synchronous git operations
 - **Better approach:** Use `simple-git` npm package (async) or `node:child_process.exec`
 - **Risk:** Blocks the event loop during git operations (acceptable for CLI, problematic for server)
 
-### 6. MCP server HTTP transport — ✅ DONE
+### 7. MCP server HTTP transport — ✅ DONE
 - **Current state:** Supports stdio, HTTP+SSE, and Streamable HTTP (`/mcp`)
 - **Endpoints:** `/mcp` (Streamable HTTP), `/mcp/sse` (SSE), `/mcp/message` (SSE messages), `/health`, `/index`, `/index/file`
 
-### 7. No input sanitization on MCP tools
+### 8. No input sanitization on MCP tools
 - **Current state:** Tool arguments are passed directly to services
 - **Missing:** Schema validation (zod is installed but unused), input length limits, path traversal checks on file tools
 - **Risk:** Malicious MCP client could attempt path traversal (partially mitigated by `LocalFileSystem.validatePath()`)
 
-### 8. Neo4j `expandGraph` doesn't return relationships
+### 9. Neo4j `expandGraph` doesn't return relationships
 - **Current state:** `expandGraph()` returns only nodes, not edges
 - **Missing:** Full subgraph with relationships for visualization/traversal
 - **Impact:** MCP clients can see connected symbols but not HOW they're connected
 
 ## Recently Fixed
+
+### ✅ Tests: 125 tests en 10 archivos nuevos (2026-07-29)
+- **Antes:** 20 tests en 3 archivos (solo shared/utils y analyzer-typescript)
+- **Ahora:** 125 tests en 13 archivos cubriendo shared (logger, enums), todos los analyzers (Go, Python, PHP, C#, TreeSitter), y retrieval (ranker, deduplicator, token-budget)
+- **Nuevos tests:** `logger.test.ts`, `enums.test.ts`, `go-analyzer.test.ts`, `python-analyzer.test.ts`, `php-parser-analyzer.test.ts`, `csharp-analyzer.test.ts`, `treesitter-analyzer.test.ts`, `ranker.service.test.ts`, `deduplicator.service.test.ts`, `token-budget.service.test.ts`
+- **Script agregado:** `analyzer-go/package.json` no tenía script `test` — agregado.
+- **TODOs:** Fase 2 pendiente (indexing, mcp-server, infra, dev-cli). Ver sección Missing Tests.
+
+### ✅ `yats-toolkit` es JS puro — inconsistencia detectada (2026-07-29)
+- **Current state:** `packages/yats-toolkit/src/` son 10 archivos `.js` planos. El resto del proyecto (146 archivos) es TypeScript estricto.
+- **Risk:** Sin type checking en el CLI que enfrenta al usuario. Sin autocompletado para quien contribuye.
+- **Fix:** Migrar a TypeScript (bajo esfuerzo, solo agregar tipos).
 
 ### ✅ Package restructure: `setup` → `yats-toolkit`, `cli` → `dev-cli`
 - **Was:** Three fragmented packages: `packages/setup` (thin HTTP scripts), `packages/cli` (fat CLI with direct DB), `packages/bridge` (duplicate bridge). Binaries conflicted (both `yats`). Users confused about which package to install.
@@ -144,16 +182,27 @@
 
 | Area | Test Count | Needed |
 |------|-----------|--------|
-| Domain (hash, id-gen) | 16 tests | ✅ Adequate |
-| TypeScript Analyzer | 9 tests | ✅ Adequate for now |
-| PHP Analyzer | 0 tests | ❌ Need fixture tests |
-| Python Analyzer | 0 tests | ❌ Need fixture tests |
-| Tree-sitter Analyzer | 0 tests | ❌ Need fixture tests |
+| Domain (hash, id-gen, logger, enums) | 39 tests (4 files) | ✅ Adequate |
+| TypeScript Analyzer | 9 tests (1 file) | ✅ Adequate for now |
+| Go Analyzer | 10 tests (1 file) | ✅ Regex fallback covered |
+| Python Analyzer | 10 tests (1 file) | ✅ Regex fallback covered |
+| PHP Analyzer | 12 tests (1 file) | ✅ Regex fallback covered |
+| C# Analyzer | 16 tests (1 file) | ✅ Bridge + regex fallback covered |
+| Tree-sitter Analyzer | 9 tests (1 file) | ✅ Regex fallback covered |
+| RankerService | 8 tests (1 file) | ✅ Pure logic covered |
+| DeduplicatorService | 7 tests (1 file) | ✅ Pure logic covered |
+| TokenBudgetService | 11 tests (1 file) | ✅ Pure logic covered |
+| **SUBTOTAL (with tests)** | **131 tests (13 files)** | ✅ Fase 1 completa |
 | IndexerService | 0 tests | ❌ End-to-end with mock repos |
 | RetrieverService | 0 tests | ❌ Integration with mock Neo4j/Qdrant |
 | MCP Server | 0 tests | ❌ JSON-RPC protocol tests |
-| MCP Tools | 0 tests | ❌ Each tool handler |
-| Middleware | 0 tests | ❌ Error handler, rate limiter |
+| MCP Tools (20 handlers) | 0 tests | ❌ Each tool handler |
+| Middleware (rate-limiter) | 0 tests | ❌ Error handler, rate limiter |
+| Analyzer bridges (Go/Python/PHP/C#) | 0 tests | ❌ Integration tests with real subprocesses |
+| Language detector | 0 tests | ❌ Extension → language mapping |
+| File walker | 0 tests | ❌ Directory traversal logic |
+| GlobalSymbolTable | 0 tests | ❌ Cross-file symbol resolution |
+| dev-cli | 0 tests | ❌ Start/stop commands |
 
 ## Architecture Drift from ARCHITECTURE.md
 
