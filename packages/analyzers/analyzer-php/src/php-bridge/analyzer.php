@@ -173,7 +173,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                     'sourceSymbolId' => $id,
                     'targetSymbolId' => $targetId,
                     'kind' => 'INHERITS',
-                    'metadata' => [],
+                    'metadata' => (object)[],
                 ];
             }
 
@@ -185,7 +185,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                     'sourceSymbolId' => $id,
                     'targetSymbolId' => $targetId,
                     'kind' => 'IMPLEMENTS',
-                    'metadata' => [],
+                    'metadata' => (object)[],
                 ];
             }
         }
@@ -209,7 +209,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                     'sourceSymbolId' => $id,
                     'targetSymbolId' => $targetId,
                     'kind' => 'INHERITS',
-                    'metadata' => [],
+                    'metadata' => (object)[],
                 ];
             }
         }
@@ -256,7 +256,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                 'sourceSymbolId' => $parentId,
                 'targetSymbolId' => $id,
                 'kind' => 'CONTAINS',
-                'metadata' => [],
+                'metadata' => (object)[],
             ];
 
             $this->extractCalls($node, $id);
@@ -282,7 +282,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                     'sourceSymbolId' => $parentId,
                     'targetSymbolId' => $id,
                     'kind' => 'CONTAINS',
-                    'metadata' => [],
+                    'metadata' => (object)[],
                 ];
             }
         }
@@ -379,7 +379,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                             'sourceSymbolId' => $this->callerId,
                             'targetSymbolId' => $targetId,
                             'kind' => 'CALLS',
-                            'metadata' => [],
+                            'metadata' => (object)[],
                         ];
                     }
                 }
@@ -391,7 +391,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                         'sourceSymbolId' => $this->callerId,
                         'targetSymbolId' => $targetId,
                         'kind' => 'CALLS',
-                        'metadata' => [],
+                        'metadata' => (object)[],
                     ];
                 }
             }
@@ -430,7 +430,7 @@ class SymbolExtractor extends NodeVisitorAbstract
             'docComment' => $node->getDocComment()?->getText() ?? null,
             'sourceSnippet' => substr($text, 0, 2000),
             'contentHash' => hash('sha256', $text),
-            'metadata' => [],
+            'metadata' => (object)[],
         ], $overrides);
     }
 
