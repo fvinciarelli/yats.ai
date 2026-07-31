@@ -444,7 +444,8 @@ class SymbolExtractor extends NodeVisitorAbstract
     {
         $params = [];
         foreach ($node->getParams() as $param) {
-            $type = $param->type ? $param->type->toString() . ' ' : '';
+            $typeStr = $param->type ? $this->typeToString($param->type) : '';
+            $type = $typeStr ? $typeStr . ' ' : '';
             $byRef = $param->byRef ? '&' : '';
             $variadic = $param->variadic ? '...' : '';
             $default = $param->default ? ' = ...' : '';
@@ -452,7 +453,7 @@ class SymbolExtractor extends NodeVisitorAbstract
         }
 
         $returnType = $node->getReturnType();
-        $returnStr = $returnType ? ': ' . $returnType->toString() : '';
+        $returnStr = $returnType ? ': ' . $this->typeToString($returnType) : '';
 
         $visibility = '';
         if ($node instanceof Node\Stmt\ClassMethod) {
@@ -465,6 +466,26 @@ class SymbolExtractor extends NodeVisitorAbstract
         $name = $node->name->toString() ?? 'anonymous';
 
         return "{$visibility}{$static}function {$name}(" . implode(', ', $params) . "){$returnStr}";
+    }
+
+    private function typeToString(PhpParser\Node $type): string
+    {
+        if ($type instanceof Node\Identifier) {
+            return $type->toString();
+        }
+        if ($type instanceof Node\Name) {
+            return $type->toString();
+        }
+        if ($type instanceof Node\NullableType) {
+            return '?' . $this->typeToString($type->type);
+        }
+        if ($type instanceof Node\UnionType) {
+            return implode('|', array_map(fn($t) => $this->typeToString($t), $type->types));
+        }
+        if ($type instanceof Node\IntersectionType) {
+            return implode('&', array_map(fn($t) => $this->typeToString($t), $type->types));
+        }
+        return '';
     }
 }
 
