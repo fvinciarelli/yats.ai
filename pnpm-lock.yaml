@@ -159,6 +159,9 @@ importers:
       '@yats/analyzer-interface':
         specifier: workspace:^
         version: link:../analyzers/analyzer-interface
+      '@yats/analyzer-php':
+        specifier: workspace:^
+        version: link:../analyzers/analyzer-php
       '@yats/analyzer-python':
         specifier: workspace:^
         version: link:../analyzers/analyzer-python
