@@ -1,13 +1,5 @@
-node_modules/
-dist/
-*.tsbuildinfo
-.git/
-docker/
-packages/
-AI/
-test_repo/
-artifacts/
-.vscode/
-.idea/
+results/
+agents/
+configs/
 *.log
-.env
+.env.example
