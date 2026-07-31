@@ -54,66 +54,64 @@ if ($useStdin && isset($options['file'])) {
 // Symbol & Relationship Extraction
 // ============================================================
 
-$parser = (new ParserFactory())->createForHostVersion();
-$allSymbols = [];
-$allRelationships = [];
-$allErrors = [];
+function processFiles(array $files, string $repoName): array
+{
+    $parser = (new ParserFactory())->createForHostVersion();
+    $allSymbols = [];
+    $allRelationships = [];
+    $allErrors = [];
 
-foreach ($files as $item) {
-    try {
-        if (is_array($item)) {
-            $filePath = $item['path'];
-            $code = $item['content'];
-        } else {
-            $filePath = $item;
-            $code = file_get_contents($filePath);
+    foreach ($files as $item) {
+        try {
+            if (is_array($item)) {
+                $filePath = $item['path'];
+                $code = $item['content'];
+            } else {
+                $filePath = $item;
+                $code = file_get_contents($filePath);
+            }
+            if ($code === false || $code === '') continue;
+
+            $ast = $parser->parse($code);
+            if ($ast === null) continue;
+
+            // Resolve names
+            $traverser = new NodeTraverser();
+            $traverser->addVisitor(new NameResolver());
+            $ast = $traverser->traverse($ast);
+
+            // Extract symbols
+            $extractor = new SymbolExtractor($repoName, $filePath);
+            $traverser = new NodeTraverser();
+            $traverser->addVisitor($extractor);
+            $traverser->traverse($ast);
+
+            $symbols = $extractor->getSymbols();
+            $relationships = $extractor->getRelationships();
+
+            // Detect conventions
+            $conventionDetector = new ConventionDetector($repoName, $filePath, $symbols, $relationships);
+            $symbols = $conventionDetector->apply();
+
+            $allSymbols = array_merge($allSymbols, $symbols);
+            $allRelationships = array_merge($allRelationships, $relationships);
+
+        } catch (Error $e) {
+            $allErrors[] = [
+                'line' => $e->getStartLine() ?? 1,
+                'column' => $e->getStartColumn() ?? 0,
+                'message' => $e->getMessage(),
+                'severity' => 'error',
+            ];
         }
-        if ($code === false || $code === '') continue;
-
-        $ast = $parser->parse($code);
-        if ($ast === null) continue;
-
-        // Resolve names
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor(new NameResolver());
-        $ast = $traverser->traverse($ast);
-
-        // Extract symbols
-        $extractor = new SymbolExtractor($repoName, $filePath);
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor($extractor);
-        $traverser->traverse($ast);
-
-        $symbols = $extractor->getSymbols();
-        $relationships = $extractor->getRelationships();
-
-        // Detect conventions
-        $conventionDetector = new ConventionDetector($repoName, $filePath, $symbols, $relationships);
-        $symbols = $conventionDetector->apply();
-
-        $allSymbols = array_merge($allSymbols, $symbols);
-        $allRelationships = array_merge($allRelationships, $relationships);
-
-    } catch (Error $e) {
-        $allErrors[] = [
-            'line' => $e->getStartLine() ?? 1,
-            'column' => $e->getStartColumn() ?? 0,
-            'message' => $e->getMessage(),
-            'severity' => 'error',
-        ];
     }
+
+    return [$allSymbols, $allRelationships, $allErrors];
 }
 
 // ============================================================
-// Output JSON
+// Class definitions below; main() runs at end of file
 // ============================================================
-
-echo json_encode([
-    'symbols' => $allSymbols,
-    'relationships' => $allRelationships,
-    'errors' => $allErrors,
-    'warnings' => [],
-], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
 // ============================================================
 // Symbol Extractor Visitor
@@ -550,3 +548,16 @@ class ConventionDetector
         return $this->symbols;
     }
 }
+
+// ============================================================
+// Main
+// ============================================================
+
+[$allSymbols, $allRelationships, $allErrors] = processFiles($files, $repoName);
+
+echo json_encode([
+    'symbols' => $allSymbols,
+    'relationships' => $allRelationships,
+    'errors' => $allErrors,
+    'warnings' => [],
+], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);

@@ -1,5 +1,5 @@
 {
-  "name": "yats-php-bridge",
+  "name": "yats/php-bridge",
   "description": "PHP analysis bridge using nikic/php-parser + PHPStan",
   "require": {
     "php": ">=8.1",
