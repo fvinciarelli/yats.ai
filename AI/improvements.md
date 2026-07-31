@@ -4,10 +4,11 @@
 
 ### ✅ C# Roslyn Analyzer (T-030 to T-032) — fixed 2026-07-30
 - **Status:** ✅ Complete. Full Roslyn bridge with `CSharpSyntaxWalker` + Node.js wrapper + regex fallback.
-- **Bridge:** .NET 8 console app at `src/csharp-bridge/`. Extracts: classes, interfaces, enums (with members), structs, records, methods, constructors, destructors, properties, fields, constants, events, delegates, using directives. Produces CONTAINS, CALLS, INHERITS, IMPLEMENTS, IMPORTS relationships. SHA256 content hashes. Generic type params in signatures.
-- **Node.js wrapper:** `CSharpAnalyzer` spawns bridge with proper kind mapping (UPPERCASE → SymbolKind enum). Content hash computed in bridge + fallback. Regex fallback when dotnet not available.
+- **Bridge:** .NET 8 console app at `src/csharp-bridge/`. Extracts: classes, interfaces, enums (with members), structs, records, methods, constructors, destructors, properties, fields, constants, events, delegates, using directives. Produces CONTAINS, CALLS, INHERITS, IMPLEMENTS, IMPORTS relationships. SHA256 content hashes. Generic type params in signatures. Supports `--stdin` for HTTP-based indexing.
+- **Node.js wrapper:** `CSharpAnalyzer` spawns bridge with proper kind mapping (UPPERCASE → SymbolKind enum). Content hash computed in bridge + fallback. Regex fallback when dotnet not available. Uses `--no-build` to prevent dotnet from consuming stdin. Fixed `bridgeDir` to resolve correctly when imported from `dist/` vs `src/`.
 - **Tests:** 16 tests covering bridge + fallback (CONTAINS, CALLS, fields, enums, events, delegates, records, method scoping).
-- **Integration:** Registered in `dev-cli` via `AnalyzerFactory`. Extensions `.cs`, `.csx`.
+- **E2E verified:** eShopOnWeb — 1,227 symbols, 2,045 relationships indexed successfully.
+- **Integration:** Registered in `dev-cli` via `AnalyzerFactory`. Extensions `.cs`, `.csx`. Docker image built and published to `ghcr.io/fvinciarelli/yats:latest`.
 
 ### Integration Test Suite (T-083)
 - **Status:** No end-to-end tests exist
@@ -137,6 +138,42 @@
 ### ✅ `skipDocs` option on `index_repository`
 - **New:** Boolean parameter to skip documentation indexing. The tool also detects repos with >300 `.md` files and asks for confirmation before indexing docs.
 
+## Recently Fixed (2026-07-30/31 — subprocess bridge stdin fixes)
+
+### ✅ All subprocess bridges now support stdin for HTTP-based indexing
+- **Was:** C# (`dotnet run`), Go (`go run`), and PHP (`php`) bridges all read source files from disk via `--file <path>`. The `yats-toolkit` CLI sends file content via HTTP POST to the server, so the file path doesn't exist on disk for the server. Bridges failed silently and fell back to regex-based analysis, losing CONTAINS, CALLS, struct fields, properties, conventions, and other native parser features.
+- **Fix:** All three bridges now support `--stdin` flag: when set, read source code from stdin instead of disk. Node.js wrappers pipe `content` via `proc.stdin.write()`. C# also uses `--no-build` to prevent `dotnet run` from consuming stdin during compilation. Go uses pre-compiled binary (`YATS_GO_BRIDGE` env var) for speed.
+- **E2E verified:**
+  - C# eShopOnWeb: 1,227 symbols, 2,045 rels (was 768/102 with fallback)
+  - Go lab_hub: 2,967 symbols, 1,435 rels (was 2,134/1,062 with fallback)
+  - PHP Slim: 1,066 symbols, 4,602 rels (was 0 — PhpAnalyzer not registered)
+
+### ✅ Go bridge: relationship kinds UPPERCASE + stdin support
+- **Was:** Go bridge produced lowercase relationship kinds (`"calls"`, `"contains"`, `"imports"`) that didn't match `RelationshipKind` enum values (`"CALLS"`, `"CONTAINS"`, `"IMPORTS"`).
+- **Fix:** All relationship kinds now UPPERCASE. `--stdin` flag added to read source from stdin.
+- **E2E verified:** lab_hub re-indexed — struct properties (836), variables (336), and CALLS relationships now properly extracted.
+
+### ✅ PHP bridge: stdin, NullableType, metadata, registration fixes
+- **Was:** Multiple issues prevented PHP from working:
+  1. `PhpAnalyzer` not registered in `dev-cli` (missing import + dependency)
+  2. Bridge crashed on `NullableType::toString()` — php-parser v5 incompatibility
+  3. Relationship metadata serialized as array `[]` instead of object `{}`, causing Neo4j type error
+  4. Classes defined after processing code, triggering autoloader before definition
+  5. `composer.json` name format rejected by Composer 2.x schema validation
+- **Fix:** Registered `PhpAnalyzer` in dev-cli with `@yats/analyzer-php` dependency. Added `typeToString()` helper for NullableType/UnionType/IntersectionType. Changed all `'metadata' => []` to `'metadata' => (object)[]`. Moved processing code into `processFiles()` function called at end of file. Fixed composer name to `yats/php-bridge`.
+- **E2E verified:** Slim (slimphp/Slim) — 1,066 symbols, 4,602 rels (CALLS, CONTAINS, INHERITS, IMPLEMENTS).
+
+### ✅ Benchmark: C# repos updated
+- **Was:** `targets/repos.json` had `aspnetcore` (too large) and `AutoMapper`.
+- **Now:** MediatR (CQRS/Mediator), eShopOnWeb (MS clean architecture reference), Carter (Minimal APIs framework).
+- **Questions:** 2 per repo in `benchmark/questions/csharp/`
+- **Published:** `yats-toolkit@0.1.13` with benchmark data included.
+
+### ✅ Docker image: ghcr.io/fvinciarelli/yats:latest rebuilt
+- Includes all subprocess bridge fixes, stdin support, and PhpAnalyzer registration.
+
+---
+
 ## Reliability Risks
 
 ### 1. Single point of failure: Neo4j
@@ -216,7 +253,7 @@
 | pino logger | Specified | No (custom logger) |
 | `simple-git` npm package | Specified | No (`execSync` wrapper) |
 | Multi-service Docker | Separate Dockerfiles per service | Unified single Dockerfile + compose |
-| PHP/Python analyzers | Full bridge implementations | Removed (not in current scope) |
+| PHP/Python analyzers | Full bridge implementations | ✅ Done (PHP: nikic/php-parser, Python: LibCST + Jedi) |
 | Go analyzer | Not planned | ✅ Done (subprocess bridge) |
 | File tools (read/write/edit) | In MCP tools | Removed (search-only philosophy) |
 | MCP stdio bridge for Codex | Not planned | ✅ Done (see below) |
