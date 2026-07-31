@@ -25,11 +25,15 @@ use PhpParser\Error;
 // CLI Arguments
 // ============================================================
 
-$options = getopt('', ['file:', 'dir:', 'repo:']);
+$options = getopt('', ['file:', 'dir:', 'repo:', 'stdin']);
 $repoName = $options['repo'] ?? basename(getcwd());
+$useStdin = isset($options['stdin']);
 $files = [];
 
-if (isset($options['file'])) {
+if ($useStdin && isset($options['file'])) {
+    // Read content from stdin, use --file path for ID generation only
+    $files = [['path' => $options['file'], 'content' => stream_get_contents(STDIN)]];
+} elseif (isset($options['file'])) {
     $files = [$options['file']];
 } elseif (isset($options['dir'])) {
     $dir = $options['dir'];
@@ -55,10 +59,16 @@ $allSymbols = [];
 $allRelationships = [];
 $allErrors = [];
 
-foreach ($files as $filePath) {
+foreach ($files as $item) {
     try {
-        $code = file_get_contents($filePath);
-        if ($code === false) continue;
+        if (is_array($item)) {
+            $filePath = $item['path'];
+            $code = $item['content'];
+        } else {
+            $filePath = $item;
+            $code = file_get_contents($filePath);
+        }
+        if ($code === false || $code === '') continue;
 
         $ast = $parser->parse($code);
         if ($ast === null) continue;

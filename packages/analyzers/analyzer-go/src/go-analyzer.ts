@@ -54,11 +54,16 @@ export class GoAnalyzer extends AbstractAnalyzer {
 
   constructor(bridgePath?: string) {
     super();
-    this.bridgePath = bridgePath ?? path.join(
-      import.meta.dirname,
-      "go-bridge",
-      "analyze.go",
-    );
+    if (bridgePath) {
+      this.bridgePath = bridgePath;
+    } else {
+      const dir = import.meta.dirname;
+      if (dir.endsWith("/dist")) {
+        this.bridgePath = path.join(dir, "..", "src", "go-bridge", "analyze.go");
+      } else {
+        this.bridgePath = path.join(dir, "go-bridge", "analyze.go");
+      }
+    }
   }
 
   canAnalyze(filePath: string, _content: string): boolean {
@@ -71,7 +76,7 @@ export class GoAnalyzer extends AbstractAnalyzer {
     repositoryName: string,
   ): Promise<AnalysisResult> {
     try {
-      return await this.analyzeWithBridge(filePath, repositoryName);
+      return await this.analyzeWithBridge(filePath, content, repositoryName);
     } catch {
       return this.analyzeFallback(filePath, content, repositoryName);
     }
@@ -79,6 +84,7 @@ export class GoAnalyzer extends AbstractAnalyzer {
 
   private async analyzeWithBridge(
     filePath: string,
+    content: string,
     repositoryName: string,
   ): Promise<AnalysisResult> {
     // In Docker: use pre-compiled binary. In dev: use "go run".
@@ -88,8 +94,8 @@ export class GoAnalyzer extends AbstractAnalyzer {
     const useBinary = bridgeBin && fs.existsSync(bridgeBin) && fs.statSync(bridgeBin).size > 0;
     const cmd = useBinary ? bridgeBin : "go";
     const args = useBinary
-      ? ["--file", filePath, "--repo", repositoryName]
-      : ["run", this.bridgePath, "--file", filePath, "--repo", repositoryName];
+      ? ["--file", filePath, "--repo", repositoryName, "--stdin"]
+      : ["run", this.bridgePath, "--file", filePath, "--repo", repositoryName, "--stdin"];
 
     return new Promise((resolve, reject) => {
       const proc = spawn(cmd, args, {
@@ -124,6 +130,10 @@ export class GoAnalyzer extends AbstractAnalyzer {
       });
 
       proc.on("error", reject);
+
+      // Write content to stdin and close (bridge uses --stdin mode)
+      proc.stdin!.write(content);
+      proc.stdin!.end();
     });
   }
 

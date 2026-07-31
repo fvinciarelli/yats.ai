@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,17 +59,24 @@ type Result struct {
 var (
 	filePath   = flag.String("file", "", "Path to the Go source file")
 	repoName   = flag.String("repo", "", "Repository name")
+	useStdin   = flag.Bool("stdin", false, "Read source from stdin")
 )
 
 func main() {
 	flag.Parse()
 
 	if *filePath == "" || *repoName == "" {
-		fmt.Fprintln(os.Stderr, "Usage: analyze --file <path> --repo <name>")
+		fmt.Fprintln(os.Stderr, "Usage: analyze --file <path> --repo <name> [--stdin]")
 		os.Exit(1)
 	}
 
-	result, err := analyzeFile(*filePath, *repoName)
+	var result *Result
+	var err error
+	if *useStdin {
+		result, err = analyzeStdin(*filePath, *repoName)
+	} else {
+		result, err = analyzeFile(*filePath, *repoName)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -79,6 +87,21 @@ func main() {
 	enc.Encode(result)
 }
 
+func analyzeStdin(path, repo string) (*Result, error) {
+	src, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return nil, fmt.Errorf("stdin read error: %w", err)
+	}
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("parse error: %w", err)
+	}
+
+	return analyzeNode(fset, node, repo, path)
+}
+
 func analyzeFile(path, repo string) (*Result, error) {
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
@@ -86,6 +109,10 @@ func analyzeFile(path, repo string) (*Result, error) {
 		return nil, fmt.Errorf("parse error: %w", err)
 	}
 
+	return analyzeNode(fset, node, repo, path)
+}
+
+func analyzeNode(fset *token.FileSet, node *ast.File, repo, path string) (*Result, error) {
 	relPath := filepath.Base(path)
 	pkgName := node.Name.Name
 	if pkgName == "" {
@@ -193,7 +220,7 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 				ID:             fmt.Sprintf("%s|contains|%s", recvID, methID),
 				SourceSymbolID: recvID,
 				TargetSymbolID: methID,
-				Kind:           "contains",
+				Kind:           "CONTAINS",
 			})
 		}
 
@@ -223,7 +250,7 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 			ID:             fmt.Sprintf("%s|imports|%s", sourceID, targetID),
 			SourceSymbolID: sourceID,
 			TargetSymbolID: targetID,
-			Kind:           "imports",
+			Kind:           "IMPORTS",
 			Metadata:       map[string]any{"importPath": importPath},
 		})
 	}
@@ -257,7 +284,7 @@ func (a *analyzer) extractCalls(body *ast.BlockStmt, callerID string) {
 			ID:             fmt.Sprintf("%s|calls|%s", callerID, calleeID),
 			SourceSymbolID: callerID,
 			TargetSymbolID: calleeID,
-			Kind:           "calls",
+			Kind:           "CALLS",
 		})
 		return true
 	})

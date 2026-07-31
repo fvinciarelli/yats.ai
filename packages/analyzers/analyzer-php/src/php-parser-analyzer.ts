@@ -55,11 +55,16 @@ export class PhpAnalyzer extends AbstractAnalyzer {
 
   constructor(bridgePath?: string) {
     super();
-    this.bridgePath = bridgePath ?? path.join(
-      import.meta.dirname,
-      "php-bridge",
-      "analyzer.php",
-    );
+    if (bridgePath) {
+      this.bridgePath = bridgePath;
+    } else {
+      const dir = import.meta.dirname;
+      if (dir.endsWith("/dist")) {
+        this.bridgePath = path.join(dir, "..", "src", "php-bridge", "analyzer.php");
+      } else {
+        this.bridgePath = path.join(dir, "php-bridge", "analyzer.php");
+      }
+    }
   }
 
   canAnalyze(filePath: string, _content: string): boolean {
@@ -73,10 +78,8 @@ export class PhpAnalyzer extends AbstractAnalyzer {
     repositoryName: string,
   ): Promise<AnalysisResult> {
     try {
-      // Try using the PHP bridge (subprocess)
-      return await this.analyzeWithBridge(filePath, repositoryName);
+      return await this.analyzeWithBridge(filePath, content, repositoryName);
     } catch {
-      // Fallback: basic regex-based analysis
       return this.analyzeFallback(filePath, content, repositoryName);
     }
   }
@@ -87,6 +90,7 @@ export class PhpAnalyzer extends AbstractAnalyzer {
 
   private async analyzeWithBridge(
     filePath: string,
+    content: string,
     repositoryName: string,
   ): Promise<AnalysisResult> {
     return new Promise((resolve, reject) => {
@@ -96,6 +100,7 @@ export class PhpAnalyzer extends AbstractAnalyzer {
         filePath,
         "--repo",
         repositoryName,
+        "--stdin",
       ], {
         timeout: 30000,
         stdio: ["pipe", "pipe", "pipe"],
@@ -132,6 +137,10 @@ export class PhpAnalyzer extends AbstractAnalyzer {
       });
 
       php.on("error", reject);
+
+      // Write content to stdin and close (bridge uses --stdin mode)
+      php.stdin!.write(content);
+      php.stdin!.end();
     });
   }
 
