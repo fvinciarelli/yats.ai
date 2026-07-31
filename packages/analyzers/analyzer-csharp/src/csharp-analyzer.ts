@@ -93,7 +93,7 @@ export class CSharpAnalyzer extends AbstractAnalyzer {
   ): Promise<AnalysisResult> {
     // In Docker: use pre-compiled binary. In dev: use "dotnet run".
     const bridgeBin = process.env.YATS_CSHARP_BRIDGE
-      ? `${process.env.YATS_CSHARP_BRIDGE}/RoslynAnalyzer`
+      ? `${process.env.YATS_CSHARP_BRIDGE}/yats-csharp-bridge`
       : null;
     const fs = await import("node:fs");
 
