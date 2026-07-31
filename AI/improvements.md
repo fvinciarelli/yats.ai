@@ -79,6 +79,11 @@
 - **Missing:** Full subgraph with relationships for visualization/traversal
 - **Impact:** MCP clients can see connected symbols but not HOW they're connected
 
+### 🟡 10. MCP bridge auto-injects default repo (investigated 2026-07-31, NOT a server bug)
+- **Current state:** `yats bridge` auto-injects `repository` from `YATS_DEFAULT_REPO` or `cwd` basename when tools don't provide one. The server-side `RetrieverService` correctly filters by repository — confirmed via direct Neo4j queries.
+- **Observed:** Some MCP clients (pi adapter) may pass `repository` in a format the tool doesn't recognize, causing the bridge to fall back to the default repo. The server-side filtering is correct.
+- **Mitigation:** Set `YATS_DEFAULT_REPO` explicitly, or use `path` instead of `repository` in tool calls. Bridge code at `packages/yats-toolkit/src/bridge.js` line 41-48.
+
 ## Recently Fixed
 
 ### ✅ Tests: 125 tests en 10 archivos nuevos (2026-07-29)
