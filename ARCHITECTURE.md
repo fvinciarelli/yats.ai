@@ -1,6 +1,6 @@
 # AI Code Intelligence Platform — Architecture Design
 
-> **Status:** Design Phase  
+> **Status:** Implemented (~75/84 tasks done, see AI/improvements.md for pending)  
 > **Audience:** AI coding agents implementing the system  
 > **Principle:** Every component must be independently buildable, testable, and replaceable.
 
@@ -2944,7 +2944,8 @@ Context Files: What to read first
 
 ---
 
-### T-030: C# Roslyn Analyzer — Bridge
+### T-030: C# Roslyn Analyzer — Bridge ✅
+- **Status:** ✅ Implemented (Roslyn bridge with CSharpSyntaxWalker, stdin support, 16 tests)
 - **Objective:** Build a .NET tool that uses Roslyn to analyze C# code and output JSON
 - **Requirements:** A .NET 8 console app that accepts file paths, parses them with Roslyn, and outputs symbols + relationships as JSON on stdout. The Node.js side spawns this process.
 - **Acceptance Criteria:**
@@ -2969,7 +2970,8 @@ Context Files: What to read first
 
 ---
 
-### T-031: C# — Bridge Client & Symbol Extractor
+### T-031: C# — Bridge Client & Symbol Extractor ✅
+- **Status:** ✅ Implemented (CSharpAnalyzer spawns bridge, parses JSON, regex fallback)
 - **Objective:** Implement the Node.js side that calls the Roslyn bridge and parses its output
 - **Requirements:** Spawn the .NET bridge process, send file paths, receive JSON, convert to Symbol + Relationship objects
 - **Acceptance Criteria:**
@@ -2991,7 +2993,8 @@ Context Files: What to read first
 
 ---
 
-### T-032: C# — Relationship & Convention Extractor
+### T-032: C# — Relationship & Convention Extractor ✅
+- **Status:** ✅ Implemented (CONTAINS, CALLS, INHERITS, IMPLEMENTS, IMPORTS. ASP.NET + MediatR conventions)
 - **Objective:** Extract relationships and architectural conventions from Roslyn output
 - **Requirements:** CALLS, IMPLEMENTS, INHERITS, REFERENCES, IMPORTS. ASP.NET conventions (Controller, Service, Repository, DTO, Entity, Middleware).
 - **Acceptance Criteria:**
@@ -3012,7 +3015,8 @@ Context Files: What to read first
 
 ---
 
-### T-033: PHP Analyzer — Parser Bridge
+### T-033: PHP Analyzer — Parser Bridge ✅
+- **Status:** ✅ Implemented (nikic/php-parser, stdin support, NullableType fix, 12 tests)
 - **Objective:** Build a PHP script that uses nikic/php-parser and PHPStan to analyze PHP code
 - **Requirements:** PHP script that accepts file paths via CLI args, parses with PHP-Parser, does semantic analysis with PHPStan, outputs JSON
 - **Acceptance Criteria:**
@@ -3036,7 +3040,8 @@ Context Files: What to read first
 
 ---
 
-### T-034: PHP — Bridge Client, Symbol & Relationship Extractors
+### T-034: PHP — Bridge Client, Symbol & Relationship Extractors ✅
+- **Status:** ✅ Implemented (PhpParserAnalyzer, Symfony/Laravel/Doctrine conventions)
 - **Objective:** Node.js side for PHP analyzer + convention detection (Symfony, Laravel)
 - **Requirements:** Same bridge pattern as C#. Detect PHP conventions: Controller, Service, Repository, Entity (Doctrine), Command, Event, DTO, Middleware, Provider.
 - **Acceptance Criteria:**
@@ -3057,7 +3062,8 @@ Context Files: What to read first
 
 ---
 
-### T-035: Python Analyzer — LibCST Bridge
+### T-035: Python Analyzer — LibCST Bridge ✅
+- **Status:** ✅ Implemented (LibCST + Jedi bridge, stdin support, 10 tests)
 - **Objective:** Build a Python script that uses LibCST + Jedi for static analysis
 - **Requirements:** Python script that parses .py files, extracts symbols with LibCST, resolves types/imports with Jedi, outputs JSON
 - **Acceptance Criteria:**
@@ -3083,7 +3089,8 @@ Context Files: What to read first
 
 ---
 
-### T-036: Python — Bridge Client, Symbol & Relationship Extractors
+### T-036: Python — Bridge Client, Symbol & Relationship Extractors ✅
+- **Status:** ✅ Implemented (PythonAnalyzer, FastAPI/Django/Flask/SQLAlchemy/Pydantic conventions)
 - **Objective:** Node.js side for Python analyzer + convention detection (FastAPI, Django, Flask)
 - **Requirements:** Bridge client. Detect: Controller/Route (FastAPI/Django/Flask), Service, Repository, Entity (SQLAlchemy/Django models), Command, DTO (Pydantic), Test (pytest).
 - **Acceptance Criteria:**
@@ -3246,7 +3253,8 @@ Context Files: What to read first
 
 ---
 
-### T-043: IncrementalIndexer
+### T-043: IncrementalIndexer 🟡
+- **Status:** 🟡 IncrementalIndexerService implemented, but not yet wired — IndexerService.incrementalIndex() is a stub that calls full reindex
 - **Objective:** Implement incremental indexing based on git changes
 - **Requirements:** Get changed files since last indexed commit, re-index only those files, remove deleted files' symbols, update graph and vectors.
 - **Acceptance Criteria:**
@@ -3801,17 +3809,17 @@ Context Files: What to read first
 
 ## Summary: Task Breakdown by Phase
 
-| Phase | Tasks | Total |
-|-------|-------|-------|
-| P0 — Foundation | T-001 to T-010 | 10 |
-| P1 — Infrastructure | T-011 to T-025 | 15 |
-| P2 — Analyzers | T-026 to T-037 | 12 |
-| P3 — Indexing | T-038 to T-044 | 7 |
-| P4 — Retrieval | T-045 to T-066 | 22 |
-| P5 — MCP Server | T-067 to T-072 | 6 |
-| P6 — CLI & DevOps | T-073 to T-079 | 7 |
-| P7 — Polish | T-080 to T-084 | 5 |
-| **Total** | | **84 tasks** |
+| Phase | Tasks | Total | Status |
+|-------|-------|-------|--------|
+| P0 — Foundation | T-001 to T-010 | 10 | ✅ Complete |
+| P1 — Infrastructure | T-011 to T-025 | 15 | ✅ Complete |
+| P2 — Analyzers | T-026 to T-037 | 12 | ✅ Complete (all 5 languages + tree-sitter) |
+| P3 — Indexing | T-038 to T-044 | 7 | 🟡 6/7 done (T-043 wiring pending) |
+| P4 — Retrieval | T-045 to T-066 | 22 | ✅ Complete |
+| P5 — MCP Server | T-067 to T-072 | 6 | ✅ Complete |
+| P6 — CLI & DevOps | T-073 to T-079 | 7 | ✅ Complete |
+| P7 — Polish | T-080 to T-084 | 5 | 🔴 Pending (except T-084 README done) |
+| **Total** | | **84 tasks** | **~75 done, 9 pending** |
 
 ### Complexity Distribution
 

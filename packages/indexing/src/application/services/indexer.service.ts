@@ -18,6 +18,7 @@ import { FileWalker } from "../../infrastructure/file-walker.js";
 import { detectLanguage } from "../../infrastructure/language-detector.js";
 import { hashContent, type RelationshipKind } from "@yats/shared";
 import { GlobalSymbolTable, resolveRelationships, type SymbolTableEntry } from "./global-symbol-table.js";
+import { IncrementalIndexerService } from "./incremental-indexer.service.js";
 
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline
@@ -621,22 +622,56 @@ export class IndexerService implements Indexer {
   async removeFile(
     repositoryName: string,
     filePath: string,
-  ): Promise<void> {
-    await this.removeFileSymbols(repositoryName, filePath);
+  ): Promise<{ removed: number }> {
+    const count = await this.removeFileSymbols(repositoryName, filePath);
+    return { removed: count };
+  }
+
+  private async removeFileSymbols(
+    repositoryName: string,
+    filePath: string,
+  ): Promise<number> {
+    const symbols = await this.deps.graphRepository.listSymbols(repositoryName, undefined, 5000, 0);
+    const toDelete = symbols.filter(
+      (s) => s.location.relativePath === filePath || s.id.includes(filePath),
+    );
+
+    if (toDelete.length > 0) {
+      const ids = toDelete.map((s) => s.id);
+      await this.deps.graphRepository.deleteSymbols(ids);
+      await this.deps.vectorRepository.deleteVectors(ids);
+      this.logger.info(`Removed ${ids.length} symbols for file: ${filePath}`);
+    }
+
+    return toDelete.length;
   }
 
   // ============================================================
-  // Incremental Index (stub — full impl in T-043)
+  // Incremental Index — delegates to IncrementalIndexerService
   // ============================================================
 
   async incrementalIndex(
     repositoryPath: string,
     sinceCommit: string,
   ): Promise<IndexResult> {
-    this.logger.info(
-      `Incremental indexing from commit ${sinceCommit} (reindexing all as fallback)...`,
-    );
-    return this.indexRepository(repositoryPath);
+    if (!this.deps.gitAdapter) {
+      this.logger.info(`No git adapter available, falling back to full reindex for "${repositoryPath}"`);
+      return this.indexRepository(repositoryPath);
+    }
+
+    this.logger.info(`Incremental indexing from commit ${sinceCommit.slice(0, 8)}...`);
+
+    const incrementalIndexer = new IncrementalIndexerService({
+      graphRepository: this.deps.graphRepository,
+      vectorRepository: this.deps.vectorRepository,
+      embeddingGenerator: this.deps.embeddingGenerator,
+      fileSystem: this.deps.fileSystem,
+      gitAdapter: this.deps.gitAdapter,
+      analyzerFactory: this.deps.analyzerFactory,
+    });
+
+    const repoName = this.getRepoName(repositoryPath);
+    return incrementalIndexer.indexSince(repositoryPath, repoName, sinceCommit);
   }
 
   // ============================================================
@@ -796,16 +831,6 @@ export class IndexerService implements Indexer {
     }
 
     return parts.join("\n");
-  }
-
-  private async removeFileSymbols(
-    _repositoryName: string,
-    filePath: string,
-  ): Promise<void> {
-    // Simple approach: delete symbols by file path prefix
-    // In a full implementation, we'd query Neo4j first to find IDs
-    this.logger.debug(`Removing symbols for: ${filePath}`);
-    // Implementation delegated to GraphRepository.clearRepository for now
   }
 
   private getRepoName(repositoryPath: string): string {

@@ -406,23 +406,36 @@ export class Neo4jGraphRepository implements GraphRepository {
         ? `WHERE type(r) IN $relTypes`
         : "";
 
+    // Single query that returns both nodes and relationships via UNWIND.
+    // Each row carries one (neighbor, relationship) pair — we deduplicate on both.
     const rows = await this.connection.read<any>(
       `
       MATCH (seed:Symbol)
       WHERE seed.id IN $seedIds
       MATCH path = (seed)-[*1..${hops}]-(neighbor:Symbol)
-      WHERE ALL(r IN relationships(path) WHERE $relTypesCheck OR type(r) IN $relTypes)
-      RETURN DISTINCT neighbor AS s, labels(neighbor) AS labels, id(neighbor) AS nodeId
-      LIMIT 200
+      WITH DISTINCT neighbor, relationships(path) AS rels
+      UNWIND rels AS rel
+      ${relFilter}
+      RETURN DISTINCT
+        neighbor AS s, labels(neighbor) AS labels, id(neighbor) AS nodeId,
+        startNode(rel).id AS sourceId, endNode(rel).id AS targetId,
+        type(rel) AS relKind, id(rel) AS relNeoId
+      LIMIT 500
       `,
       {
         seedIds,
         relTypes: relationshipTypes,
-        relTypesCheck: relationshipTypes.length === 0,
       },
     );
 
-    const nodes = rows.map((r) => this.rowToGraphSymbol(r));
+    // Collect unique nodes
+    const nodeMap = new Map<string, GraphSymbol>();
+    for (const r of rows) {
+      const node = this.rowToGraphSymbol(r);
+      if (!nodeMap.has(node.id)) {
+        nodeMap.set(node.id, node);
+      }
+    }
 
     // Also include seed nodes
     const seedRows = await this.connection.read<any>(
@@ -434,13 +447,32 @@ export class Neo4jGraphRepository implements GraphRepository {
       { seedIds },
     );
 
-    const seedNodes = seedRows.map((r) => this.rowToGraphSymbol(r));
-    const allNodes = [...seedNodes, ...nodes];
-    const uniqueNodes = dedupBy(allNodes, (n) => n.id);
+    for (const r of seedRows) {
+      const node = this.rowToGraphSymbol(r);
+      if (!nodeMap.has(node.id)) {
+        nodeMap.set(node.id, node);
+      }
+    }
+
+    // Collect unique relationships
+    const relMap = new Map<string, Relationship>();
+    for (const r of rows) {
+      if (!r.sourceId || !r.targetId) continue;
+      const key = `${r.sourceId}--[${r.relKind}]-->${r.targetId}`;
+      if (!relMap.has(key)) {
+        relMap.set(key, {
+          id: key,
+          sourceSymbolId: r.sourceId,
+          targetSymbolId: r.targetId,
+          kind: r.relKind as RelationshipKind,
+          metadata: {},
+        });
+      }
+    }
 
     return {
-      nodes: uniqueNodes,
-      relationships: [], // Only nodes for now; full subgraph with rels can be added later
+      nodes: Array.from(nodeMap.values()),
+      relationships: Array.from(relMap.values()),
     };
   }
 

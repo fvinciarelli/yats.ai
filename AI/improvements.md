@@ -10,10 +10,10 @@
 - **E2E verified:** eShopOnWeb — 1,227 symbols, 2,045 relationships indexed successfully.
 - **Integration:** Registered in `dev-cli` via `AnalyzerFactory`. Extensions `.cs`, `.csx`. Docker image built and published to `ghcr.io/fvinciarelli/yats:latest`.
 
-### Integration Test Suite (T-083)
-- **Status:** No end-to-end tests exist
-- **What's needed:** Test fixtures (small repos in each language), Docker Compose test environment, full pipeline: index → search → verify results
-- **Estimated effort:** 3-4 coding sessions
+### Integration Test Suite (T-083) 🟡
+- **Status:** Foundation built. Test fixtures for all 5 languages exist at `test/fixtures/`. Integration tests for analyzers (19 tests) and incremental indexing with git (5 tests) pass. MCP server protocol + validation tests (12 tests) pass.
+- **Still needed:** Docker Compose test environment, full pipeline: index → search → verify results with real Neo4j/Qdrant, RetrieverService integration tests
+- **Estimated effort:** 2-3 more coding sessions
 
 ### Release pipeline & versionado (🆕 2026-07-29)
 - **Status:** No hay releases, tags, ni CI/CD de publicación. El repo evoluciona sin versionado.
@@ -45,10 +45,9 @@
 - **Missing:** Prometheus metrics (`/metrics` endpoint), request tracing (request IDs), latency histograms
 - **Risk:** Hard to debug production issues without metrics
 
-### 3. Token estimation is crude
-- **Current state:** `chars / 3.5` heuristic in `TokenBudgetService`
-- **Better approach:** Use `tiktoken` or a model-specific tokenizer
-- **Risk:** Budget may be off by 30-50% for code with dense symbols
+### 3. Token estimation — won't fix (2026-08-01)
+- **Assessment:** The `chars/3.5` heuristic measures structured JSON output (names, kinds, truncated snippets), not raw source code. Accurate enough for this format. Model-specific tokenizers would only help for one provider and add dependency weight for negligible gain.
+- **Decision:** Won't fix.
 
 ### ✅ TokenBudgetService: `break` en vez de `continue` (🆕 encontrado 2026-07-29 → ✅ fixed 2026-07-30)
 - **Was:** `fitWithinBudget()` usaba `break` cuando un item no entraba en el presupuesto y no tenía signature de fallback. Esto cortaba todo el loop y descartaba items subsiguientes que sí entrarían.
@@ -69,15 +68,15 @@
 - **Current state:** Supports stdio, HTTP+SSE, and Streamable HTTP (`/mcp`)
 - **Endpoints:** `/mcp` (Streamable HTTP), `/mcp/sse` (SSE), `/mcp/message` (SSE messages), `/health`, `/index`, `/index/file`
 
-### 8. No input sanitization on MCP tools
-- **Current state:** Tool arguments are passed directly to services
-- **Missing:** Schema validation (zod is installed but unused), input length limits, path traversal checks on file tools
-- **Risk:** Malicious MCP client could attempt path traversal (partially mitigated by `LocalFileSystem.validatePath()`)
+### ✅ No input sanitization on MCP tools — fixed 2026-08-01
+- **Was:** Tool arguments were passed directly to services. Zod was installed but unused.
+- **Fix:** `middleware/validation.ts` — Zod schemas for all 23 tools. `safePath` blocks system roots (`/`, `/home`, `/etc`, etc.), path traversal (`..`), Windows roots. Integrated in `server.ts` via `validateArgs()` — runs before every handler. Friendly error messages with actionable guidance when agent sends bad paths.
+- **Location:** `packages/mcp-server/src/middleware/validation.ts`, `packages/mcp-server/src/server.ts`
 
-### 9. Neo4j `expandGraph` doesn't return relationships
-- **Current state:** `expandGraph()` returns only nodes, not edges
-- **Missing:** Full subgraph with relationships for visualization/traversal
-- **Impact:** MCP clients can see connected symbols but not HOW they're connected
+### ✅ Neo4j `expandGraph` now returns relationships — fixed 2026-08-01
+- **Was:** `expandGraph()` returned only nodes, not edges. MCP clients could see connected symbols but not HOW they're connected.
+- **Fix:** Cypher query now uses `UNWIND relationships(path) AS rel` and returns both nodes and edges with `sourceId`, `targetId`, and `kind`.
+- **Location:** `packages/infra/src/neo4j/neo4j-graph-repository.ts`
 
 ### 🟡 10. MCP bridge auto-injects default repo (investigated 2026-07-31, NOT a server bug)
 - **Current state:** `yats bridge` auto-injects `repository` from `YATS_DEFAULT_REPO` or `cwd` basename when tools don't provide one. The server-side `RetrieverService` correctly filters by repository — confirmed via direct Neo4j queries.
@@ -112,6 +111,49 @@
 ### ✅ LICENSE rewritten
 - **Was:** Basic MIT-style with vague commercial tiers
 - **Now:** Full professional license: no support at any tier, no warranty, no liability (data loss, code, revenue, business interruption, indirect damages), clear developer-count tiers, "AS IS".
+
+---
+
+## Recently Fixed (2026-08-01 — session: docs, website, integration tests, live sync)
+
+### ✅ `incrementalIndex()` stub wired — fixed 2026-08-01
+- **Was:** `IndexerService.incrementalIndex()` was a stub calling full `indexRepository()` instead of delegating to `IncrementalIndexerService.indexSince()` which was fully implemented.
+- **Fix:** Now delegates to a new `IncrementalIndexerService` instance. Falls back to full reindex only when `gitAdapter` is unavailable.
+- **Location:** `packages/indexing/src/application/services/indexer.service.ts`
+
+### ✅ `removeFileSymbols()` implemented — fixed 2026-08-01
+- **Was:** Private method was a stub that just logged. Deleted files left dead symbols in Neo4j + Qdrant.
+- **Fix:** Now queries `listSymbols` for file path, filters matching symbols, deletes from both Neo4j (`deleteSymbols`) and Qdrant (`deleteVectors`).
+- **Location:** `packages/indexing/src/application/services/indexer.service.ts`
+
+### ✅ MCP tools: `reindex`, `index_file`, `remove_file` — added 2026-08-01
+- **New tools (20 → 23):**
+  - `reindex` — explicit reindex trigger via `ensureIndexed()`, reports status + summary
+  - `index_file` — single file reindex after agent edit, under 1 second
+  - `remove_file` — removes all symbols for a deleted file, reports count
+- **Location:** `packages/mcp-server/src/tools/all-tools.ts`
+
+### ✅ `yats watch` CLI + live sync — added 2026-08-01
+- **New:** `yats watch <path>` — host-side file watcher (zero deps, `fs.watch` + HTTP POSTs). Detects file changes, calls `/index/file` for modifications and `/index/remove` for deletions. Debounced 500ms.
+- **New:** `/index/remove` HTTP endpoint on MCP server.
+- **Updated:** `index_repository` MCP tool now suggests `yats watch` after indexing completes, with agent instructions for interactive vs autonomous mode.
+- **Location:** `packages/yats-toolkit/src/watch.js`, `packages/mcp-server/src/server.ts`
+
+### ✅ Test fixtures + integration tests — added 2026-08-01
+- **Fixtures:** `test/fixtures/{typescript,go,python,php,csharp}/` — 6 realistic code files with classes, methods, interfaces, relationships
+- **Tests (36 new):**
+  - 19 analyzer integration tests (5 languages: symbol + relationship extraction)
+  - 5 incremental indexing tests with git (add/modify/delete detection + indexSince)
+  - 8 MCP JSON-RPC protocol tests (initialize, tools/list, tools/call, errors)
+  - 4 MCP validation tests (system paths, traversal, valid paths)
+- **Total test count:** 131 → 167 (16 test files)
+
+### ✅ Documentation + website — 2026-08-01
+- `AI/glossary.md` — Roslyn entry fixed
+- `AI/components.md` — CSharpAnalyzer + GoAnalyzer descriptions fixed, tool count updated
+- `ARCHITECTURE.md` — Status header, summary table, individual tasks (C#, PHP, Python, T-043) updated
+- `docs/index.html` — Full landing page (navbar, hero, benchmarks, live sync, tutorials, BYOK, pricing, footer)
+- `SESSION_ANALYSIS.md` — Clean tracking of done vs pending
 
 ---
 
@@ -234,11 +276,11 @@
 | RankerService | 8 tests (1 file) | ✅ Pure logic covered |
 | DeduplicatorService | 7 tests (1 file) | ✅ Pure logic covered |
 | TokenBudgetService | 11 tests (1 file) | ✅ Pure logic covered |
-| **SUBTOTAL (with tests)** | **131 tests (13 files)** | ✅ Fase 1 completa |
-| IndexerService | 0 tests | ❌ End-to-end with mock repos |
+| **SUBTOTAL (with tests)** | **167 tests (16 files)** | ✅ Fase 1+2a completa |
+| IndexerService | ✅ 24 tests (2 files) | ✅ Integration + incremental git covered |
 | RetrieverService | 0 tests | ❌ Integration with mock Neo4j/Qdrant |
-| MCP Server | 0 tests | ❌ JSON-RPC protocol tests |
-| MCP Tools (20 handlers) | 0 tests | ❌ Each tool handler |
+| MCP Server | ✅ 12 tests (1 file) | ✅ JSON-RPC protocol + validation covered |
+| MCP Tools (23 handlers) | ✅ 12 tests (1 file) | ✅ Protocol-level covered, individual handler mocks pending |
 | Middleware (rate-limiter) | 0 tests | ❌ Error handler, rate limiter |
 | Analyzer bridges (Go/Python/PHP/C#) | 0 tests | ❌ Integration tests with real subprocesses |
 | Language detector | 0 tests | ❌ Extension → language mapping |
@@ -264,6 +306,9 @@
 | MCP stdio bridge for Codex | Not planned | ✅ Done (see below) |
 | Agent instructions (SKILL.md, AGENTS.md) | Not planned | ✅ Done in `connect/` |
 | Benchmark suite | Not planned | ✅ Done in `packages/yats-toolkit/benchmark/` |
+| MCP input validation | Not planned | ✅ Done — Zod schemas for 23 tools |
+| Live index sync (file watcher) | Not planned | ✅ Done — `yats watch` + `/index/remove` |
+| Integration test suite | T-083 planned | 🟡 Foundation done (36 tests) |
 
 ## Recently Completed
 

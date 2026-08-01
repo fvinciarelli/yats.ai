@@ -194,8 +194,8 @@
 
 ### MCP Tools
 - **File:** `tools/all-tools.ts`
-- **Responsibility:** 20 tool definitions + handler factory (read-only search & query, plus async indexing and deletion)
-- **Tools:** `search_code`, `search_documentation`, `find_symbol`, `find_references`, `find_callers`, `find_callees`, `find_implementations`, `find_inheritors`, `find_tests`, `find_routes`, `find_configuration`, `expand_graph`, `related_symbols`, `list_symbols`, `repository_summary`, `architecture_summary`, `search_similar`, `list_repositories`, `index_repository`, `delete_repository`
+- **Responsibility:** 22 tool definitions + handler factory (read-only search & query, plus async indexing, deletion, and reindexing)
+- **Tools:** `search_code`, `search_documentation`, `find_symbol`, `find_references`, `find_callers`, `find_callees`, `find_implementations`, `find_inheritors`, `find_tests`, `find_routes`, `find_configuration`, `expand_graph`, `related_symbols`, `list_symbols`, `repository_summary`, `architecture_summary`, `search_similar`, `list_repositories`, `index_repository`, `delete_repository`, `reindex`, `index_file`
 
 #### `index_repository` (delegates to CLI)
 - Does NOT index directly — returns instructions for the AI agent to run `yats index <path>` on the user's machine
@@ -256,15 +256,16 @@
 - **Package:** `@yats/analyzer-go`
 - **Responsibility:** Go analyzer via subprocess bridge
 - **Bridge:** Go binary spawned as subprocess, returns JSON
-- **Responsibility:** PHP analyzer via PHP-Parser bridge subprocess
-- **Fallback:** Regex-based when PHP not available
-- **Conventions:** Symfony, Laravel, Doctrine, naming suffixes
+- **Fallback:** Regex-based when Go bridge not available
+- **Conventions:** Naming suffixes, package patterns
 
 ### CSharpAnalyzer
 - **Package:** `@yats/analyzer-csharp`
-- **Responsibility:** Python analyzer via LibCST + Jedi bridge subprocess
-- **Fallback:** Regex-based when LibCST not available
-- **Conventions:** FastAPI, Flask, Django, SQLAlchemy, Pydantic
+- **Responsibility:** C# analyzer via Roslyn bridge subprocess (.NET 8)
+- **Bridge:** `CSharpSyntaxWalker` extracting classes, interfaces, enums, structs, records, methods, properties, fields, events, delegates
+- **Relationships:** CONTAINS, CALLS, INHERITS, IMPLEMENTS, IMPORTS
+- **Fallback:** Regex-based when .NET not available
+- **Conventions:** ASP.NET, MediatR, Carter, naming suffixes
 
 ### TreeSitterAnalyzer
 - **Package:** `@yats/analyzer-treesitter`

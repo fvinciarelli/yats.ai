@@ -8,6 +8,7 @@ import {
   type ToolHandler,
   type McpDependencies,
 } from "./tools/all-tools.js";
+import { validateArgs } from "./middleware/validation.js";
 
 // ============================================================
 // Types
@@ -118,8 +119,18 @@ export class McpServer {
             };
           }
 
+          // Validate arguments with zod schemas
+          const validation = validateArgs(toolName, toolArgs);
+          if (!validation.ok) {
+            return {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: validation.error },
+            };
+          }
+
           this.logger.info(`Tool call: ${toolName}`);
-          const result = await handler(toolArgs);
+          const result = await handler(validation.parsed);
 
           return { jsonrpc: "2.0", id, result };
         }
@@ -315,6 +326,10 @@ export class McpServer {
         this.handleIndexFile(req, res);
         return;
       }
+      if (req.method === "POST" && url.pathname === "/index/remove") {
+        this.handleIndexRemove(req, res);
+        return;
+      }
 
       // 404
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -474,15 +489,39 @@ export class McpServer {
   ): Promise<void> {
     const body = await this.readBody(req);
     try {
-      const { repoName, filePath, content } = JSON.parse(body);
+      const params = JSON.parse(body);
+      const repoName = params.repoName || params.repository;
+      const filePath = params.filePath || params.path;
+      const content = params.content;
       if (!repoName || !filePath || content === undefined) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "repoName, filePath, and content are required" }));
+        res.end(JSON.stringify({ error: "repoName/repository, filePath/path, and content are required" }));
         return;
       }
       await this.indexer.indexFileContent(repoName, filePath, content);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, file: filePath }));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleIndexRemove(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = await this.readBody(req);
+    try {
+      const { repository, path } = JSON.parse(body);
+      if (!repository || !path) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "repository and path are required" }));
+        return;
+      }
+      const result = await this.indexer.removeFile(repository, path);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, removed: result.removed, file: path }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));

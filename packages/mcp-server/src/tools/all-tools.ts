@@ -32,7 +32,7 @@ export interface McpDependencies {
 }
 
 // ============================================================
-// Tool Definitions — all 24 MCP tools
+// Tool Definitions — all 23 MCP tools
 // ============================================================
 
 export function getAllToolDefinitions(): ToolDefinition[] {
@@ -57,6 +57,9 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     LIST_REPOSITORIES,
     INDEX_REPOSITORY,
     DELETE_REPOSITORY,
+    REINDEX,
+    INDEX_FILE,
+    REMOVE_FILE,
   ];
 }
 
@@ -432,6 +435,44 @@ const DELETE_REPOSITORY: ToolDefinition = {
   },
 };
 
+const REINDEX: ToolDefinition = {
+  name: "reindex",
+  description: "Re-index a repository to pick up recent changes. Use this after you or the user has modified code files and the index may be stale. Only re-indexes changed files when git is available.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Absolute path to the repository to reindex" },
+    },
+    required: ["path"],
+  },
+};
+
+const INDEX_FILE: ToolDefinition = {
+  name: "index_file",
+  description: "Re-index a single file after editing it. Call this immediately after you modify a file so the knowledge graph stays up to date.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Absolute path to the file that was modified" },
+      repository: { type: "string", description: "Repository name (as shown in list_repositories)" },
+    },
+    required: ["path", "repository"],
+  },
+};
+
+const REMOVE_FILE: ToolDefinition = {
+  name: "remove_file",
+  description: "Remove a deleted file from the index. Call this after you delete a file so the knowledge graph doesn't reference dead code.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Absolute path to the file that was deleted" },
+      repository: { type: "string", description: "Repository name (as shown in list_repositories)" },
+    },
+    required: ["path", "repository"],
+  },
+};
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -696,7 +737,13 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     return {
       content: [{ type: "text", text: JSON.stringify({
         nodeCount: subgraph.nodes.length,
+        relationshipCount: subgraph.relationships.length,
         nodes: formatSymbols(subgraph.nodes),
+        relationships: subgraph.relationships.map((rel) => ({
+          sourceId: rel.sourceSymbolId,
+          targetId: rel.targetSymbolId,
+          kind: rel.kind,
+        })),
       }, null, 2) }],
     };
   });
@@ -806,7 +853,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     return {
       content: [{
         type: "text",
-        text: `Tell the user:\n\n"I'm going to index ${repoPath}. This will analyze your code, generate embeddings, and store the knowledge graph. It may take a few minutes depending on the repo size."\n\nTell the user to run:\n\n  yats index ${repoPath}${skipDocsFlag}\n\nAfter the command finishes, poll with:\n\n  repository_summary(repository: "${repoName}")\n\nWait until 'relationships' stops increasing between two consecutive checks. Then show the user the final summary.\n\nIf the user doesn't want to wait, tell them they can ask for the status anytime with 'repository_summary'.`,
+        text: `Tell the user:\n\n"I'm going to index ${repoPath}. This will analyze your code, generate embeddings, and store the knowledge graph. It may take a few minutes depending on the repo size."\n\nTell the user to run:\n\n  yats index ${repoPath}${skipDocsFlag}\n\nAfter the command finishes, poll with:\n\n  repository_summary(repository: "${repoName}")\n\nWait until 'relationships' stops increasing between two consecutive checks. Then show the user the final summary.\n\nOnce indexing is complete, suggest keeping the index live:\n\n  "I can watch this repo for changes and keep the index up to date while we work. Run: yats watch ${repoPath}"\n\nThis starts a file watcher that automatically re-indexes modified files and removes deleted ones. The agent should offer this — if the user says yes, run the command. If the user is in autonomous mode (AGENTS.md/SKILL.md says the agent can execute commands directly), just run it.\n\nIf the user doesn't want to wait, tell them they can ask for the status anytime with 'repository_summary'.`,
       }],
     };
   });
@@ -863,6 +910,74 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     } catch (err: any) {
       return {
         content: [{ type: "text", text: `❌ Failed to delete "${targetName}": ${err.message}` }],
+        isError: true,
+      };
+    }
+  });
+
+  // === Repository reindex & single-file index ===
+
+  handlers.set("reindex", async (args) => {
+    const repoPath = args.path as string;
+    if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
+
+    const { status, result } = await deps.indexer.ensureIndexed(repoPath);
+
+    if (status === "fresh") {
+      return { content: [{ type: "text", text: `Repository at "${repoPath}" is already up to date. No reindex needed.` }] };
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          status,
+          summary: result ? {
+            symbolsFound: result.symbolsFound,
+            relationshipsFound: result.relationshipsFound,
+            duration: `${(result.duration / 1000).toFixed(1)}s`,
+          } : null,
+        }, null, 2),
+      }],
+    };
+  });
+
+  handlers.set("index_file", async (args) => {
+    const filePath = args.path as string;
+    const repoName = args.repository as string;
+    if (!filePath) return { content: [{ type: "text", text: "Error: 'path' (absolute file path) is required" }], isError: true };
+    if (!repoName) return { content: [{ type: "text", text: "Error: 'repository' is required" }], isError: true };
+
+    try {
+      await deps.indexer.indexFile(repoName, filePath);
+      return {
+        content: [{ type: "text", text: `✅ File "${filePath}" re-indexed successfully in repository "${repoName}".` }],
+      };
+    } catch (err: any) {
+      return {
+        content: [{ type: "text", text: `❌ Failed to index file "${filePath}": ${err.message}` }],
+        isError: true,
+      };
+    }
+  });
+
+  handlers.set("remove_file", async (args) => {
+    const filePath = args.path as string;
+    const repoName = args.repository as string;
+    if (!filePath) return { content: [{ type: "text", text: "Error: 'path' (absolute file path) is required" }], isError: true };
+    if (!repoName) return { content: [{ type: "text", text: "Error: 'repository' is required" }], isError: true };
+
+    try {
+      const result = await deps.indexer.removeFile(repoName, filePath);
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Removed ${result.removed} symbols from index for deleted file "${filePath}" in repository "${repoName}".`,
+        }],
+      };
+    } catch (err: any) {
+      return {
+        content: [{ type: "text", text: `❌ Failed to remove file "${filePath}" from index: ${err.message}` }],
         isError: true,
       };
     }

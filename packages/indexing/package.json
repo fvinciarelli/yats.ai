@@ -27,6 +27,11 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@yats/analyzer-typescript": "workspace:^",
+    "@yats/analyzer-go": "workspace:^",
+    "@yats/analyzer-python": "workspace:^",
+    "@yats/analyzer-php": "workspace:^",
+    "@yats/analyzer-csharp": "workspace:^"
   }
 }

@@ -22,7 +22,7 @@ export interface Indexer {
   indexRepository(repositoryPath: string, options?: { skipDocs?: boolean }): Promise<IndexResult>;
   indexFile(repositoryName: string, filePath: string): Promise<void>;
   indexFileContent(repositoryName: string, filePath: string, content: string): Promise<void>;
-  removeFile(repositoryName: string, filePath: string): Promise<void>;
+  removeFile(repositoryName: string, filePath: string): Promise<{ removed: number }>;
   incrementalIndex(repositoryPath: string, sinceCommit: string): Promise<IndexResult>;
   indexDocumentation(repositoryPath: string): Promise<number>;
   ensureIndexed(repositoryPath: string, options?: { skipDocs?: boolean }): Promise<{
