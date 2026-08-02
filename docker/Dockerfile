@@ -59,6 +59,7 @@ COPY packages/analyzers/analyzer-php/package.json packages/analyzers/analyzer-ph
 COPY packages/analyzers/analyzer-python/package.json packages/analyzers/analyzer-python/
 COPY packages/analyzers/analyzer-csharp/package.json packages/analyzers/analyzer-csharp/
 COPY packages/analyzers/analyzer-treesitter/package.json packages/analyzers/analyzer-treesitter/
+COPY packages/yats-toolkit/package.json packages/yats-toolkit/
 
 RUN pnpm install --frozen-lockfile --prod=false
 
