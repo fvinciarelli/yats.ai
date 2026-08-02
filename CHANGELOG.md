@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-08-02
+
+### Added
+- Public release — CI pipeline with tests, Docker build, npm publish, and GitHub Releases.
+
 ## [0.1.0] - 2026-08-01
 
 ### Added
@@ -27,5 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker Compose** one-command deployment (`docker compose up`).
 - **Docker image** published to `ghcr.io/fvinciarelli/yats.ai`.
 
-[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.1.14...HEAD
+[0.1.14]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.1.14
 [0.1.0]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.1.0
