@@ -221,7 +221,7 @@ Same product. Same features. No support or SLA at any tier. Just an annual flat 
 
 | Developers | Annual license | |
 |---|---|---|
-| < 25 | **Free** | [Get started](https://www.npmjs.com/package/yats-toolkit) |
+| < 25 | **Free** | |
 | 25 – 74 | €150/year | [Buy license](https://buy.stripe.com/test_00w14m1SV52v1cmaTJ1Nu00) |
 | 75 – 199 | €350/year | [Buy license](https://buy.stripe.com/test_14A14mcxz8eH4oy7Hx1Nu01) |
 | 200 – 499 | €600/year | [Buy license](https://buy.stripe.com/test_3cIdR8aprbqT7AK9PF1Nu02) |
