@@ -215,11 +215,11 @@ packages/
 
 ---
 
-## Fair pricing, per team — not per seat
+## Simple pricing — one price per team
 
-Same product. Same features. No support or SLA at any tier. One annual flat fee for your **entire organization**, no matter how many developers you have within your tier.
+**Not per seat. One flat annual fee for your entire organization. Same product, same features at every tier.**
 
-| Team size | Annual license (flat per org) | |
+| Team size | Annual license | |
 |---|---|---|
 | < 25 developers | **Free** | |
 | 25 – 74 developers | €150/year | [Buy license](https://buy.stripe.com/test_00w14m1SV52v1cmaTJ1Nu00) |
