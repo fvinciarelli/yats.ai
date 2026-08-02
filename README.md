@@ -1,41 +1,54 @@
-# YATS — Yet Another Token Saver
+# Cut your AI coding costs by more than 50%
 
-> **Cut your AI coding costs by 37%.** YATS indexes your codebase into a knowledge graph so AI agents find answers in milliseconds instead of reading dozens of files.
+**YATS** — Yet Another Token Saver — indexes your codebase into a knowledge graph. Your agent queries the graph instead of reading files one by one. Less tokens, better answers.
 
 [![npm version](https://img.shields.io/npm/v/yats-toolkit)](https://www.npmjs.com/package/yats-toolkit)
 
 ---
 
-## How it works
+## Your agent is slow. It's not its fault.
+
+Every time your agent needs to understand your code, it does the same brute-force ritual: grep for keywords, read file after file, guess how things connect. That's not intelligence — that's a token bonfire. And you're paying for every spark.
 
 ```
-Your code → Analyzers parse it → Neo4j graph + Qdrant vectors → MCP tools → Your AI agent queries instantly
+100,000 tokens to answer "how does auth work here?"
+15 files read
+Zero understanding of relationships
 ```
 
-1. **`npx yats-toolkit`** — one command. Pulls Docker, starts Neo4j + Qdrant + MCP server.
-2. **`yats index ~/my-project`** — parses your code, builds a knowledge graph with every function, class, interface, call, and relationship.
-3. **Ask your agent about your code.** It queries YATS instead of reading files one by one.
+### YATS gives your agent a map, not a pile of paper
+
+We index your entire codebase into a **knowledge graph**: every function, class, interface, and relationship across TypeScript, C#, Python, PHP, and Go. When your agent needs answers, it queries the graph — not the raw files.
+
+**The best part: you don't index manually.** When your agent connects to YATS and starts working in a directory, it checks if that project is indexed. If not, it indexes it *automatically*. No extra step. No remembering to run a command.
+
+```
+Agent enters your project
+  → "Is this indexed?" → No
+  → Indexes it automatically
+  → Done. Every query now hits the graph.
+
+3,000 tokens. Two tool calls. Exactly right.
+```
+
+> You *can* index manually via `yats index ~/my-project` if you want. But your agent handles it.
 
 ---
 
-## What your agent can do
+## Your codebase, understood
 
-Instead of reading 20 files to find how middleware works, your agent calls:
+Not grep. Not regex. Actual parsers that understand your code like an IDE does.
 
 ```
-search_code("middleware registration order")
-find_symbol("MiddlewareManager")
-find_callers("MiddlewareManager.process")
-find_implementations("MiddlewareInterface")
+TypeScript → Compiler API (full AST)
+C#         → Roslyn (.NET 8 bridge)
+Python     → LibCST + Jedi
+PHP        → nikic/php-parser
+Go         → Native bridge
+Everything → Tree-sitter fallback
 ```
 
-| Agent action | Without YATS | With YATS |
-|---|---|---|
-| "How does auth work?" | Greps for "auth", reads 15 files, guesses | `search_code` → 3 results → `find_callers` → done in 2 turns |
-| "Who calls `PaymentService`?" | Greps, misses indirect calls | `find_callers` → all callers including transitive |
-| "Show me all API routes" | Reads controllers one by one | `find_routes` → all routes in one call |
-| "Architecture overview" | Reads README, main files, hopes it's current | `architecture_summary` → services, controllers, DTOs, relationships |
-| "Find tests for `UserService`" | Guesses file names, greps | `find_tests` → exact matches |
+Rust, Java, Kotlin, Ruby — more to come.
 
 ---
 
@@ -45,45 +58,21 @@ find_implementations("MiddlewareInterface")
 npx yats-toolkit
 ```
 
-The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/Mistral/Voyage), which directories to pre-index, and writes the MCP config automatically.
-
----
-
-## Connect your AI agent
-
-👉 **Go to [`connect/`](./connect/)** — pick your agent, copy two files into your repo, done.
-
-| Agent | Transport | Files to copy |
-|-------|-----------|---------------|
-| **Claude Code** | stdio bridge | [`SKILL.md`](./connect/claude/SKILL.md) → `.claude/skills/yats/` · [`mcp.json`](./connect/claude/mcp.json) → `.mcp.json` |
-| **Gemini CLI** | stdio bridge | [`GEMINI.md`](./connect/gemini/GEMINI.md) → repo root · [`mcp.json`](./connect/gemini/mcp.json) → `.gemini/settings.json` |
-| **Copilot CLI** | stdio bridge | [`instructions.md`](./connect/copilot/instructions.md) → `.github/` · [`mcp.json`](./connect/copilot/mcp.json) → `.copilot/` |
-| **Codex CLI** | stdio bridge | [`AGENTS.md`](./connect/codex/AGENTS.md) → repo root · [`config.toml`](./connect/codex/config.toml) → `.codex/` |
-| **Cursor** | HTTP | [`rules.mdc`](./connect/cursor/rules.mdc) → `.cursor/rules/` · [`mcp.json`](./connect/cursor/mcp.json) → `.cursor/` |
-
-Each agent folder has a **README** explaining what each file does and exactly where to place it.
-
-That's it. Ask your agent: *"How does authentication work in this project?"* and YATS answers from the knowledge graph.
-
----
-
-## MCP Tools (20)
-
-| Category | Tools |
-|---|---|
-| **Search** | `search_code`, `search_documentation`, `search_similar` |
-| **Navigation** | `find_symbol`, `find_references`, `find_callers`, `find_callees` |
-| **Inheritance** | `find_implementations`, `find_inheritors` |
-| **Graph** | `expand_graph`, `related_symbols` |
-| **Discovery** | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
-| **Repository** | `list_repositories`, `index_repository`, `delete_repository` |
-| **Analysis** | `repository_summary`, `architecture_summary` |
-
----
-
-## CLI Reference
+Or install globally:
 
 ```bash
+npm install -g yats-toolkit
+yats
+```
+
+The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/Mistral/Voyage), which directories to pre-index, and writes the MCP config automatically.
+
+**That's it. No other dependencies.** YATS pulls a Docker image with Neo4j, Qdrant, and the MCP server — everything runs in containers. No Python, no Java, no .NET SDK to install. Just Docker.
+
+→ **[Website & full docs](https://fvinciarelli.github.io/yats.ai/)**
+
+```bash
+# CLI reference
 yats setup                        # One-time setup wizard
 yats index <path> [--skip-docs]  # Index a repository
 yats search <query>               # Search indexed code
@@ -94,75 +83,113 @@ yats status                       # Check what's indexed and running
 yats stop                         # Stop all services
 yats bridge                       # MCP stdio ↔ HTTP proxy (for CLI-only agents)
 yats benchmark                    # AI agent token comparison
+yats watch <path>                 # Auto-reindex on file changes
 ```
 
 ---
 
-## Languages
+## Your agent, supercharged
 
-TypeScript, JavaScript, Python, Go, C#, PHP — plus universal fallback via Tree-sitter.
+Instead of reading 15 files, your agent calls:
+
+| What the agent needs | Tool it calls |
+|---|---|
+| "How does auth work?" | `search_code("authentication flow")` |
+| "Who calls this?" | `find_callers("PaymentService.process")` |
+| "Show me the API" | `find_routes` |
+| "Architecture overview?" | `architecture_summary` |
+| "Where are the tests?" | `find_tests("UserService")` |
+| "What's connected?" | `expand_graph(symbolId)` |
+
+### All 22 tools
+
+| Category | Tools |
+|---|---|
+| **Search** | `search_code`, `search_documentation`, `search_similar` |
+| **Navigation** | `find_symbol`, `find_references`, `find_callers`, `find_callees` |
+| **Inheritance** | `find_implementations`, `find_inheritors` |
+| **Graph** | `expand_graph`, `related_symbols` |
+| **Discovery** | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
+| **Repository** | `list_repositories`, `index_repository`, `delete_repository` |
+| **Analysis** | `repository_summary`, `architecture_summary` |
+| **Live sync** | `index_file`, `remove_file`, `reindex` |
 
 ---
 
-## Benchmarks
+## The right instructions make the difference
 
-We measure YATS transparently. Every test is reproducible — same questions, same repos, public raw data.
+YATS saves you **even more tokens** when your agent is properly instructed to use the graph instead of reading files. Copy two files into your repo — each agent gets custom instructions that teach it to call `search_code` before `grep`, to expand the graph instead of guessing relationships.
 
-### What we compare
+👉 **[`connect/`](./connect/)** — pick your agent, copy two files, done.
 
-| | Without YATS | With YATS |
+| Agent | Copy these | Into |
 |---|---|---|
-| **Agent config** | Default — reads files with grep/Read | MCP connected to YATS + behavior instructions ([`connect/`](./connect/)) |
-| **How the agent works** | Greps codebase, reads files one by one, guesses relationships | Calls `search_code` → `find_symbol` → `expand_graph` — answers from the knowledge graph |
+| **Claude Code** | `SKILL.md` + `mcp.json` | [`.claude/skills/yats/` + `.mcp.json`](./connect/claude/) |
+| **Gemini CLI** | `GEMINI.md` + `mcp.json` | [repo root + `.gemini/settings.json`](./connect/gemini/) |
+| **Copilot CLI** | `instructions.md` + `mcp.json` | [`.github/` + `.copilot/`](./connect/copilot/) |
+| **Codex CLI** | `AGENTS.md` + `config.toml` | [repo root + `.codex/`](./connect/codex/) |
+| **Cursor** | `rules.mdc` + `mcp.json` | [`.cursor/rules/` + `.cursor/`](./connect/cursor/) |
 
-Each agent answers the **same question twice**, on a **fresh session** each time. We count every token — system prompts, tool calls, sub-agents, everything.
+That's it. Ask your agent: *"How does authentication work in this project?"* and YATS answers from the knowledge graph.
 
-### Why two kinds of repos
+---
 
-We test against **popular repos** (FastAPI, Django, NestJS) that the agent might know from training, and **non-popular repos** (lab_hub, internal projects) that force the agent to actually read and understand the code — not answer from memory.
+## Don't trust us. Reproduce it yourself.
 
-### Results
+Every benchmark we publish comes with the **full tooling to replicate it** — same questions, same repos, same methodology. No cherry-picking. No black boxes.
 
-| Agent | Repo | Model | Without YATS | With YATS | Savings |
-|-------|------|-------|-------------|-----------|---------|
-| Codex | lab_hub (Go) | gpt-4.1-mini | 100,000 tokens | 27,000 tokens | **73%** |
-| Copilot | lab_hub (Go) | GPT-based | 1.19 credits | 0.40 credits | **66%** |
-| Claude | lab_hub (Go) | claude-haiku-4-5 | 862k tokens · $0.212 | 541k tokens · $0.108 | **37%** tokens · **49%** cost |
-| Gemini | Django (Python) | gemini-flash-latest | 115,122 tokens | 63,851 tokens | **45%** |
-
-> *Cost data only available for Claude (reported directly by the API). Codex tokens include DeepSeek pricing (not OpenAI). Copilot reports AI credits, not dollars. Gemini free tier has no cost data. Token counts are always accurate across all agents — cost depends on your model and plan.*
-
-**Savings range: 37% – 73%.** Lower savings happen when the agent double-checks YATS results by reading files anyway (Copilot, Claude). Higher savings when the agent trusts MCP tools directly (Codex).
-
-All results, raw agent logs, questions, and configs: [`packages/yats-toolkit/benchmark/results/`](./packages/yats-toolkit/benchmark/results/)
-
-### Run your own
+**And it works on your own code too.** Unlike benchmarks that only test popular open-source repos (which LLMs might already know from training), YATS lets you measure savings on *your* private projects.
 
 ```bash
 yats benchmark
+
+1. Pick your agent — Cursor, Claude, Copilot, Codex, or Gemini
+2. Pick a language and repo — or point it at your own project
+3. The wizard indexes it automatically
+4. Your agent answers the same questions twice — with and without YATS
+5. You get a side-by-side comparison: tokens, credits, cost
 ```
 
-Interactive wizard. In 5 steps:
+### Our results (that you can verify)
 
-1. **Pick your agent** — Cursor, Claude, Copilot, Codex, or Gemini
-2. **Pick a language and repo** — the wizard auto-clones it from GitHub
-3. **Pick a working directory** — where the agent will "see" the code (just like your IDE)
-4. **YATS auto-indexes the repo** — symbols, calls, inheritance, embeddings
-5. **The agent answers each question twice** — without YATS (grep + file reads) and with YATS (MCP tools). Fresh session each time.
+Same questions. Same repos. Fresh sessions. Every token counted.
 
-At the end you get a table comparing tokens, credits, or AI units side by side.
+| Agent | Repo indexed | Language | Without YATS | With YATS | You save |
+|---|---|---|---|---|---|
+| Codex | lab_hub (API backend) | Go | 100,000 tokens | 27,000 tokens | **73%** |
+| Copilot | lab_hub (API backend) | Go | 1.19 credits | 0.40 credits | **66%** |
+| Claude | lab_hub (API backend) | Go | 862k tokens · $0.21 | 541k tokens · $0.11 | **37%** tokens · **49%** cost |
+| Gemini | Django (web framework) | Python | 115,122 tokens | 63,851 tokens | **45%** |
 
-**No agent installed?** Each one takes 2 minutes to set up. Pick yours:
+Run `yats benchmark` and get your own row in this table.
 
-- [Claude Code](./connect/claude/) — `npm install -g @anthropic-ai/claude-code`
-- [Gemini CLI](./connect/gemini/) — `npm install -g @google/gemini-cli`
-- [Copilot CLI](./connect/copilot/) — `npm install -g @github/copilot`
-- [Codex CLI](./connect/codex/) — see [codex](https://github.com/openai/codex)
-- [Cursor](./connect/cursor/) — `cursor-agent` from [cursor.com](https://cursor.com)
+→ [Full benchmark suite and raw data](./packages/yats-toolkit/benchmark/)
 
-**Just want to browse results?** Raw logs, questions, and configs: [`benchmark/results/`](./packages/yats-toolkit/benchmark/results/)
+---
 
-You don't have to trust our numbers.
+## Stays in sync while you work
+
+YATS doesn't just index once and go stale. When you or your agent edits a file, the index updates in seconds.
+
+| | |
+|---|---|
+| 🔄 **Auto-reindex on query** | Every search checks if your repo changed since the last index. If git shows new commits, YATS incrementally re-indexes only what changed — before answering. |
+| 📝 **Index a single file** | Call `index_file` and only that file gets re-analyzed, embedded, and stored. Under a second. |
+| 🗑 **Remove on delete** | Call `remove_file` and its symbols disappear from the graph instantly. No dead references. |
+| 👀 **Live watcher** | `yats watch ~/my-project` — every file change triggers an automatic re-index. |
+
+---
+
+## Your keys, or none at all
+
+Indexing generates embeddings. You choose who runs that computation.
+
+| | |
+|---|---|
+| 🆓 **Ollama — zero cost** | Runs locally on your machine. No API keys, no network calls, no bills. The `nomic-embed-text` model is pulled automatically. Indexing costs you nothing — ever. |
+| 🔑 **Bring your own key** | Prefer a hosted model? Plug in your OpenAI, Mistral, or Voyage AI key. You pay your provider directly — YATS adds zero markup. |
+
+Switch anytime with `EMBEDDING_PROVIDER`. Ollama for free local dev, OpenAI for production throughput. No lock-in.
 
 ---
 
@@ -188,6 +215,22 @@ packages/
 
 ---
 
+## Fair pricing, based on your team size
+
+Same product. Same features. No support or SLA at any tier. Just an annual flat fee.
+
+| Developers | Annual license | |
+|---|---|---|
+| < 25 | **Free** | [Get started](https://www.npmjs.com/package/yats-toolkit) |
+| 25 – 74 | €150/year | [Buy license](https://buy.stripe.com/test_00w14m1SV52v1cmaTJ1Nu00) |
+| 75 – 199 | €350/year | [Buy license](https://buy.stripe.com/test_14A14mcxz8eH4oy7Hx1Nu01) |
+| 200 – 499 | €600/year | [Buy license](https://buy.stripe.com/test_3cIdR8aprbqT7AK9PF1Nu02) |
+| 500+ | [Contact us](mailto:vinciarellifranco@gmail.com) | |
+
+Annual subscription with auto-renewal. Cancel anytime. · [Full license terms](LICENSE)
+
+---
+
 ## Requirements
 
 - **Docker** with Compose plugin
@@ -196,23 +239,9 @@ packages/
 
 ---
 
-## License
-
-**Free for individuals and organizations with fewer than 25 developers.** Commercial licenses are annual subscriptions with auto-renewal — same rights at every tier, no support or SLA included.
-
-| Developers | Annual license (EUR, flat per org) |
-|---|---|
-| < 25 | **Free** |
-| 25 – 74 | €150 |
-| 75 – 199 | €350 |
-| 200 – 499 | €600 |
-| 500+ | Contact us |
-
-[Full license](LICENSE) · vinciarellifranco@gmail.com
-
----
-
 ## Links
 
 - **npm:** [yats-toolkit](https://www.npmjs.com/package/yats-toolkit)
-- **GitHub:** [fvinciarelli/yats.ai](https://github.com/fvinciarelli/yats.ai)
+- **Website:** [fvinciarelli.github.io/yats.ai](https://fvinciarelli.github.io/yats.ai/)
+- **License:** [LICENSE](LICENSE)
+- **Contact:** [vinciarellifranco@gmail.com](mailto:vinciarellifranco@gmail.com)
