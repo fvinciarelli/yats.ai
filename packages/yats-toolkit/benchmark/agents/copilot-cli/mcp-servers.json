@@ -1,0 +1,9 @@
+{
+  "servers": [
+    {
+      "name": "yats",
+      "type": "http", 
+      "url": "http://localhost:5555/mcp"
+    }
+  ]
+}

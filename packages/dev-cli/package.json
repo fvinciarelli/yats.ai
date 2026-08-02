@@ -1,0 +1,46 @@
+{
+  "name": "@yats/dev-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "yats-dev": "./dist/index.js"
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "test:coverage": "echo 'TODO'"
+  },
+  "dependencies": {
+    "@yats/analyzer-interface": "workspace:^",
+    "@yats/analyzer-typescript": "workspace:^",
+    "@yats/analyzer-go": "workspace:^",
+    "@yats/analyzer-csharp": "workspace:^",
+    "@yats/analyzer-python": "workspace:^",
+    "@yats/analyzer-php": "workspace:^",
+    "@yats/indexing": "workspace:^",
+    "@yats/infra": "workspace:^",
+    "@yats/mcp-server": "workspace:^",
+    "@yats/retrieval": "workspace:^",
+    "@yats/shared": "workspace:*",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "reflect-metadata": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

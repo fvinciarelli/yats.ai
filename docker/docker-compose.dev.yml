@@ -1,0 +1,85 @@
+# ============================================================
+# Development overrides — infrastructure only (Neo4j + Qdrant)
+#
+# Usage:
+#   docker compose -f docker/docker-compose.dev.yml up -d
+#
+# Then run the MCP server from source:
+#   pnpm install && pnpm build
+#   pnpm --filter @yats/dev-cli dev start --http --port 5555
+#
+# Or use yats-toolkit in dev mode:
+#   cd packages/yats-toolkit && node bin/setup.js
+# ============================================================
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_server_memory_heap_initial__size=256m
+      - NEO4J_server_memory_heap_max__size=512m
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "echo 'RETURN 1;' | cypher-shell -u neo4j -p password 2>/dev/null || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__LOG_LEVEL=debug
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 5
+        ollama pull nomic-embed-text 2>/dev/null || true
+        wait
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
+  qdrant-storage:
+  ollama-models:

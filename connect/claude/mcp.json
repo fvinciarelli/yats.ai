@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "yats": {
+      "command": "yats",
+      "args": ["bridge"]
+    }
+  }
+}

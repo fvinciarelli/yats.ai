@@ -1,0 +1,121 @@
+version: "3.9"
+
+services:
+  # ============================================
+  # Neo4j — Graph Database
+  # ============================================
+  neo4j:
+    image: neo4j:5.26-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=1g
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - ./neo4j/plugins:/plugins
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "echo 'RETURN 1;' | cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-password} 2>/dev/null || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ============================================
+  # Qdrant — Vector Database
+  # ============================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ============================================
+  # Ollama — Local Embeddings (optional)
+  # ============================================
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama", "full"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 5
+        ollama pull nomic-embed-text 2>/dev/null || true
+        wait
+
+  # ============================================
+  # YATS — MCP Server
+  # ============================================
+  yats:
+    image: ghcr.io/fvinciarelli/yats.ai:${YATS_VERSION:-0.1}
+    # Uncomment below and comment 'image' above to build locally instead:
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
+    #   args:
+    #     INCLUDE_GO: "${INCLUDE_GO:-true}"
+    #     INCLUDE_CSHARP: "${INCLUDE_CSHARP:-true}"
+    #     INCLUDE_PYTHON: "${INCLUDE_PYTHON:-true}"
+    #     INCLUDE_PHP: "${INCLUDE_PHP:-true}"
+    ports:
+      - "${YATS_PORT:-5555}:5555"
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      - QDRANT_URL=http://qdrant:6333
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-nomic-embed-text}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-text-embedding-3-small}
+      - REPOSITORIES_PATH=/repos
+      - YATS_PORT=5555
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - INDEXER_CONCURRENCY=${INDEXER_CONCURRENCY:-4}
+    volumes:
+      - ${REPOS_PATH:-~/.yats/repos}:/repos:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
+  qdrant-storage:
+  ollama-models:

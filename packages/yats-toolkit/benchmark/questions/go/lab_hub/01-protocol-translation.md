@@ -1,0 +1,1 @@
+How does Hub Lab identify instruments and translate their protocols? Trace the flow from receiving a raw ASTM/HL7/CSV message from an analyzer to delivering a normalized FHIR result to the LIS. What key components handle identification, translation, normalization, and delivery?

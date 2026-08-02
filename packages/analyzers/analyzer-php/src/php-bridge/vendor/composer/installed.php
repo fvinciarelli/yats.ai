@@ -1,0 +1,41 @@
+<?php return array(
+    'root' => array(
+        'name' => 'yats/php-bridge',
+        'pretty_version' => 'dev-master',
+        'version' => 'dev-master',
+        'reference' => 'f2539162df44a2af15029459a58b81888b2f3475',
+        'type' => 'library',
+        'install_path' => __DIR__ . '/../../',
+        'aliases' => array(),
+        'dev' => true,
+    ),
+    'versions' => array(
+        'nikic/php-parser' => array(
+            'pretty_version' => 'v5.8.0',
+            'version' => '5.8.0.0',
+            'reference' => '044a6a392ff8ad0d61f14370a5fbbd0a0107152f',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../nikic/php-parser',
+            'aliases' => array(),
+            'dev_requirement' => false,
+        ),
+        'phpstan/phpstan' => array(
+            'pretty_version' => '1.12.34',
+            'version' => '1.12.34.0',
+            'reference' => '4dd89ca7aa30fdc6760be21550d583bcc32e8476',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../phpstan/phpstan',
+            'aliases' => array(),
+            'dev_requirement' => false,
+        ),
+        'yats/php-bridge' => array(
+            'pretty_version' => 'dev-master',
+            'version' => 'dev-master',
+            'reference' => 'f2539162df44a2af15029459a58b81888b2f3475',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../../',
+            'aliases' => array(),
+            'dev_requirement' => false,
+        ),
+    ),
+);

@@ -1,0 +1,5 @@
+results/
+agents/
+configs/
+*.log
+.env.example

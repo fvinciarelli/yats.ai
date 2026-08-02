@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YATS — Yet Another Token Saver</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.7;
+    color: #1a1a2e;
+    background: #fff;
+  }
+  a { color: #7c3aed; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* Navbar */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 32px; border-bottom: 1px solid #e5e7eb;
+    background: #fff; position: sticky; top: 0; z-index: 10;
+  }
+  nav .logo { font-size: 1.2em; font-weight: 700; color: #1a1a2e; display: flex; align-items: center; gap: 8px; }
+  nav .logo span { background: #7c3aed; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; }
+  nav .links { display: flex; align-items: center; gap: 24px; }
+  nav .links a { color: #555; font-size: 0.9em; font-weight: 500; }
+  nav .links a:hover { color: #7c3aed; text-decoration: none; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 6px; font-size: 0.85em; font-weight: 600;
+    border: none; cursor: pointer; transition: all 0.15s;
+  }
+  .btn-primary { background: #7c3aed; color: #fff; }
+  .btn-primary:hover { background: #6d28d9; }
+  .btn-outline { background: #fff; color: #1a1a2e; border: 1px solid #d1d5db; }
+  .btn-outline:hover { border-color: #7c3aed; color: #7c3aed; }
+  .btn-ghost { background: none; color: #1a1a2e; border: 1px solid #d1d5db; display: inline-flex; align-items: center; gap: 6px; }
+  .btn-ghost:hover { border-color: #7c3aed; color: #7c3aed; }
+
+  /* Hero */
+  .hero {
+    max-width: 900px; margin: 0 auto; padding: 80px 32px 60px; text-align: center;
+  }
+  .hero h1 { font-size: 3em; line-height: 1.2; margin-bottom: 16px; letter-spacing: -0.02em; }
+  .hero h1 span { color: #7c3aed; }
+  .hero p { font-size: 1.2em; color: #555; max-width: 650px; margin: 0 auto 32px; }
+  .hero .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  /* Sections */
+  section { max-width: 900px; margin: 0 auto; padding: 60px 32px; }
+  section h2 { font-size: 1.8em; margin-bottom: 16px; letter-spacing: -0.01em; }
+  section h3 { font-size: 1.2em; margin: 24px 0 8px; }
+  section p { color: #444; margin-bottom: 16px; max-width: 700px; }
+
+  /* Code blocks */
+  .code-block {
+    background: #1e1e2e; color: #cdd6f4; padding: 16px 20px; border-radius: 8px;
+    font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.85em;
+    line-height: 1.6; overflow-x: auto; margin: 16px 0;
+    white-space: pre;
+  }
+  .inline-code { background: #f4f4f5; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; font-family: monospace; }
+
+  /* Cards */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 24px 0; }
+  .card {
+    border: 1px solid #e5e7eb; border-radius: 8px; padding: 24px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .card:hover { border-color: #7c3aed; box-shadow: 0 2px 12px rgba(124,58,237,0.08); }
+  .card h3 { margin: 0 0 8px; font-size: 1.1em; }
+  .card p { color: #666; font-size: 0.9em; margin: 0; }
+  .card .tag {
+    display: inline-block; background: #faf5ff; color: #7c3aed; padding: 2px 8px;
+    border-radius: 4px; font-size: 0.75em; font-weight: 600; margin-bottom: 8px;
+  }
+  .card.pricing {
+    text-align: center; padding: 32px 24px;
+  }
+  .card.pricing .price { font-size: 2.5em; font-weight: 700; margin: 16px 0 4px; }
+  .card.pricing .price span { font-size: 0.4em; color: #666; font-weight: 400; }
+  .card.pricing .devs { color: #666; font-size: 0.9em; margin-bottom: 20px; }
+  .card.pricing.featured { border-color: #7c3aed; border-width: 2px; }
+
+  /* Benchmark table */
+  .bench-table { width: 100%; border-collapse: collapse; margin: 24px 0; font-size: 0.9em; }
+  .bench-table th, .bench-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+  .bench-table th { background: #f8fafc; font-weight: 600; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; color: #666; }
+  .bench-table tr:hover { background: #fafafa; }
+  .bench-table .save { color: #7c3aed; font-weight: 700; }
+
+  /* Tutorial links */
+  .tutorial-link {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    border: 1px solid #e5e7eb; border-radius: 8px; margin: 8px 0;
+    color: #1a1a2e; transition: border-color 0.15s;
+  }
+  .tutorial-link:hover { border-color: #7c3aed; text-decoration: none; }
+  .tutorial-link .num {
+    width: 32px; height: 32px; border-radius: 50%; background: #f4f4f5;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.85em; flex-shrink: 0;
+  }
+  .tutorial-link .info { flex: 1; }
+  .tutorial-link .info strong { display: block; }
+  .tutorial-link .info span { font-size: 0.85em; color: #888; }
+
+  /* Divider */
+  .divider { border: none; border-top: 1px solid #e5e7eb; margin: 0 32px; }
+
+  /* Footer */
+  footer {
+    max-width: 900px; margin: 0 auto; padding: 40px 32px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.85em; color: #888; flex-wrap: wrap; gap: 16px;
+  }
+  footer .links { display: flex; gap: 20px; }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    nav { padding: 12px 16px; }
+    nav .links { gap: 12px; }
+    .hero { padding: 40px 16px 40px; }
+    .hero h1 { font-size: 2em; }
+    section { padding: 40px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav>
+  <a href="/" class="logo">YATS <span>Beta</span></a>
+  <div class="links">
+    <a href="#how-it-works">How it works</a>
+    <a href="#benchmarks">Benchmarks</a>
+    <a href="#live-sync">Live sync</a>
+    <a href="#tutorials">Tutorials</a>
+    <a href="#pricing">Pricing</a>
+    <a href="https://github.com/fvinciarelli/yats.ai" class="btn btn-ghost" target="_blank">
+      ⭐ Star on GitHub
+    </a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<div class="hero">
+  <h1>Cut your AI coding costs by <span>more than 50%</span></h1>
+  <p>
+    YATS — Yet Another Token Saver — indexes your codebase into a knowledge graph.
+    Your agent queries the graph instead of reading files one by one. Less tokens, better answers.
+  </p>
+  <div class="actions">
+    <a href="https://github.com/fvinciarelli/yats.ai" class="btn btn-primary" target="_blank">Start on GitHub →</a>
+    <a href="https://www.npmjs.com/package/yats-toolkit" class="btn btn-outline" target="_blank">yats-toolkit on npm</a>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- How it works -->
+<section id="how-it-works">
+  <h2>Your agent is slow. It's not its fault.</h2>
+  <p>
+    Every time your agent needs to understand your code, it does the same brute-force ritual:
+    grep for keywords, read file after file, guess how things connect. That's not intelligence —
+    that's a token bonfire. And you're paying for every spark.
+  </p>
+  <div class="code-block">
+100,000 tokens to answer "how does auth work here?"
+15 files read
+Zero understanding of relationships
+  </div>
+
+  <h3>YATS gives your agent a map, not a pile of paper</h3>
+  <p>
+    We index your entire codebase into a <strong>knowledge graph</strong>: every function, class,
+    interface, and relationship across TypeScript, C#, Python, PHP, and Go. When your agent needs
+    answers, it queries the graph — not the raw files.
+  </p>
+  <p>
+    <strong>The best part: you don't index manually.</strong> When your agent connects to YATS
+    and starts working in a directory, it checks if that project is indexed. If not, it indexes
+    it <em>automatically</em>. No extra step. No remembering to run a command.
+  </p>
+  <div class="code-block">
+Agent enters your project
+  → "Is this indexed?" → No
+  → Indexes it automatically
+  → Done. Every query now hits the graph.
+
+3,000 tokens. Two tool calls. Exactly right.
+  </div>
+  <p style="color: #888; font-size: 0.9em;">
+    You <em>can</em> index manually via <span class="inline-code">yats index ~/my-project</span> if you want. But your agent handles it.
+  </p>
+
+  <h3>Your codebase, understood</h3>
+  <p>Not grep. Not regex. Actual parsers that understand your code like an IDE does.</p>
+  <div class="code-block">
+TypeScript → Compiler API (full AST)
+C#         → Roslyn (.NET 8 bridge)
+Python     → LibCST + Jedi
+PHP        → nikic/php-parser
+Go         → Native bridge
+Everything → Tree-sitter fallback
+
+<span style="color: #888;">Rust, Java, Kotlin, Ruby — more to come</span>
+  </div>
+
+  <h3>Your agent, supercharged</h3>
+  <p>Instead of reading 15 files, your agent calls:</p>
+  <table class="bench-table">
+    <tr><th>What the agent needs</th><th>Tool it calls</th></tr>
+    <tr><td>"How does auth work?"</td><td><span class="inline-code">search_code("authentication flow")</span></td></tr>
+    <tr><td>"Who calls this?"</td><td><span class="inline-code">find_callers("PaymentService.process")</span></td></tr>
+    <tr><td>"Show me the API"</td><td><span class="inline-code">find_routes</span></td></tr>
+    <tr><td>"Architecture overview?"</td><td><span class="inline-code">architecture_summary</span></td></tr>
+    <tr><td>"Where are the tests?"</td><td><span class="inline-code">find_tests("UserService")</span></td></tr>
+    <tr><td>"What's connected?"</td><td><span class="inline-code">expand_graph(symbolId)</span></td></tr>
+  </table>
+  <a href="https://github.com/fvinciarelli/yats.ai#mcp-tools-20" target="_blank">All 22 tools →</a>
+</section>
+
+<hr class="divider">
+
+<!-- Transparency / Benchmarks -->
+<section id="benchmarks">
+  <h2>Don't trust us. Reproduce it yourself.</h2>
+  <p>
+    Every benchmark we publish comes with the <strong>full tooling to replicate it</strong> —
+    same questions, same repos, same methodology. No cherry-picking. No black boxes.
+  </p>
+  <p>
+    <strong>And it works on your own code too.</strong> Unlike benchmarks that only test popular
+    open-source repos (which LLMs might already know from training), YATS lets you measure savings
+    on <em>your</em> private projects — the code your agent actually works with every day.
+  </p>
+  <div class="code-block">
+yats benchmark
+
+1. Pick your agent — Cursor, Claude, Copilot, Codex, or Gemini
+2. Pick a language and repo — or point it at your own project
+3. The wizard indexes it automatically
+4. Your agent answers the same questions twice — with and without YATS
+5. You get a side-by-side comparison: tokens, credits, cost
+  </div>
+
+  <h3>Our results (that you can verify)</h3>
+  <p>Same questions. Same repos. Fresh sessions. Every token counted.</p>
+  <table class="bench-table">
+    <tr>
+      <th>Agent</th><th>Repo indexed</th><th>Language</th>
+      <th>Without YATS</th><th>With YATS</th><th>You save</th>
+    </tr>
+    <tr>
+      <td>Codex</td><td>lab_hub (API backend)</td><td>Go</td>
+      <td>100,000 tokens</td><td>27,000 tokens</td>
+      <td class="save">73%</td>
+    </tr>
+    <tr>
+      <td>Copilot</td><td>lab_hub (API backend)</td><td>Go</td>
+      <td>1.19 credits</td><td>0.40 credits</td>
+      <td class="save">66%</td>
+    </tr>
+    <tr>
+      <td>Claude</td><td>lab_hub (API backend)</td><td>Go</td>
+      <td>862k tokens · $0.21</td><td>541k tokens · $0.11</td>
+      <td class="save">37% tokens · 49% cost</td>
+    </tr>
+    <tr>
+      <td>Gemini</td><td>Django (web framework)</td><td>Python</td>
+      <td>115,122 tokens</td><td>63,851 tokens</td>
+      <td class="save">45%</td>
+    </tr>
+  </table>
+  <p style="text-align: center; color: #7c3aed; font-weight: 600;">
+    Run <span class="inline-code">yats benchmark</span> and get your own row in this table.
+  </p>
+  <p style="text-align: center; color: #888; font-size: 0.85em; margin-top: 16px;">
+    More agents and repos being tested — <span class="inline-code">yats benchmark</span> supports all five agents today.
+  </p>
+  <p style="text-align: center;">
+    <a href="https://github.com/fvinciarelli/yats.ai/tree/master/packages/yats-toolkit/benchmark" target="_blank">Full benchmark suite and raw data →</a>
+  </p>
+</section>
+
+<hr class="divider">
+
+<!-- Tutorials -->
+<section id="tutorials">
+  <h2>Tutorials</h2>
+  <p>Short videos to get you from zero to saving tokens. Each one is ~3 minutes.</p>
+
+  <a href="#" class="tutorial-link">
+    <div class="num">1</div>
+    <div class="info">
+      <strong>Installation — One command to start</strong>
+      <span>Run <span class="inline-code">npx yats-toolkit</span>, the setup wizard detects Docker, pulls images, starts everything. 3 min.</span>
+    </div>
+    <span style="color: #888; font-size: 0.85em;">[Tutorial 1]</span>
+  </a>
+
+  <a href="#" class="tutorial-link">
+    <div class="num">2</div>
+    <div class="info">
+      <strong>Auto-indexing — Your agent's first day</strong>
+      <span>Connect your agent, open a project, watch it auto-index. The agent discovers the repo isn't indexed and indexes it transparently. 3 min.</span>
+    </div>
+    <span style="color: #888; font-size: 0.85em;">[Tutorial 2]</span>
+  </a>
+
+  <a href="#" class="tutorial-link">
+    <div class="num">3</div>
+    <div class="info">
+      <strong>First queries — Smarter than grep</strong>
+      <span>Ask your agent about your codebase. Watch it call <span class="inline-code">search_code</span>, <span class="inline-code">find_callers</span>, and <span class="inline-code">architecture_summary</span> instead of reading files. 3 min.</span>
+    </div>
+    <span style="color: #888; font-size: 0.85em;">[Tutorial 3]</span>
+  </a>
+
+  <a href="#" class="tutorial-link">
+    <div class="num">4</div>
+    <div class="info">
+      <strong>Editing code — Keep the index in sync</strong>
+      <span>Modify a file through your agent, then call <span class="inline-code">index_file</span> or <span class="inline-code">reindex</span> to update the graph instantly. 3 min.</span>
+    </div>
+    <span style="color: #888; font-size: 0.85em;">[Tutorial 4]</span>
+  </a>
+
+  <a href="#" class="tutorial-link">
+    <div class="num">5</div>
+    <div class="info">
+      <strong>Run your own benchmark</strong>
+      <span>Use <span class="inline-code">yats benchmark</span> to measure token savings on your own repo — with your own agent. Compare with and without YATS. 4 min.</span>
+    </div>
+    <span style="color: #888; font-size: 0.85em;">[Tutorial 5]</span>
+  </a>
+</section>
+
+<hr class="divider">
+
+<!-- Instructions -->
+<section id="connect">
+  <h2>The right instructions make the difference</h2>
+  <p>
+    YATS will save you <strong>even more tokens</strong> when your agent is properly instructed
+    to use the graph instead of reading files. That's why we include ready-to-use instruction
+    files for every agent — they teach it to call <span class="inline-code">search_code</span>
+    before <span class="inline-code">grep</span>, to expand the graph instead of guessing
+    relationships, to trust the index.
+  </p>
+
+  <div class="code-block">
+# 1. Start YATS (needs Docker)
+npx yats-toolkit
+
+# 2. Connect your agent — copy two files into your repo
+  </div>
+
+  <table class="bench-table">
+    <tr><th>Your agent</th><th>Copy these</th><th>Into</th></tr>
+    <tr>
+      <td>Claude Code</td>
+      <td><span class="inline-code">SKILL.md</span> + <span class="inline-code">mcp.json</span></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/claude" target="_blank">.claude/skills/yats/ + .mcp.json</a></td>
+    </tr>
+    <tr>
+      <td>Gemini CLI</td>
+      <td><span class="inline-code">GEMINI.md</span> + <span class="inline-code">mcp.json</span></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/gemini" target="_blank">repo root + .gemini/settings.json</a></td>
+    </tr>
+    <tr>
+      <td>Copilot CLI</td>
+      <td><span class="inline-code">instructions.md</span> + <span class="inline-code">mcp.json</span></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/copilot" target="_blank">.github/ + .copilot/</a></td>
+    </tr>
+    <tr>
+      <td>Codex CLI</td>
+      <td><span class="inline-code">AGENTS.md</span> + <span class="inline-code">config.toml</span></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/codex" target="_blank">repo root + .codex/</a></td>
+    </tr>
+    <tr>
+      <td>Cursor</td>
+      <td><span class="inline-code">rules.mdc</span> + <span class="inline-code">mcp.json</span></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/cursor" target="_blank">.cursor/rules/ + .cursor/</a></td>
+    </tr>
+  </table>
+  <a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect" target="_blank">Step-by-step for each agent →</a>
+</section>
+
+<hr class="divider">
+
+<!-- Live sync -->
+<section id="live-sync">
+  <h2>Stays in sync while you work</h2>
+  <p>
+    YATS doesn't just index once and go stale. When you or your agent edits a file,
+    the index updates in seconds — not minutes.
+  </p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>🔄 Auto-reindex on query</h3>
+      <p>
+        Every search tool checks if your repo has changed since the last index.
+        If git shows new commits, YATS incrementally re-indexes only what changed — before answering.
+      </p>
+    </div>
+    <div class="card">
+      <h3>📝 Index a single file</h3>
+      <p>
+        Just edited one file? Call <span class="inline-code">index_file</span> and only that file
+        gets re-analyzed, embedded, and stored. Under a second.
+      </p>
+    </div>
+    <div class="card">
+      <h3>🗑 Remove on delete</h3>
+      <p>
+        Deleted a file? Call <span class="inline-code">remove_file</span> and its symbols
+        disappear from the graph instantly. No dead references.
+      </p>
+    </div>
+    <div class="card">
+      <h3>👀 Live watcher</h3>
+      <p>
+        Run <span class="inline-code">yats watch ~/my-project</span> and every file change
+        triggers an automatic re-index. Your graph stays current without a single extra command.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- BYOK -->
+<section id="embeddings">
+  <h2>Your keys, or none at all</h2>
+  <p>
+    Indexing generates embeddings — vector representations of your code.
+    You choose who runs that computation, and what it costs.
+  </p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>🆓 Ollama — zero cost</h3>
+      <p>
+        Runs locally on your machine. No API keys, no network calls, no bills.
+        The <span class="inline-code">nomic-embed-text</span> model is pulled automatically
+        during setup. Indexing costs you nothing — ever.
+      </p>
+    </div>
+    <div class="card">
+      <h3>🔑 Bring your own key</h3>
+      <p>
+        Prefer a hosted model? Plug in your OpenAI, Mistral, or Voyage AI key.
+        You pay your provider directly — YATS never sees your key and adds zero markup.
+      </p>
+    </div>
+  </div>
+
+  <p style="text-align: center; color: #888; font-size: 0.85em; margin-top: 16px;">
+    Switch anytime with <span class="inline-code">EMBEDDING_PROVIDER</span>.
+    Ollama for free local dev. OpenAI for production throughput. No lock-in.
+  </p>
+</section>
+
+<hr class="divider">
+
+<!-- Pricing -->
+<section id="pricing">
+  <h2>Fair pricing, based on your team size</h2>
+  <p style="text-align: center; max-width: 600px; margin: 0 auto 16px;">
+    Same product. Same features. No support or SLA at any tier.
+    Just an annual flat fee to use YATS legally — no per-seat math, no surprise bills.
+  </p>
+
+  <div style="max-width: 750px; margin: 40px auto; display: flex; align-items: stretch; justify-content: center; gap: 12px; flex-wrap: wrap;">
+    <!-- Free -->
+    <div style="background: #faf5ff; border: 2px solid #7c3aed; border-radius: 12px; padding: 28px 24px; text-align: center; flex: 1; min-width: 140px; display: flex; flex-direction: column; justify-content: space-between;">
+      <div>
+        <div style="font-size: 0.75em; font-weight: 700; color: #7c3aed; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Free</div>
+        <div style="font-size: 2.2em; font-weight: 700; color: #1a1a2e;">€0</div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">&lt; 25 developers</div>
+      </div>
+      <a href="https://www.npmjs.com/package/yats-toolkit" class="btn btn-primary" style="width: 100%; justify-content: center;" target="_blank">Get started</a>
+    </div>
+
+    <!-- 25–74 -->
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
+      <div>
+        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Steel</div>
+        <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€150<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">25 – 74 devs</div>
+      </div>
+      <a href="https://buy.stripe.com/test_00w14m1SV52v1cmaTJ1Nu00" class="btn btn-outline" style="width: 100%; justify-content: center;" target="_blank">Buy license</a>
+    </div>
+
+    <!-- 75–199 -->
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
+      <div>
+        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Titanium</div>
+        <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€350<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">75 – 199 devs</div>
+      </div>
+      <a href="https://buy.stripe.com/test_14A14mcxz8eH4oy7Hx1Nu01" class="btn btn-outline" style="width: 100%; justify-content: center;" target="_blank">Buy license</a>
+    </div>
+
+    <!-- 200–499 -->
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
+      <div>
+        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Platinum</div>
+        <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€600<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">200 – 499 devs</div>
+      </div>
+      <a href="https://buy.stripe.com/test_3cIdR8aprbqT7AK9PF1Nu02" class="btn btn-outline" style="width: 100%; justify-content: center;" target="_blank">Buy license</a>
+    </div>
+
+    <!-- 500+ -->
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
+      <div>
+        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Enterprise</div>
+        <div style="font-size: 1.3em; font-weight: 700; color: #1a1a2e; padding: 8px 0;">Contact us</div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">500+ devs</div>
+      </div>
+      <a href="mailto:vinciarellifranco@gmail.com" class="btn btn-outline" style="width: 100%; justify-content: center;">Contact us</a>
+    </div>
+  </div>
+
+  <p style="text-align: center; color: #888; font-size: 0.85em; max-width: 550px; margin: 0 auto;">
+    Annual subscription with auto-renewal. Cancel anytime.
+    &nbsp;·&nbsp; <a href="https://github.com/fvinciarelli/yats.ai/blob/master/LICENSE" target="_blank">Full license terms</a>
+  </p>
+</section>
+
+<hr class="divider">
+
+<!-- Footer -->
+<footer>
+  <div>
+    <strong>YATS</strong> — Yet Another Token Saver
+  </div>
+  <div class="links">
+    <a href="https://github.com/fvinciarelli/yats.ai" target="_blank">GitHub</a>
+    <a href="https://www.npmjs.com/package/yats-toolkit" target="_blank">npm</a>
+    <a href="https://github.com/fvinciarelli/yats.ai/blob/master/LICENSE" target="_blank">License</a>
+    <a href="mailto:vinciarellifranco@gmail.com">Contact</a>
+  </div>
+</footer>
+
+</body>
+</html>
