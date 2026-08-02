@@ -221,6 +221,7 @@ class SymbolExtractor extends NodeVisitorAbstract
                 'name' => $node->name->toString(),
                 'kind' => 'class', // Traits are mapped to class
                 'namespace' => $this->namespace,
+                'metadata' => (object)['isTrait' => true],
             ], $node, 'trait');
         }
 

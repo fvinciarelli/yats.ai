@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"strings"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,10 +212,10 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 		if n.Recv != nil && len(n.Recv.List) > 0 {
 			kind = "method"
 			recvType := a.typeToString(n.Recv.List[0].Type)
-			parent = recvType
+			parent = strings.TrimPrefix(recvType, "*")
 
 			// Create relationship: receiver type CONTAINS this method
-			recvID := a.makeID(recvType)
+			recvID := a.makeID(parent)
 			methID := a.makeID(name)
 			a.relns = append(a.relns, Relationship{
 				ID:             fmt.Sprintf("%s|contains|%s", recvID, methID),

@@ -167,16 +167,16 @@ public class UserServiceTests
 
   it("handles partial classes", async () => {
     const code = `
-public partial class UserValidator
+public partial class UserData
 {
     public bool Validate(string email) => true;
 }
 `;
-    const result = await analyzer.analyze("UserValidator.cs", code, "test-repo");
+    const result = await analyzer.analyze("UserData.cs", code, "test-repo");
 
     const classes = result.symbols.filter((s) => s.kind === SymbolKind.CLASS);
     assert.equal(classes.length, 1);
-    assert.equal(classes[0]!.name, "UserValidator");
+    assert.equal(classes[0]!.name, "UserData");
   });
 
   it("skips keywords in method detection", async () => {
