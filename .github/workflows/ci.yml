@@ -28,6 +28,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build C# bridge
+        run: dotnet build packages/analyzers/analyzer-csharp/src/csharp-bridge/RoslynAnalyzer.csproj
+
       - name: Install Python deps (libcst for Python analyzer bridge)
         run: pip install libcst
 
