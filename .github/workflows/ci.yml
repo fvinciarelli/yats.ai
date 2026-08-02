@@ -28,6 +28,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Install Python deps (libcst for Python analyzer bridge)
+        run: pip install libcst
+
       - name: Build
         run: pnpm build
 

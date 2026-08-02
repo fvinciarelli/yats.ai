@@ -23,6 +23,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install Python deps (libcst for Python analyzer bridge)
+        run: pip install libcst
       - run: pnpm run test
 
   docker:
