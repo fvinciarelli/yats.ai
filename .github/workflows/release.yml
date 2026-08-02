@@ -30,6 +30,8 @@ jobs:
         run: dotnet build packages/analyzers/analyzer-csharp/src/csharp-bridge/RoslynAnalyzer.csproj
       - name: Install Python deps (libcst for Python analyzer bridge)
         run: pip install libcst
+      - name: Build
+        run: pnpm build
       - run: pnpm run test
 
   docker:
