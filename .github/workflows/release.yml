@@ -100,7 +100,7 @@ jobs:
 
       - name: Publish to npm
         working-directory: packages/yats-toolkit
-        run: npm publish --provenance --access public
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
