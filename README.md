@@ -92,6 +92,7 @@ That's it. Ask your agent: *"How does authentication work in this project?"* and
 ```bash
 # CLI reference
 yats setup                        # One-time setup wizard
+yats setup --provider openai --api-key sk-... --yes  # Non-interactive
 yats index <path> [--skip-docs]  # Index a repository
 yats search <query>               # Search indexed code
 yats list                         # List indexed repositories
@@ -121,6 +122,25 @@ After `yats setup`, a `.env` file is created at `~/.yats/.env`. Edit it, then ru
 | `IGNORED_DIRS` | `node_modules,.git,dist,build,.next,__pycache__,...` | Directory names excluded from file walking |
 
 > 💡 Server-side, `DOC_EXTENSIONS` and `SKIP_EXTENSIONS` are also read by the YATS container. The defaults in `.env` are the fallback used when the container env vars are not set.
+
+### Non-interactive setup
+
+For CI/CD or scripts, pass options directly:
+
+```bash
+yats setup --provider openai --api-key $OPENAI_KEY --yes --no-docs
+```
+
+| Flag | Description |
+|---|---|
+| `--provider <name>` | `ollama`, `openai`, `mistral`, or `voyage` |
+| `--api-key <key>` | API key for the provider |
+| `--port <port>` | MCP server port (default: 5555) |
+| `--batch <size>` | Embedding batch size (provider-dependent default) |
+| `--no-docs` | Skip documentation indexing |
+| `--yes` | Skip confirmation prompt |
+
+> ⚠️ Non-interactive mode activates when both `--provider` and `--api-key` are provided. Missing values fall back to interactive prompts with pre-filled defaults from `.env`.
 
 ---
 
