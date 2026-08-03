@@ -23,9 +23,24 @@
 const cmd = process.argv[2] || "setup";
 const args = process.argv.slice(3);
 
+function parseFlags(arr) {
+  const flags = {};
+  for (let i = 0; i < arr.length; i++) {
+    const a = arr[i];
+    if (a === "--provider" && arr[i + 1]) flags.provider = arr[++i];
+    else if (a === "--api-key" && arr[i + 1]) flags.apiKey = arr[++i];
+    else if (a === "--port" && arr[i + 1]) flags.port = arr[++i];
+    else if (a === "--batch" && arr[i + 1]) flags.batch = arr[++i];
+    else if (a === "--no-docs") flags.noDocs = true;
+    else if (a === "--yes") flags.skipConfirm = true;
+  }
+  flags.nonInteractive = !!(flags.provider && flags.apiKey);
+  return flags;
+}
+
 switch (cmd) {
   case "setup":
-    import("../src/setup.js").then(m => m.default());
+    import("../src/setup.js").then(m => m.default(parseFlags(args)));
     break;
   case "index":
   case "add": {

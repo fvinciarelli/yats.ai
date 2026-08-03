@@ -9,9 +9,9 @@
  */
 
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 // ============================================================
@@ -373,7 +373,57 @@ async function waitForHealth(url, retries = 30, delay = 2000) {
 // Main
 // ============================================================
 
-async function main() {
+async function loadEnv() {
+  const env = {};
+  try {
+    const content = readFileSync(ENV_FILE, "utf-8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq === -1) continue;
+      env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+    }
+  } catch { /* no .env file yet */ }
+  return env;
+}
+
+async function testApiConnection(provider, apiKey) {
+  const endpoints = {
+    openai: { url: "https://api.openai.com/v1/embeddings", key: apiKey, body: { model: "text-embedding-3-small", input: ["test"] } },
+    mistral: { url: "https://api.mistral.ai/v1/embeddings", key: apiKey, body: { model: "mistral-embed", input: ["test"] } },
+    voyage: { url: "https://api.voyageai.com/v1/embeddings", key: apiKey, body: { model: "voyage-3-lite", input: ["test"] } },
+  };
+  const cfg = endpoints[provider];
+  if (!cfg) return { ok: false, error: "Unknown provider" };
+  try {
+    const res = await fetch(cfg.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.key}` },
+      body: JSON.stringify(cfg.body),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) return { ok: true };
+    const err = await res.text();
+    return { ok: false, error: `HTTP ${res.status}: ${err.slice(0, 200)}` };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function main(options = {}) {
+  // Load pre-filled values from .env (if exists) or CLI flags
+  const env = loadEnv();
+  const nonInteractive = options.nonInteractive || false;
+  const prefill = {
+    provider: options.provider || env.YATS_PROVIDER || null,
+    apiKey: options.apiKey || env.OPENAI_API_KEY || env.MISTRAL_API_KEY || env.VOYAGE_API_KEY || null,
+    port: options.port ? parseInt(options.port, 10) : null,
+    batch: options.batch ? parseInt(options.batch, 10) : null,
+    noDocs: options.noDocs || false,
+    skipConfirm: options.skipConfirm || false,
+  };
+
   header();
 
   // Check Docker
@@ -432,14 +482,19 @@ async function main() {
   }
 
   // Step 1: Embedding provider
-  step("Step 1 — Embedding provider");
-
-  const provider = await choose("How should I generate embeddings for your code?", [
-    { label: "Ollama (local, private, included) — recommended", value: "ollama" },
-    { label: "OpenAI (cloud, needs API key)", value: "openai" },
-    { label: "Mistral (cloud, needs API key)", value: "mistral" },
-    { label: "Voyage AI (cloud, optimized for code, needs API key)", value: "voyage" },
-  ]);
+  let provider;
+  if (nonInteractive && prefill.provider) {
+    provider = prefill.provider;
+    console.log(`  Provider: ${provider}`);
+  } else {
+    step("Step 1 — Embedding provider");
+    provider = await choose("How should I generate embeddings for your code?", [
+      { label: "Ollama (local, private, included) — recommended", value: "ollama" },
+      { label: "OpenAI (cloud, needs API key)", value: "openai" },
+      { label: "Mistral (cloud, needs API key)", value: "mistral" },
+      { label: "Voyage AI (cloud, optimized for code, needs API key)", value: "voyage" },
+    ]);
+  }
 
   let apiKey = "";
   let ollamaModel = "nomic-embed-text";
@@ -453,104 +508,152 @@ async function main() {
   } else {
     const providerNames = { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
     step(`Step 2 — ${providerNames[provider]} API key`);
-    const rl2 = createInterface({ input: process.stdin, output: process.stdout });
-    apiKey = await ask(rl2, `  ${B}Your ${providerNames[provider]} API key:${R} `);
-    rl2.close();
+
+    if (nonInteractive && prefill.apiKey) {
+      apiKey = prefill.apiKey;
+      console.log(`  API key: ${apiKey.slice(0, 8)}...`);
+    } else {
+      const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+      const defaultKey = prefill.apiKey || "";
+      const prompt = defaultKey
+        ? `  ${B}Your ${providerNames[provider]} API key${R} [${defaultKey.slice(0, 8)}...]: `
+        : `  ${B}Your ${providerNames[provider]} API key:${R} `;
+      apiKey = await ask(rl2, prompt);
+      if (!apiKey && defaultKey) apiKey = defaultKey;
+      rl2.close();
+    }
+
     console.log("");
     console.log(`  ${Y}⚠${R}  This is a paid service — you may be charged for API usage.`);
     console.log("");
+
+    // Optional: test connection
+    if (!nonInteractive) {
+      const rlTest = createInterface({ input: process.stdin, output: process.stdout });
+      const testAnswer = await ask(rlTest, `  ${B}Test connection? [Y/n]${R} `);
+      rlTest.close();
+      if (testAnswer.toLowerCase() !== "n") {
+        const sTest = spinner("Testing API connection...");
+        const result = await testApiConnection(provider, apiKey);
+        if (result.ok) {
+          sTest.done(true);
+          console.log("");
+        } else {
+          sTest.done(false);
+          console.log(`  ${RED}✗${R} Connection failed: ${result.error}`);
+          console.log(`  ${Y}⚠${R}  You can change the API key later in ${C}~/.yats/.env${R}`);
+          console.log("");
+          if (!nonInteractive) {
+            const rlRetry = createInterface({ input: process.stdin, output: process.stdout });
+            const retryAnswer = await ask(rlRetry, `  ${B}Re-enter API key? [Y/n]${R} `);
+            rlRetry.close();
+            if (retryAnswer.toLowerCase() !== "n") {
+              const rl2b = createInterface({ input: process.stdin, output: process.stdout });
+              apiKey = await ask(rl2b, `  ${B}Your ${providerNames[provider]} API key:${R} `);
+              rl2b.close();
+              console.log("");
+            }
+          }
+        }
+      } else {
+        console.log("");
+      }
+    }
     console.log("");
   }
 
   // Step 3: Embedding batch size
-  const BATCH_DEFAULTS = {
-    openai: 200,
-    mistral: 200,
-    voyage: 100,
-    ollama: 4,
-  };
-  const BATCH_MAX = {
-    openai: 2048,
-    mistral: 1024,
-    voyage: 128,
-    ollama: 4,
-  };
-  const defaultBatch = BATCH_DEFAULTS[provider];
+  const BATCH_DEFAULTS = { openai: 200, mistral: 200, voyage: 100, ollama: 4 };
+  const BATCH_MAX = { openai: 2048, mistral: 1024, voyage: 128, ollama: 4 };
+  const defaultBatch = prefill.batch || BATCH_DEFAULTS[provider];
   const maxBatch = BATCH_MAX[provider];
-
-  step(`Step 3 — Embedding batch size`);
-  console.log(`  ${D}How many texts to embed per API request.${R}`);
-  console.log(`  ${D}Higher = faster indexing, lower = safer for rate limits.${R}`);
-  console.log(`  ${D}Provider max: ${maxBatch}${R}`);
-  console.log("");
-
-  const rlBatch = createInterface({ input: process.stdin, output: process.stdout });
-  const batchAnswer = await ask(rlBatch, `  ${B}Batch size${R} [${defaultBatch}]: `);
-  rlBatch.close();
   let batchSize = defaultBatch;
-  const batchTrimmed = batchAnswer.trim();
-  if (batchTrimmed) {
-    const num = parseInt(batchTrimmed, 10);
-    if (num >= 1 && num <= maxBatch) {
-      batchSize = num;
-    } else {
-      console.log(`  ${Y}⚠${R}  Must be 1–${maxBatch}. Using default ${defaultBatch}.`);
+
+  if (nonInteractive) {
+    console.log(`  Batch size: ${batchSize}`);
+  } else {
+    step(`Step 3 — Embedding batch size`);
+    console.log(`  ${D}How many texts to embed per API request.${R}`);
+    console.log(`  ${D}Higher = faster indexing, lower = safer for rate limits.${R}`);
+    console.log(`  ${D}Provider max: ${maxBatch}${R}`);
+    console.log("");
+    const rlBatch = createInterface({ input: process.stdin, output: process.stdout });
+    const batchAnswer = await ask(rlBatch, `  ${B}Batch size${R} [${defaultBatch}]: `);
+    rlBatch.close();
+    const batchTrimmed = batchAnswer.trim();
+    if (batchTrimmed) {
+      const num = parseInt(batchTrimmed, 10);
+      if (num >= 1 && num <= maxBatch) batchSize = num;
+      else console.log(`  ${Y}⚠${R}  Must be 1–${maxBatch}. Using default ${defaultBatch}.`);
     }
+    console.log(`  ${G}✓${R} Batch size: ${batchSize}`);
+    console.log("");
   }
-  console.log(`  ${G}✓${R} Batch size: ${batchSize}`);
-  console.log("");
 
   // Step 4: Documentation indexing
   const docMaxFiles = 300;
-  let indexDocs = true;
+  let indexDocs = !prefill.noDocs;
 
-  step("Step 4 — Documentation indexing");
-  console.log(`  ${D}Index README, ARCHITECTURE, AI/ docs, and docs/ directory.${R}`);
-  console.log(`  ${D}Patterns (edit via DOC_PATTERNS env): AI/*.md, README.md, docs/${R}`);
-  console.log(`  ${D}If docs/ has >${docMaxFiles} .md files, you'll get a warning.${R}`);
-  console.log("");
-
-  const rlDocs = createInterface({ input: process.stdin, output: process.stdout });
-  const docsAnswer = await ask(rlDocs, `  ${B}Index documentation? [Y/n]${R} `);
-  rlDocs.close();
-  if (docsAnswer.toLowerCase() === "n") {
-    indexDocs = false;
-    console.log(`  ${Y}⚠${R}  Documentation indexing disabled. Set INDEX_DOCS=true to re-enable.`);
+  if (!nonInteractive) {
+    step("Step 4 — Documentation indexing");
+    console.log(`  ${D}Index README, ARCHITECTURE, AI/ docs, and docs/ directory.${R}`);
+    console.log(`  ${D}Patterns (edit via DOC_PATTERNS env): AI/*.md, README.md, docs/${R}`);
+    console.log(`  ${D}If docs/ has >${docMaxFiles} .md files, you'll get a warning.${R}`);
+    console.log("");
+    const rlDocs = createInterface({ input: process.stdin, output: process.stdout });
+    const docsAnswer = await ask(rlDocs, `  ${B}Index documentation? [Y/n]${R} `);
+    rlDocs.close();
+    if (docsAnswer.toLowerCase() === "n") {
+      indexDocs = false;
+      console.log(`  ${Y}⚠${R}  Documentation indexing disabled. Set INDEX_DOCS=true to re-enable.`);
+    } else {
+      console.log(`  ${G}✓${R}  Documentation will be indexed.`);
+    }
+    console.log("");
   } else {
-    console.log(`  ${G}✓${R}  Documentation will be indexed.`);
+    console.log(`  Index docs: ${indexDocs ? "Yes" : "No"}`);
   }
-  console.log("");
 
   // Optional: pre-index directories
-  step("Step 5 — Pre-index (optional)");
-  console.log(`  ${D}Indexing happens automatically on first search.${R}`);
-  console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
-  console.log("");
-  console.log(`  ${D}Tip: type a path or drag-n-drop a folder from your file manager.${R}`);
-
-  const rl3 = createInterface({ input: process.stdin, output: process.stdout });
   const pathsToIndex = [];
-  while (true) {
-    const p = await ask(rl3, `  ${B}Directory path (Enter to skip):${R} `);
-    const trimmed = p.trim();
-    if (!trimmed) break;
-    if (existsSync(trimmed)) {
-      pathsToIndex.push(trimmed);
-      console.log(`  ${G}✓${R} Added: ${trimmed}`);
-    } else {
-      console.log(`  ${RED}✗${R} Not found: ${trimmed}`);
+  if (!nonInteractive) {
+    step("Step 5 — Pre-index (optional)");
+    console.log(`  ${D}Indexing happens automatically on first search.${R}`);
+    console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
+    console.log("");
+    console.log(`  ${D}Tip: type a path or drag-n-drop a folder from your file manager.${R}`);
+    const rl3 = createInterface({ input: process.stdin, output: process.stdout });
+    while (true) {
+      const p = await ask(rl3, `  ${B}Directory path (Enter to skip):${R} `);
+      const trimmed = p.trim();
+      if (!trimmed) break;
+      const resolved = resolve(trimmed);
+      if (existsSync(resolved)) {
+        try {
+          if (statSync(resolved).isDirectory()) {
+            pathsToIndex.push(resolved);
+            console.log(`  ${G}✓${R} Added: ${resolved}`);
+          } else {
+            console.log(`  ${RED}✗${R} Not a directory: ${resolved}`);
+          }
+        } catch {
+          console.log(`  ${RED}✗${R} Cannot access: ${resolved}`);
+        }
+      } else {
+        console.log(`  ${RED}✗${R} Not found: ${resolved}`);
+      }
     }
+    rl3.close();
   }
-  rl3.close();
   console.log("");
 
   // Port selection
-  let mcpPort = 5555;
-  {
+  let mcpPort = prefill.port || 5555;
+  if (!nonInteractive) {
     const rlPort = createInterface({ input: process.stdin, output: process.stdout });
     const inUse = await checkPort(mcpPort);
-    const suggested = inUse ? 5556 : mcpPort;
-    const hint = inUse ? ` ${Y}(default 5555 is in use)${R}` : "";
+    const suggested = inUse ? (mcpPort + 1) : mcpPort;
+    const hint = inUse ? ` ${Y}(default ${mcpPort} is in use)${R}` : "";
     const answer = await ask(rlPort, `  ${B}MCP server port${R} [${suggested}]:${hint} `);
     const trimmed = answer.trim();
     if (trimmed) {
@@ -560,36 +663,36 @@ async function main() {
       mcpPort = suggested;
     }
     rlPort.close();
+    console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
+    console.log("");
   }
-  console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
-  console.log("");
 
-  // Step 5: Confirm
-  step(`Step ${pathsToIndex.length ? "6" : "5"} — Confirm`);
-  const providerName = provider === "ollama"
-    ? `Ollama (${ollamaModel})`
-    : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
-
-  box([
-    `${B}Provider:${R}     ${providerName}`,
-    `${B}Port:${R}         ${String(mcpPort)}`,
-    ...(pathsToIndex.length ? [`${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)")}`] : []),
-    `${B}Batch:${R}        ${String(batchSize)}`,
-    `${B}Index docs:${R}   ${indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No"}`,
-    `${B}API calls:${R}    ${provider === "ollama" ? "None (runs locally)" : `To ${provider} API`}`,
-    `${B}Disk needed:${R}  ${provider === "ollama" ? "~3GB" : "~1GB"}`,
-  ]);
-  console.log("");
-
-  const proceed = await (() => {
-    const rl4 = createInterface({ input: process.stdin, output: process.stdout });
-    return ask(rl4, `  ${B}Proceed? [Y/n]${R} `).then((a) => { rl4.close(); return a; });
-  })();
-  if (proceed.toLowerCase() === "n") {
+  // Confirm
+  if (!nonInteractive && !prefill.skipConfirm) {
+    step(`Step ${pathsToIndex.length ? "6" : "5"} — Confirm`);
+    const providerName = provider === "ollama"
+      ? `Ollama (${ollamaModel})`
+      : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
+    box([
+      `${B}Provider:${R}     ${providerName}`,
+      `${B}Port:${R}         ${String(mcpPort)}`,
+      ...(pathsToIndex.length ? [`${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)")}`] : []),
+      `${B}Batch:${R}        ${String(batchSize)}`,
+      `${B}Index docs:${R}   ${indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No"}`,
+      `${B}API calls:${R}    ${provider === "ollama" ? "None (runs locally)" : `To ${provider} API`}`,
+      `${B}Disk needed:${R}  ${provider === "ollama" ? "~3GB" : "~1GB"}`,
+    ]);
     console.log("");
-    console.log(`  Setup cancelled. Run ${B}npx yats-toolkit${R} anytime to try again.`);
-    console.log("");
-    process.exit(0);
+    const proceed = await (() => {
+      const rl4 = createInterface({ input: process.stdin, output: process.stdout });
+      return ask(rl4, `  ${B}Proceed? [Y/n]${R} `).then((a) => { rl4.close(); return a; });
+    })();
+    if (proceed.toLowerCase() === "n") {
+      console.log("");
+      console.log(`  Setup cancelled. Run ${B}npx yats-toolkit${R} anytime to try again.`);
+      console.log("");
+      process.exit(0);
+    }
   }
 
   // Install
@@ -668,9 +771,8 @@ async function main() {
   console.log(`  ✅  ${G}YATS is ready!${R}`);
   divider();
   console.log("");
-  console.log(`  ${B}MCP configuration for your AI agent:${R}`);
+  console.log(`  ${B}Next step — connect your AI agent:${R}`);
   console.log("");
-
   box([
     `${B}For Cursor, Zed, Cline, Continue.dev, Roo Code:${R}`,
     `{ "url": "http://localhost:${mcpPort}/mcp/sse" }`,
@@ -682,15 +784,14 @@ async function main() {
   console.log(`  Config saved to ${C}${MCP_CONFIG_FILE}${R}`);
   divider();
   console.log("");
-  console.log(`  ${B}How it works:${R}`);
+  console.log(`  ${B}Try it now:${R}`);
   console.log("");
-  console.log(`    Just ask your AI agent about your code.`);
-  console.log(`    The index builds automatically on the first search.`);
+  console.log(`    Open your project in your AI agent and ask:`);
+  console.log(`    ${C}"how does authentication work in this project?"${R}`);
   console.log("");
-  console.log(`    Example: "${D}how does authentication work in my project?${R}"`);
+  console.log(`    YATS will auto-index on the first search.`);
   console.log("");
   console.log(`  ${B}Commands:${R}`);
-  console.log(`    yats add ~/work/project    Add a repo to index`);
   console.log(`    yats status                Check what's indexed`);
   console.log(`    yats clear <repo>         Delete index by name`);
   console.log(`    yats remove <path>        Delete index by path`);
