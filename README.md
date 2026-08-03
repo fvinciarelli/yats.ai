@@ -77,7 +77,7 @@ The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/
 
 | Agent | Transport | Files to copy |
 |-------|-----------|---------------|
-| **Claude Code** | stdio bridge | [`SKILL.md`](./connect/claude/SKILL.md) → `.claude/skills/yats/` · [`mcp.json`](./connect/claude/mcp.json) → `.mcp.json` |
+| **Claude Code** | stdio bridge | [`yats/`](./connect/claude/yats/) → `.claude/skills/` · [`.mcp.json`](./connect/claude/.mcp.json) → `.mcp.json` |
 | **Gemini CLI** | stdio bridge | [`GEMINI.md`](./connect/gemini/GEMINI.md) → repo root · [`mcp.json`](./connect/gemini/mcp.json) → `.gemini/settings.json` |
 | **Copilot CLI** | stdio bridge | [`instructions.md`](./connect/copilot/instructions.md) → `.github/` · [`mcp.json`](./connect/copilot/mcp.json) → `.copilot/` |
 | **Codex CLI** | stdio bridge | [`AGENTS.md`](./connect/codex/AGENTS.md) → repo root · [`config.toml`](./connect/codex/config.toml) → `.codex/` |

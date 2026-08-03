@@ -4,15 +4,19 @@ Two files to place:
 
 ---
 
-## 1. `SKILL.md` — Agent behavior
+## 1. `yats/` folder — Agent skill
 
-**Copy to:** `.claude/skills/yats/SKILL.md` (in each repo you want YATS in)
+**Copy to:** `.claude/skills/` (in each repo you want YATS in)
+
+```bash
+cp -r connect/claude/yats .claude/skills/
+```
 
 Teaches Claude to use YATS MCP tools first, before reading files. The skill auto-loads when you ask code questions.
 
 ---
 
-## 2. `mcp.json` — Connection config
+## 2. `.mcp.json` — Connection config
 
 **Copy to:** `.mcp.json` (repo root) or `~/.claude.json` (global, all repos)
 

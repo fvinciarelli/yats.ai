@@ -293,7 +293,7 @@
 - **Protocol:** MCP JSON-RPC over stdin/stdout, forwarding to YATS via Streamable HTTP
 - **Features:** Auto-inject repository from `YATS_DEFAULT_REPO` or cwd basename, structuredContent for Gemini CLI, pending queue for async responses
 - **Usage:** `yats bridge [--port N] [--url http://...]`
-- **Agent configs:** Copilot (`type: local`, [`mcp.json`](../../connect/copilot/mcp.json)), Gemini ([`mcp.json`](../../connect/gemini/mcp.json)), Codex ([`config.toml`](../../connect/codex/config.toml)), Claude Desktop ([`mcp.json`](../../connect/claude/mcp.json))
+- **Agent configs:** Copilot (`type: local`, [`mcp.json`](../../connect/copilot/mcp.json)), Gemini ([`mcp.json`](../../connect/gemini/mcp.json)), Codex ([`config.toml`](../../connect/codex/config.toml)), Claude Desktop ([`.mcp.json`](../../connect/claude/.mcp.json))
 
 ### MCP Bridge HTTP (`adapters/mcp-openai-bridge.cjs`)
 - **Responsibility:** OpenAI-compatible HTTP proxy with MCP tool injection
