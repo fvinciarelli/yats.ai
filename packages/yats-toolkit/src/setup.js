@@ -408,6 +408,29 @@ async function main() {
     process.exit(0);
   }
 
+  // Check for existing stopped install (compose file exists but containers not running)
+  if (existsSync(COMPOSE_FILE)) {
+    console.log(`  ${Y}⚠${R}  Found existing YATS installation (containers not running).`);
+    console.log("");
+    const rlStopped = createInterface({ input: process.stdin, output: process.stdout });
+    const cleanAnswer = await ask(rlStopped, `  ${B}Start fresh (deletes all indexed data)? [y/N]${R} `);
+    rlStopped.close();
+    if (cleanAnswer.toLowerCase() === "y") {
+      console.log("");
+      const sClean = spinner("Cleaning up previous installation...");
+      try {
+        await runCmd("docker", ["compose", "-f", COMPOSE_FILE, "down", "-v"]);
+        sClean.done(true);
+      } catch {
+        sClean.done(false);
+      }
+    } else {
+      console.log("");
+      console.log(`  ${G}✓${R} Keeping existing data. Proceeding with reconfiguration.`);
+    }
+    console.log("");
+  }
+
   // Step 1: Embedding provider
   step("Step 1 — Embedding provider");
 
