@@ -192,9 +192,9 @@ Same questions. Same repos. Fresh sessions. Every token counted.
 
 | Agent | Repo indexed | Language | Without YATS | With YATS | You save |
 |---|---|---|---|---|---|
-| Codex | lab_hub (API backend) | Go | 100,000 tokens | 27,000 tokens | **73%** |
-| Copilot | lab_hub (API backend) | Go | 1.19 credits | 0.40 credits | **66%** |
-| Claude | lab_hub (API backend) | Go | 862k tokens · $0.21 | 541k tokens · $0.11 | **37%** tokens · **49%** cost |
+| Codex | [hub-lab](https://github.com/fvinciarelli/hub-lab) (API backend) | Go | 100,000 tokens | 27,000 tokens | **73%** |
+| Copilot | [hub-lab](https://github.com/fvinciarelli/hub-lab) (API backend) | Go | 1.19 credits | 0.40 credits | **66%** |
+| Claude | [hub-lab](https://github.com/fvinciarelli/hub-lab) (API backend) | Go | 862k tokens · $0.21 | 541k tokens · $0.11 | **37%** tokens · **49%** cost |
 | Gemini | Django (web framework) | Python | 115,122 tokens | 63,851 tokens | **45%** |
 
 Run `yats benchmark` and get your own row in this table.
