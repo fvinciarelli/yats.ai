@@ -949,7 +949,12 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if (!repoName) return { content: [{ type: "text", text: "Error: 'repository' is required" }], isError: true };
 
     try {
-      await deps.indexer.indexFile(repoName, filePath);
+      const result = await deps.indexer.indexFile(repoName, filePath);
+      if (result.status === "skipped") {
+        return {
+          content: [{ type: "text", text: `⚠️ File "${filePath}" skipped: ${result.reason || "unsupported"}.` }],
+        };
+      }
       return {
         content: [{ type: "text", text: `✅ File "${filePath}" re-indexed successfully in repository "${repoName}".` }],
       };

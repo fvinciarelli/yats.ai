@@ -559,7 +559,7 @@ export class IndexerService implements Indexer {
   async indexFile(
     repositoryName: string,
     filePath: string,
-  ): Promise<void> {
+  ): Promise<{ status: "indexed" | "skipped"; reason?: string }> {
     const content = await this.deps.fileSystem.readFile(filePath);
     return this.indexFileContent(repositoryName, filePath, content);
   }
@@ -568,12 +568,25 @@ export class IndexerService implements Indexer {
     repositoryName: string,
     filePath: string,
     content: string,
-  ): Promise<void> {
+  ): Promise<{ status: "indexed" | "skipped"; reason?: string }> {
+    // Route documentation files to the doc pipeline
+    if (this.isDocumentationFile(filePath)) {
+      const count = await this.indexDocFileContent(filePath, repositoryName, content);
+      if (count > 0) {
+        return { status: "indexed" };
+      }
+      return { status: "skipped", reason: "no sections found in doc" };
+    }
+
     const language = detectLanguage(filePath, content);
-    if (!language) return;
+    if (!language) {
+      return { status: "skipped", reason: "unsupported language" };
+    }
 
     const analyzer = this.deps.analyzerFactory.getAnalyzer(language);
-    if (!analyzer) return;
+    if (!analyzer) {
+      return { status: "skipped", reason: `no analyzer for ${language}` };
+    }
 
     const result = await analyzer.analyze(filePath, content, repositoryName);
 
@@ -613,6 +626,8 @@ export class IndexerService implements Indexer {
         })),
       );
     }
+
+    return { status: "indexed" };
   }
 
   // ============================================================
@@ -746,6 +761,17 @@ export class IndexerService implements Indexer {
     repoName: string,
   ): Promise<number> {
     const content = await this.deps.fileSystem.readFile(filePath);
+    return this.indexDocFileContent(filePath, repoName, content);
+  }
+
+  /**
+   * Index a documentation file from in-memory content (used by per-file indexing).
+   */
+  private async indexDocFileContent(
+    filePath: string,
+    repoName: string,
+    content: string,
+  ): Promise<number> {
     const sections = this.parseMarkdownSections(content, filePath);
 
     if (sections.length === 0) return 0;
@@ -811,6 +837,16 @@ export class IndexerService implements Indexer {
     }
 
     return sections;
+  }
+
+  /**
+   * Check if a file is a documentation file based on DOC_EXTENSIONS env var.
+   */
+  private isDocumentationFile(filePath: string): boolean {
+    const docExtensions = (process.env.DOC_EXTENSIONS || ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme")
+      .split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    const lower = filePath.toLowerCase();
+    return docExtensions.some(ext => lower.endsWith(ext));
   }
 
   private buildEmbeddingText(symbol: Symbol): string {

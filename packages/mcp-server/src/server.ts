@@ -498,9 +498,9 @@ export class McpServer {
         res.end(JSON.stringify({ error: "repoName/repository, filePath/path, and content are required" }));
         return;
       }
-      await this.indexer.indexFileContent(repoName, filePath, content);
+      const result = await this.indexer.indexFileContent(repoName, filePath, content);
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, file: filePath }));
+      res.end(JSON.stringify({ ok: true, status: result.status, reason: result.reason, file: filePath }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));

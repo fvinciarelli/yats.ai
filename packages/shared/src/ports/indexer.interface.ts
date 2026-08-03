@@ -20,8 +20,8 @@ export interface IndexResult {
 
 export interface Indexer {
   indexRepository(repositoryPath: string, options?: { skipDocs?: boolean }): Promise<IndexResult>;
-  indexFile(repositoryName: string, filePath: string): Promise<void>;
-  indexFileContent(repositoryName: string, filePath: string, content: string): Promise<void>;
+  indexFile(repositoryName: string, filePath: string): Promise<{ status: "indexed" | "skipped"; reason?: string }>;
+  indexFileContent(repositoryName: string, filePath: string, content: string): Promise<{ status: "indexed" | "skipped"; reason?: string }>;
   removeFile(repositoryName: string, filePath: string): Promise<{ removed: number }>;
   incrementalIndex(repositoryPath: string, sinceCommit: string): Promise<IndexResult>;
   indexDocumentation(repositoryPath: string): Promise<number>;
