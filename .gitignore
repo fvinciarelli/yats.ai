@@ -28,6 +28,7 @@ artifacts/
 
 obj/
 bin/
+!packages/yats-toolkit/bin/
 .plans
 !.plans/benchmark/
 AGENTS.md

@@ -670,7 +670,9 @@ async function main() {
   console.log(`    yats add ~/work/project    Add a repo to index`);
   console.log(`    yats status                Check what's indexed`);
   console.log(`    yats stop                  Stop all services`);
-  console.log(`    yats update                Update to latest version`);
+  console.log(`    yats start                 Start all services`);
+  console.log(`    yats update                Update CLI to latest`);
+  console.log(`    yats update-base           Update Docker images`);
   console.log("");
   console.log(`  Docs: ${C}https://yats.site${R}`);
   console.log("");

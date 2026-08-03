@@ -69,6 +69,24 @@ The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/
 
 **That's it. No other dependencies.** YATS pulls a Docker image with Neo4j, Qdrant, and the MCP server — everything runs in containers. No Python, no Java, no .NET SDK to install. Just Docker.
 
+---
+
+## Connect your AI agent
+
+👉 **Go to [`connect/`](./connect/)** — pick your agent, copy two files into your repo, done.
+
+| Agent | Transport | Files to copy |
+|-------|-----------|---------------|
+| **Claude Code** | stdio bridge | [`yats/`](./connect/claude/yats/) → `.claude/skills/` · [`.mcp.json`](./connect/claude/.mcp.json) → `.mcp.json` |
+| **Gemini CLI** | stdio bridge | [`GEMINI.md`](./connect/gemini/GEMINI.md) → repo root · [`mcp.json`](./connect/gemini/mcp.json) → `.gemini/settings.json` |
+| **Copilot CLI** | stdio bridge | [`instructions.md`](./connect/copilot/instructions.md) → `.github/` · [`mcp.json`](./connect/copilot/mcp.json) → `.copilot/` |
+| **Codex CLI** | stdio bridge | [`AGENTS.md`](./connect/codex/AGENTS.md) → repo root · [`config.toml`](./connect/codex/config.toml) → `.codex/` |
+| **Cursor** | HTTP | [`rules.mdc`](./connect/cursor/rules.mdc) → `.cursor/rules/` · [`mcp.json`](./connect/cursor/mcp.json) → `.cursor/` |
+
+Each agent folder has a **README** explaining what each file does and exactly where to place it.
+
+That's it. Ask your agent: *"How does authentication work in this project?"* and YATS answers from the knowledge graph.
+
 → **[Website & full docs](https://fvinciarelli.github.io/yats.ai/)**
 
 ```bash
@@ -81,10 +99,27 @@ yats summary <repo>               # Show symbol/relationship counts
 yats clear <repo>                 # Delete indexed data (needs confirmation)
 yats status                       # Check what's indexed and running
 yats stop                         # Stop all services
+yats start                        # Start services (after stop)
+yats update                       # Update CLI to latest version
+yats update-base                  # Update Docker images
 yats bridge                       # MCP stdio ↔ HTTP proxy (for CLI-only agents)
 yats benchmark                    # AI agent token comparison
 yats watch <path>                 # Auto-reindex on file changes
 ```
+
+---
+
+## Configuration
+
+After `yats setup`, a `.env` file is created at `~/.yats/.env`. Edit it, then run `yats stop && yats start` to apply changes.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DOC_EXTENSIONS` | `.md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme` | File extensions indexed as documentation |
+| `SKIP_EXTENSIONS` | `.exe,.dll,.so,.o,.a,.bin,.zip,.tar,.gz,.bz2,...` | File extensions excluded from indexing (binary, media, archives, etc.) |
+| `IGNORED_DIRS` | `node_modules,.git,dist,build,.next,__pycache__,...` | Directory names excluded from file walking |
+
+> 💡 Server-side, `DOC_EXTENSIONS` and `SKIP_EXTENSIONS` are also read by the YATS container. The defaults in `.env` are the fallback used when the container env vars are not set.
 
 ---
 
