@@ -8,7 +8,8 @@
  *   yats search <query>     # Search indexed code
  *   yats list               # List indexed repositories
  *   yats summary <repo>     # Show repository summary
- *   yats clear <repo>       # Delete indexed data
+ *   yats clear <repo>       # Delete indexed data by name
+ *   yats remove <path>      # Delete indexed data by path
  *   yats status             # Check indexed repos
  *   yats stop               # Stop all YATS services
  *   yats start              # Start YATS services
@@ -44,6 +45,9 @@ switch (cmd) {
     break;
   case "clear":
     import("../src/clear.js").then(m => m.default(args));
+    break;
+  case "remove":
+    import("../src/remove.js").then(m => m.default(args));
     break;
   case "status":
     import("../src/status.js").then(m => m.default());
@@ -87,7 +91,8 @@ switch (cmd) {
     console.log(`  yats search <query>     Search indexed code`);
     console.log(`  yats list               List indexed repositories`);
     console.log(`  yats summary <repo>     Show repository summary`);
-    console.log(`  yats clear <repo>       Delete indexed data`);
+    console.log(`  yats clear <repo>       Delete indexed data by name`);
+    console.log(`  yats remove <path>      Delete indexed data by path`);
     console.log(`  yats status             Check indexed repos`);
     console.log(`  yats stop               Stop YATS services`);
     console.log(`  yats start              Start YATS services`);

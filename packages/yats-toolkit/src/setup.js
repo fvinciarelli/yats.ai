@@ -669,6 +669,8 @@ async function main() {
   console.log(`  ${B}Commands:${R}`);
   console.log(`    yats add ~/work/project    Add a repo to index`);
   console.log(`    yats status                Check what's indexed`);
+  console.log(`    yats clear <repo>         Delete index by name`);
+  console.log(`    yats remove <path>        Delete index by path`);
   console.log(`    yats stop                  Stop all services`);
   console.log(`    yats start                 Start all services`);
   console.log(`    yats update                Update CLI to latest`);

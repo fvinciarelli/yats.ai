@@ -96,7 +96,8 @@ yats index <path> [--skip-docs]  # Index a repository
 yats search <query>               # Search indexed code
 yats list                         # List indexed repositories
 yats summary <repo>               # Show symbol/relationship counts
-yats clear <repo>                 # Delete indexed data (needs confirmation)
+yats clear <repo>                 # Delete indexed data by name
+yats remove <path>                # Delete indexed data by path
 yats status                       # Check what's indexed and running
 yats stop                         # Stop all services
 yats start                        # Start services (after stop)
