@@ -18,6 +18,7 @@
  *   yats bridge             # MCP stdio ↔ HTTP proxy (for Copilot, Claude)
  *   yats benchmark          # AI agent token comparison
  *   yats watch <path>       # Watch a repo and keep the index live
+ *   yats connect [agent]    # Show or install agent config
  */
 
 const cmd = process.argv[2] || "setup";
@@ -88,6 +89,9 @@ switch (cmd) {
   case "watch":
     import("../src/watch.js");
     break;
+  case "connect":
+    import("../src/connect.js").then(m => m.default(args));
+    break;
   case "--version":
   case "-v":
     try {
@@ -116,5 +120,6 @@ switch (cmd) {
     console.log(`  yats bridge             Stdio proxy for Copilot/Claude`);
     console.log(`  yats benchmark          AI agent token comparison`);
     console.log(`  yats watch <path>       Keep index in sync with live edits`);
+    console.log(`  yats connect [agent]    Show agent setup config`);
     break;
 }

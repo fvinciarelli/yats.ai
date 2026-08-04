@@ -799,6 +799,7 @@ async function main(options = {}) {
   console.log(`    yats start                 Start all services`);
   console.log(`    yats update                Update CLI to latest`);
   console.log(`    yats update-base           Update Docker images`);
+  console.log(`    yats connect               Set up your AI agent`);
   console.log("");
   console.log(`  Docs: ${C}https://yats.site${R}`);
   console.log("");

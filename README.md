@@ -104,6 +104,8 @@ yats stop                         # Stop all services
 yats start                        # Start services (after stop)
 yats update                       # Update CLI to latest version
 yats update-base                  # Update Docker images
+yats connect [agent]              # Show agent setup config
+yats connect --install <agent>    # Auto-place config files
 yats bridge                       # MCP stdio ↔ HTTP proxy (for CLI-only agents)
 yats benchmark                    # AI agent token comparison
 yats watch <path>                 # Auto-reindex on file changes
