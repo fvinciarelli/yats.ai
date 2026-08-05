@@ -154,6 +154,7 @@ function pad(s) {
 /** Center text within width, preserving ANSI codes */
 function center(text, width = W) {
   const vlen = visibleLen(text);
+  if (vlen >= width) return text;
   const left = Math.floor((width - vlen) / 2);
   const right = width - vlen - left;
   return " ".repeat(left) + text + " ".repeat(right);
@@ -835,7 +836,7 @@ async function main(options = {}) {
     `{ "command": "npx", "args": ["yats-bridge"] }`,
     "",
     `${D}For more: yats connect${R}`,
-    `${C}https://github.com/fvinciarelli/yats.ai/tree/master/connect${R}`,
+    `${C}github.com/fvinciarelli/yats.ai/connect${R}`,
   ]);
   console.log("");
   console.log(`  ${B}Try:${R} ${C}"how does auth work in this project?"${R}`);
