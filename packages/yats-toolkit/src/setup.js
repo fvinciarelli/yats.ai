@@ -9,8 +9,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdirSync, existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, statSync, chmodSync } from "node:fs";
+import { homedir, platform } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -29,6 +29,7 @@ const YATS_DIR = join(homedir(), ".yats");
 const REPOS_DIR = join(YATS_DIR, "repos");
 const COMPOSE_FILE = join(YATS_DIR, "docker-compose.yml");
 const MCP_CONFIG_FILE = join(YATS_DIR, "mcp-config.json");
+const YATS_BIN_DIR = join(YATS_DIR, "bin");
 
 const GITHUB_COMPOSE_URL =
   "https://raw.githubusercontent.com/fvinciarelli/yats.ai/main/docker/docker-compose.yml";
@@ -766,42 +767,83 @@ async function main(options = {}) {
     }
   }
 
+  // Install YATS CLI globally (or to ~/.yats/bin if global fails)
+  const sCli = spinner("Installing YATS CLI...");
+  try {
+    const osPlatform = platform();
+    mkdirSync(YATS_BIN_DIR, { recursive: true });
+
+    if (osPlatform === "win32") {
+      // Windows: create a .cmd wrapper
+      const cmdScript = `@echo off\r\nnpx yats %*\r\n`;
+      writeFileSync(join(YATS_BIN_DIR, "yats.cmd"), cmdScript);
+    } else {
+      // Linux/macOS: create a shell wrapper
+      const shScript = `#!/usr/bin/env bash\nnpx yats "$@"\n`;
+      writeFileSync(join(YATS_BIN_DIR, "yats"), shScript);
+      chmodSync(join(YATS_BIN_DIR, "yats"), 0o755);
+    }
+    sCli.done(true);
+
+    // Add to PATH
+    const rcFiles = [];
+    if (osPlatform !== "win32") {
+      // Try .bashrc and .zshrc
+      const bashrc = join(homedir(), ".bashrc");
+      const zshrc = join(homedir(), ".zshrc");
+      if (existsSync(bashrc)) rcFiles.push(bashrc);
+      if (existsSync(zshrc)) rcFiles.push(zshrc);
+      if (rcFiles.length === 0) rcFiles.push(bashrc); // if neither exists, create .bashrc
+
+      const exportLine = `\nexport PATH="$HOME/.yats/bin:$PATH"  # YATS CLI\n`;
+      for (const rc of rcFiles) {
+        const content = existsSync(rc) ? readFileSync(rc, "utf-8") : "";
+        if (!content.includes(".yats/bin")) {
+          writeFileSync(rc, content + exportLine);
+        }
+      }
+    } else {
+      // Windows: use setx (no visual feedback needed for the spinner)
+      // setx is best-effort; user may need admin
+      try {
+        await runCmd("setx", ["PATH", `${YATS_BIN_DIR};%PATH%`]);
+      } catch {}
+    }
+
+    console.log(`  ${G}✓${R} CLI installed to ${C}${YATS_BIN_DIR}${R}`);
+    if (osPlatform !== "win32") {
+      const names = rcFiles.map(f => f.split("/").pop()).join(" and ");
+      console.log(`  ${Y}⚠${R}  Added ${C}~/.yats/bin${R} to your ${C}${names}${R}`);
+      console.log(`  ${Y}⚠${R}  Run ${B}source ${names.includes("zshrc") ? "~/.zshrc" : "~/.bashrc"}${R} or restart your terminal`);
+      console.log(`  ${Y}⚠${R}  for the ${B}yats${R} command to be available.`);
+    }
+  } catch (e) {
+    sCli.done(false);
+  }
+
   // Done
   console.log("");
-  console.log(`  ✅  ${G}YATS is ready!${R}`);
-  divider();
+  console.log(`  ✅  ${G}YATS is ready!${R}  →  ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
   console.log("");
-  console.log(`  ${B}Next step — connect your AI agent:${R}`);
+  console.log(`  Config saved to ${C}~/.yats/.env${R}`);
   console.log("");
   box([
-    `${B}For Cursor, Zed, Cline, Continue.dev, Roo Code:${R}`,
+    `${B}Copy this URL into your AI agent:${R}`,
     `{ "url": "http://localhost:${mcpPort}/mcp/sse" }`,
     "",
-    `${B}For Copilot, Claude Desktop (stdio only):${R}`,
+    `${B}Copilot / Claude Desktop:${R}`,
     `{ "command": "npx", "args": ["yats-bridge"] }`,
+    "",
+    `${D}For more: yats connect${R}`,
+    `${C}https://github.com/fvinciarelli/yats.ai/tree/master/connect${R}`,
   ]);
   console.log("");
-  console.log(`  Config saved to ${C}${MCP_CONFIG_FILE}${R}`);
-  divider();
+  console.log(`  ${B}Try:${R} ${C}"how does auth work in this project?"${R}`);
   console.log("");
-  console.log(`  ${B}Try it now:${R}`);
+  console.log(`  ${B}Commands:${R}  yats status | yats clear | yats stop/start`);
+  console.log(`             yats update | yats connect`);
   console.log("");
-  console.log(`    Open your project in your AI agent and ask:`);
-  console.log(`    ${C}"how does authentication work in this project?"${R}`);
-  console.log("");
-  console.log(`    YATS will auto-index on the first search.`);
-  console.log("");
-  console.log(`  ${B}Commands:${R}`);
-  console.log(`    yats status                Check what's indexed`);
-  console.log(`    yats clear <repo>         Delete index by name`);
-  console.log(`    yats remove <path>        Delete index by path`);
-  console.log(`    yats stop                  Stop all services`);
-  console.log(`    yats start                 Start all services`);
-  console.log(`    yats update                Update CLI to latest`);
-  console.log(`    yats update-base           Update Docker images`);
-  console.log(`    yats connect               Set up your AI agent`);
-  console.log("");
-  console.log(`  Docs: ${C}https://yats.site${R}`);
+  console.log(`  Docs:  ${C}https://fvinciarelli.github.io/yats.ai/${R}  ·  ${C}https://yats.site${R}`);
   console.log("");
 }
 export default main;
