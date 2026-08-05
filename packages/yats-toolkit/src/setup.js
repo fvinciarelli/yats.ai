@@ -776,11 +776,11 @@ async function main(options = {}) {
 
     if (osPlatform === "win32") {
       // Windows: create a .cmd wrapper
-      const cmdScript = `@echo off\r\nnpx yats %*\r\n`;
+      const cmdScript = `@echo off\r\nnpx yats-toolkit %*\r\n`;
       writeFileSync(join(YATS_BIN_DIR, "yats.cmd"), cmdScript);
     } else {
       // Linux/macOS: create a shell wrapper
-      const shScript = `#!/usr/bin/env bash\nnpx yats "$@"\n`;
+      const shScript = `#!/usr/bin/env bash\nnpx yats-toolkit "$@"\n`;
       writeFileSync(join(YATS_BIN_DIR, "yats"), shScript);
       chmodSync(join(YATS_BIN_DIR, "yats"), 0o755);
     }
