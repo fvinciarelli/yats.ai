@@ -280,9 +280,9 @@ packages/
 | Team size | Annual license | |
 |---|---|---|
 | < 25 developers | **Free** | |
-| 25 – 74 developers | €150/year | [Buy license](https://buy.stripe.com/test_00w14m1SV52v1cmaTJ1Nu00) |
-| 75 – 199 developers | €350/year | [Buy license](https://buy.stripe.com/test_14A14mcxz8eH4oy7Hx1Nu01) |
-| 200 – 499 developers | €600/year | [Buy license](https://buy.stripe.com/test_3cIdR8aprbqT7AK9PF1Nu02) |
+| 25 – 74 developers | €150/year | [Buy license](https://buy.stripe.com/00w14m1SV52v1cmaTJ1Nu00) |
+| 75 – 199 developers | €350/year | [Buy license](https://buy.stripe.com/14A14mcxz8eH4oy7Hx1Nu01) |
+| 200 – 499 developers | €600/year | [Buy license](https://buy.stripe.com/3cIdR8aprbqT7AK9PF1Nu02) |
 | 500+ developers | [Contact us](mailto:vinciarellifranco@gmail.com) | |
 
 Annual subscription with auto-renewal. Cancel anytime. · [Full license terms](LICENSE)
