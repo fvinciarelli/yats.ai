@@ -2,13 +2,16 @@
  * yats benchmark — AI agent token comparison
  * Measures token usage answering codebase questions with and without YATS.
  * Uses only Node.js built-ins (zero dependencies).
+ *
+ * Interactive UI: arrow-key selection + colors when run in a TTY.
+ * Falls back to plain numbered prompts when stdin is piped (scriptable).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, execSync } from "node:child_process";
 import * as readline from "node:readline";
+import { fileURLToPath } from "node:url";
 
-// Simple inline logger (replaces @yats/shared dependency)
 const logger = {
   info: (msg) => console.error(`[benchmark] ${msg}`),
   warn: (msg) => console.error(`[benchmark] ⚠ ${msg}`),
@@ -16,77 +19,285 @@ const logger = {
 };
 
 // ============================================================
-// Types (JSDoc for clarity, no TypeScript needed)
+// Terminal UI (colors + arrow-key selection)
 // ============================================================
 
-/**
- * @typedef {Object} AgentConfig
- * @property {string} name
- * @property {string} cli
- * @property {string} checkCmd
- * @property {string} installHint
- * @property {string} needsApiKey
- * @property {boolean} needsSkill
- * @property {boolean} needsMcpConfig
- * @property {(prompt: string, repoDir: string, hasMcp: boolean) => string[]} runCmd
- */
+const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
-/**
- * @typedef {Object} RepoConfig
- * @property {string} name
- * @property {string} url
- * @property {string} defaultPath
- * @property {string} language
- * @property {string[]} questions
- */
+const A = isTTY
+  ? {
+      reset: "\x1b[0m",
+      bold: "\x1b[1m",
+      dim: "\x1b[2m",
+      purple: "\x1b[35m",
+      cyan: "\x1b[36m",
+      green: "\x1b[32m",
+      red: "\x1b[31m",
+      yellow: "\x1b[33m",
+      gray: "\x1b[90m",
+    }
+  : {
+      reset: "", bold: "", dim: "", purple: "", cyan: "",
+      green: "", red: "", yellow: "", gray: "",
+    };
 
-/**
- * @typedef {Object} RunResult
- * @property {number} run
- * @property {boolean} withYats
- * @property {number} tokens
- * @property {number} cost
- * @property {number} outputTokens
- * @property {number} cacheRead
- * @property {number} cacheWrite
- * @property {Record<string, number>} toolCalls
- * @property {number} agentSpawns
- * @property {number} fileReads
- * @property {number} bashCmds
- * @property {number} yatsQueries
- * @property {number} contentChars
- * @property {number} duration
- * @property {string} [error]
- * @property {string} logFile
- */
+function setRaw(on) {
+  if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+    process.stdin.setRawMode(on);
+  }
+}
+
+function showCursor(on) {
+  if (isTTY) process.stdout.write(on ? "\x1b[?25h" : "\x1b[?25l");
+}
+
+function restoreTerminal() {
+  setRaw(false);
+  showCursor(true);
+}
+
+process.on("SIGINT", () => {
+  restoreTerminal();
+  console.log(`\n  ${A.yellow}✖ Cancelled${A.reset}\n`);
+  process.exit(130);
+});
+
+// Reads a single key (raw mode). Returns "up" | "down" | "enter" | "backspace" | "ctrl-c" | "esc" | a character.
+function readKey() {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    let acc = "";
+    const done = (k) => {
+      stdin.removeListener("data", onData);
+      resolve(k);
+    };
+    const onData = (chunk) => {
+      acc += chunk;
+      if (acc.length === 1 && acc !== "\x1b") {
+        const ch = acc;
+        if (ch === "\r" || ch === "\n") done("enter");
+        else if (ch === "\x03") done("ctrl-c");
+        else if (ch === "\x7f" || ch === "\b") done("backspace");
+        else done(ch);
+        return;
+      }
+      if (acc.startsWith("\x1b")) {
+        if (acc.length >= 3) {
+          if (acc === "\x1b[A") done("up");
+          else if (acc === "\x1b[B") done("down");
+          else done("esc");
+        }
+        // else wait for more bytes of the escape sequence
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+// Non-TTY line input (piped stdin) via a readline interface + queue.
+const rl = !isTTY ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null;
+const lineQueue = [];
+const lineWaiters = [];
+if (rl) {
+  rl.on("line", (line) => {
+    if (lineWaiters.length) lineWaiters.shift()(line);
+    else lineQueue.push(line);
+  });
+  rl.on("close", () => {
+    while (lineWaiters.length) lineWaiters.shift()("");
+  });
+}
+
+// Ask for a free-text line. Works in TTY (raw line editing) and piped stdin.
+async function askLine(question) {
+  process.stdout.write(question);
+  if (!isTTY) {
+    return new Promise((resolve) => {
+      if (lineQueue.length) resolve(lineQueue.shift());
+      else lineWaiters.push(resolve);
+    });
+  }
+  setRaw(true);
+  let line = "";
+  while (true) {
+    const key = await readKey();
+    if (key === "enter") {
+      process.stdout.write("\n");
+      setRaw(false);
+      return line;
+    }
+    if (key === "ctrl-c") {
+      restoreTerminal();
+      console.log(`\n  ${A.yellow}✖ Cancelled${A.reset}\n`);
+      process.exit(130);
+    }
+    if (key === "backspace") {
+      if (line.length) {
+        line = line.slice(0, -1);
+        process.stdout.write("\b \b");
+      }
+    } else if (typeof key === "string" && key.length === 1 && key >= " ") {
+      line += key;
+      process.stdout.write(key);
+    }
+  }
+}
+
+// Interactive selector. options: [{ label, hint, value, ok?, accent? }]
+async function select(title, options) {
+  if (!isTTY) {
+    console.log(`\n  ${title}`);
+    options.forEach((o, i) => {
+      console.log(`    ${i + 1}. ${o.label}${o.hint ? ` (${o.hint})` : ""}`);
+    });
+    const choice = await askLine(`  Pick [1-${options.length}]: `);
+    const idx = parseInt(choice) - 1;
+    return idx >= 0 && idx < options.length ? options[idx].value : options[0].value;
+  }
+
+  let idx = 0;
+  const draw = () => {
+    let s = `  ${A.bold}${A.purple}${title}${A.reset}\n`;
+    for (let i = 0; i < options.length; i++) {
+      const o = options[i];
+      const sel = i === idx;
+      const cursor = sel ? `${A.purple}›${A.reset}` : " ";
+      let label = o.label;
+      if (sel) label = `${A.bold}${label}${A.reset}`;
+      if (!sel && o.accent) label = `${A.cyan}${label}${A.reset}`;
+      if (sel && o.accent) label = `${A.bold}${A.cyan}${label}${A.reset}`;
+      let hint = "";
+      if (o.hint) {
+        const color = o.ok === false ? A.red : A.gray;
+        hint = `  ${A.dim}${color}${o.hint}${A.reset}`;
+      }
+      s += `  ${cursor} ${label}${hint}\n`;
+    }
+    s += `\n  ${A.dim}↑/↓ move · Enter select · Ctrl+C cancel${A.reset}\n`;
+    return s;
+  };
+
+  const lineCount = options.length + 3; // title + options + blank + footer
+  setRaw(true);
+  showCursor(false);
+  process.stdout.write("\n" + draw());
+
+  while (true) {
+    const key = await readKey();
+    if (key === "up") idx = (idx - 1 + options.length) % options.length;
+    else if (key === "down") idx = (idx + 1) % options.length;
+    else if (key === "enter") break;
+    else if (key === "ctrl-c") {
+      restoreTerminal();
+      console.log(`\n  ${A.yellow}✖ Cancelled${A.reset}\n`);
+      process.exit(130);
+    } else {
+      continue;
+    }
+    process.stdout.write(`\x1b[${lineCount}A\x1b[J`);
+    process.stdout.write(draw());
+  }
+
+  setRaw(false);
+  showCursor(true);
+  process.stdout.write("\n");
+  return options[idx].value;
+}
 
 // ============================================================
-// Configuration
+// Helpers
 // ============================================================
 
-const KNOWN_REPOS = [
-  {
-    name: "fastapi",
-    url: "https://github.com/tiangolo/fastapi.git",
-    defaultPath: path.join(process.env.HOME ?? "/tmp", "repos", "fastapi"),
-    language: "python",
-    questions: [
-      "How does middleware work in FastAPI? Trace registration, ordering, and execution of the middleware stack.",
-      "How are HTTP routes registered and dispatched in FastAPI? Find the key classes responsible for routing.",
-    ],
-  },
+function isInstalled(cmd) {
+  try {
+    execSync(`which ${cmd}`, { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasApiKey(envVar) {
+  return !envVar || !!process.env[envVar];
+}
+
+function toAbsolute(p) {
+  let s = String(p).trim();
+  if (s === "~") s = process.env.HOME ?? "/tmp";
+  else if (s.startsWith("~/")) s = path.join(process.env.HOME ?? "/tmp", s.slice(2));
+  return path.resolve(s);
+}
+
+let selectedModel = null;
+let workDir = path.join(process.cwd(), "repos");
+
+// ============================================================
+// Repos — loaded dynamically from benchmark/targets + benchmark/questions
+// ============================================================
+
+const BENCH_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "benchmark");
+
+// Private/unknown repos (the LLM has never seen them) — the real proof.
+const UNKNOWN_REPOS = [
   {
     name: "lab_hub",
-    url: "https://github.com/fvinciarelli/lab_hub.git",
-    defaultPath: path.join(process.env.HOME ?? "/tmp", "repos", "lab_hub"),
+    url: "https://github.com/fvinciarelli/hub-lab.git",
     language: "go",
-    questions: [
-      "How does Hub Lab translate analyzer protocols? What are the key Go packages and functions?",
-      "How does the bidirectional flow work in Hub Lab? Trace orders and results paths.",
-    ],
+    known: false,
   },
 ];
 
+function loadQuestions(lang, repo) {
+  const dir = path.join(BENCH_DIR, "questions", lang, repo);
+  if (!fs.existsSync(dir)) return [];
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .sort()
+      .map((f) => fs.readFileSync(path.join(dir, f), "utf8").trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function loadRepos() {
+  const repos = [];
+  for (const r of UNKNOWN_REPOS) {
+    repos.push({
+      ...r,
+      defaultPath: path.join(process.env.HOME ?? "/tmp", "repos", r.name),
+      questions: loadQuestions(r.language, r.name),
+    });
+  }
+  try {
+    const data = JSON.parse(
+      fs.readFileSync(path.join(BENCH_DIR, "targets", "repos.json"), "utf8"),
+    );
+    for (const [lang, entries] of Object.entries(data)) {
+      for (const e of entries) {
+        repos.push({
+          name: e.name,
+          url: e.url,
+          language: lang,
+          known: true,
+          defaultPath: path.join(process.env.HOME ?? "/tmp", "repos", e.name),
+          questions: loadQuestions(lang, e.name),
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn(`Could not load repos.json: ${err.message}`);
+  }
+  return repos.filter((r) => r.questions.length > 0);
+}
+
+const KNOWN_REPOS = loadRepos();
+
+/**
+ * Each agent: how to run it, how to check it's installed, and how to wire YATS MCP.
+ */
 const KNOWN_AGENTS = [
   {
     name: "claude",
@@ -94,87 +305,218 @@ const KNOWN_AGENTS = [
     checkCmd: "which claude",
     installHint: "npm install -g @anthropic-ai/claude-code",
     needsApiKey: "ANTHROPIC_API_KEY",
+    defaultModel: process.env.YATS_BENCH_MODEL ?? "haiku",
+    models: [
+      { name: "haiku", hint: "fastest & cheapest" },
+      { name: "sonnet", hint: "balanced" },
+      { name: "opus", hint: "most powerful" },
+    ],
+    authLabel: "ANTHROPIC_API_KEY or `claude` login (~/.claude)",
     needsSkill: true,
-    needsMcpConfig: true,
-    runCmd: (prompt, repoDir, hasMcp) => {
-      return [
-        "-p", prompt,
-        "--model", process.env.YATS_BENCH_MODEL ?? "haiku",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-        ...(hasMcp ? ["--mcp-config", "/tmp/yats-bench-mcp.json"] : []),
-      ];
-    },
+    mcpKind: "stdio",
+    runCmd: (prompt, repoDir, hasMcp, model) => [
+      "-p", prompt,
+      "--model", model,
+      "--output-format", "stream-json",
+      "--verbose",
+      "--dangerously-skip-permissions",
+      ...(hasMcp ? ["--mcp-config", "/tmp/yats-bench-mcp.json"] : []),
+    ],
   },
   {
     name: "codex",
     cli: "codex",
     checkCmd: "which codex",
-    installHint: "Install VS Code ChatGPT extension",
-    needsApiKey: "OPENAI_API_KEY",
+    installHint: "npm install -g @openai/codex",
+    needsApiKey: "",
+    defaultModel: "gpt-4.1-mini",
+    models: [
+      { name: "gpt-4.1-mini", hint: "fastest & cheapest" },
+      { name: "gpt-4.1", hint: "balanced" },
+      { name: "gpt-5.4", hint: "most powerful" },
+    ],
+    authLabel: "codex login (~/.codex/auth.json)",
     needsSkill: false,
-    needsMcpConfig: false,
-    runCmd: (prompt, repoDir, hasMcp) => {
-      return [
-        "exec", "--json",
-        ...(hasMcp ? [] : ["-c", "mcp_servers.yats.enabled=false"]),
-        prompt,
-      ];
-    },
+    mcpKind: "codex-config",
+    runCmd: (prompt, repoDir, hasMcp, model) => ["exec", "--json", prompt],
+  },
+  {
+    name: "copilot",
+    cli: "copilot",
+    checkCmd: "which copilot",
+    installHint: "npm install -g @github/copilot",
+    needsApiKey: "",
+    defaultModel: "default",
+    models: [
+      { name: "default", hint: "Copilot-managed model" },
+    ],
+    authLabel: "copilot CLI login",
+    needsSkill: false,
+    mcpKind: "copilot-config",
+    runCmd: (prompt, repoDir, hasMcp, model) => [
+      "-p", prompt,
+      "--output-format", "json",
+      "--allow-all",
+      ...(hasMcp ? ["--mcp-config", "/tmp/copilot-mcp.json"] : []),
+    ],
+  },
+  {
+    name: "cursor",
+    cli: "cursor-agent",
+    checkCmd: "which cursor-agent",
+    installHint: "https://cursor.com/docs/cli — install the cursor-agent CLI",
+    needsApiKey: "",
+    defaultModel: "claude-sonnet-5",
+    models: [
+      { name: "claude-sonnet-5", hint: "balanced" },
+      { name: "claude-haiku-5", hint: "fast & cheap" },
+    ],
+    authLabel: "cursor-agent login",
+    needsSkill: false,
+    mcpKind: "cursor-config",
+    runCmd: (prompt, repoDir, hasMcp, model) => [
+      "-p", prompt,
+      "--output-format", "stream-json",
+      "--force",
+      "--model", model,
+    ],
+  },
+  {
+    name: "gemini",
+    cli: "gemini",
+    checkCmd: "which gemini",
+    installHint: "npm install -g @google/gemini-cli",
+    needsApiKey: "GEMINI_API_KEY",
+    defaultModel: process.env.YATS_BENCH_GEMINI_MODEL ?? "gemini-flash-latest",
+    models: [
+      { name: "gemini-flash-latest", hint: "fastest & cheapest" },
+      { name: "gemini-2.5-pro", hint: "most powerful" },
+      { name: "gemini-pro-latest", hint: "balanced" },
+    ],
+    authLabel: "GEMINI_API_KEY",
+    needsSkill: false,
+    mcpKind: "gemini-config",
+    runCmd: (prompt, repoDir, hasMcp, model) => [
+      "-p", prompt,
+      "--model", model,
+      "--output-format", "stream-json",
+      "--yolo",
+    ],
   },
 ];
 
 // ============================================================
-// Interactive wizard
+// Wizard steps (modern UI)
 // ============================================================
 
-const ask = (rl, question) => new Promise((resolve) => rl.question(question, resolve));
-
-async function selectAgent(rl) {
-  console.log("\n  Available agents:");
-  KNOWN_AGENTS.forEach((a, i) => console.log(`    ${i + 1}. ${a.name}`));
-  const choice = await ask(rl, "\n  Pick agent [1-2]: ");
-  const idx = parseInt(choice) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= KNOWN_AGENTS.length) {
-    console.log("  Invalid. Defaulting to claude.");
-    return KNOWN_AGENTS[0];
-  }
-  return KNOWN_AGENTS[idx];
+async function selectAgent() {
+  const opts = KNOWN_AGENTS.map((a) => ({
+    label: a.name,
+    hint: isInstalled(a.cli) ? "installed" : "not installed",
+    ok: isInstalled(a.cli),
+    value: a,
+  }));
+  return select("Select your AI agent", opts);
 }
 
-async function selectRepo(rl) {
-  console.log("\n  Available repos:");
-  KNOWN_REPOS.forEach((r, i) => {
-    const exists = fs.existsSync(r.defaultPath);
-    console.log(`    ${i + 1}. ${r.name} (${r.language}) ${exists ? "[cloned]" : "[will clone]"}`);
+async function selectModel(agent) {
+  if (agent.models.length <= 1) {
+    selectedModel = agent.models[0].name;
+    return;
+  }
+  const opts = agent.models.map((m) => ({
+    label: m.name,
+    hint: m.hint,
+    value: m.name,
+  }));
+  selectedModel = await select(`Model for ${agent.name}`, opts);
+  console.log(`  ${A.green}✓${A.reset} Model: ${A.bold}${selectedModel}${A.reset}`);
+}
+
+async function selectWorkDir() {
+  const def = path.join(process.cwd(), "repos");
+  const input = (await askLine(`\n  Where to download repos? [${def}]: `)).trim();
+  workDir = toAbsolute(input || def);
+  for (const r of KNOWN_REPOS) {
+    r.defaultPath = path.join(workDir, r.name);
+  }
+  console.log(`  ${A.green}✓${A.reset} Repos will be saved to ${workDir}`);
+}
+
+async function selectRepo() {
+  const opts = KNOWN_REPOS.map((r) => {
+    const exists = fs.existsSync(r.defaultPath) && fs.existsSync(path.join(r.defaultPath, ".git"));
+    return {
+      label: r.name,
+      hint: r.known
+        ? `${r.language}${exists ? "" : " · will clone"}`
+        : `${r.language} · unknown — proposed by YATS.AI`,
+      accent: !r.known,
+      value: r,
+    };
   });
-  const choice = await ask(rl, "\n  Pick repo [1-2]: ");
-  const idx = parseInt(choice) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= KNOWN_REPOS.length) {
-    console.log("  Invalid. Defaulting to lab_hub.");
-    return KNOWN_REPOS[1];
-  }
-  return KNOWN_REPOS[idx];
-}
-
-async function selectQuestion(rl, repo) {
-  console.log("\n  Questions:");
-  repo.questions.forEach((q, i) => {
-    console.log(`    ${i + 1}. ${q.slice(0, 80)}...`);
+  opts.push({
+    label: "Custom repo",
+    hint: "your own — local path or git URL",
+    accent: true,
+    value: "__custom__",
   });
-  const choice = await ask(rl, "\n  Pick question [1]: ");
-  const idx = parseInt(choice || "1") - 1;
-  if (isNaN(idx) || idx < 0 || idx >= repo.questions.length) {
-    return repo.questions[0];
-  }
-  return repo.questions[idx];
+  return select("Select a repository", opts);
 }
 
-async function selectRuns(rl) {
-  const choice = await ask(rl, "\n  Number of runs per condition [1]: ");
-  const n = parseInt(choice || "1");
-  return isNaN(n) || n < 1 ? 1 : Math.min(n, 5);
+async function selectCustomRepo() {
+  console.log(`\n  ${A.bold}${A.purple}Custom repo${A.reset}\n`);
+  const loc = (await askLine("  Local path or git URL: ")).trim();
+  if (!loc) {
+    console.log(`  ${A.red}✖ Empty location. Aborting.${A.reset}`);
+    process.exit(1);
+  }
+
+  const isUrl = /^(https?:\/\/|git@|ssh:\/\/)/i.test(loc);
+  let name, url, defaultPath;
+  if (isUrl) {
+    name = loc.split("/").pop().replace(/\.git$/, "") || "custom";
+    url = loc;
+    defaultPath = path.join(workDir, name);
+  } else {
+    defaultPath = toAbsolute(loc);
+    name = path.basename(defaultPath);
+    url = null;
+  }
+
+  const lang = (await askLine("  Language [auto]: ")).trim() || "auto";
+
+  console.log(`\n  ${A.dim}Question (Enter for a default architecture question):${A.reset}`);
+  const q = (await askLine("  > ")).trim();
+  const question = q || "Explain the architecture of this codebase: the key components, how they connect, and the main data flow.";
+
+  return {
+    name,
+    url,
+    language: lang,
+    known: false,
+    defaultPath,
+    questions: [question],
+    custom: true,
+  };
+}
+
+async function selectQuestion(repo) {
+  const opts = repo.questions.map((q) => ({
+    label: q.length > 76 ? q.slice(0, 76) + "…" : q,
+    hint: null,
+    value: q,
+  }));
+  return select("Pick a question", opts);
+}
+
+async function selectRuns() {
+  const opts = [1, 2, 3].map((n) => ({
+    label: `${n} run${n > 1 ? "s" : ""}`,
+    hint: n === 1 ? "recommended" : null,
+    value: n,
+  }));
+  return select("Runs per condition", opts);
 }
 
 // ============================================================
@@ -182,26 +524,50 @@ async function selectRuns(rl) {
 // ============================================================
 
 function ensureRepo(repo) {
-  const repoPath = repo.defaultPath;
-  if (!fs.existsSync(repoPath)) {
-    console.log(`\n  Cloning ${repo.name} from ${repo.url}...`);
+  const repoPath = path.resolve(repo.defaultPath);
+  const gitDir = path.join(repoPath, ".git");
+  if (fs.existsSync(repoPath) && fs.existsSync(gitDir)) {
+    console.log(`  ${A.green}✓${A.reset} Repo at ${repoPath}`);
+    return repoPath;
+  }
+  if (repo.url) {
+    if (fs.existsSync(repoPath)) {
+      console.log(`  ${A.yellow}⚠${A.reset} Removing incomplete clone at ${repoPath}...`);
+      fs.rmSync(repoPath, { recursive: true, force: true });
+    }
+    console.log(`  ${A.dim}Cloning ${repo.name} from ${repo.url}...${A.reset}`);
     const parent = path.dirname(repoPath);
     fs.mkdirSync(parent, { recursive: true });
     execSync(`git clone --depth 1 ${repo.url} ${repoPath}`, {
       stdio: "inherit",
       timeout: 120_000,
     });
-    console.log(`  ✓ Cloned to ${repoPath}`);
-  } else {
-    console.log(`  ✓ Repo already at ${repoPath}`);
+    console.log(`  ${A.green}✓${A.reset} Cloned to ${repoPath}`);
+    return repoPath;
   }
-  return repoPath;
+  logger.error(`Path not found: ${repoPath}`);
+  process.exit(1);
 }
 
-function setupAgent(agent, repoPath, withYats) {
-  // Skill for Claude
-  if (agent.needsSkill && withYats) {
-    const skillDir = path.join(repoPath, ".claude", "skills", "yats");
+function ensureIndexed(repo, repoPath) {
+  console.log(`\n  ${A.dim}Checking if ${repo.name} is indexed...${A.reset}`);
+  try {
+    const out = execSync("yats list", { encoding: "utf8", stdio: "pipe" });
+    if (out.includes(repoPath)) {
+      console.log(`  ${A.green}✓${A.reset} Already indexed`);
+      return;
+    }
+  } catch {
+    /* not indexed yet */
+  }
+  console.log(`  ${A.dim}Indexing ${repo.name} (this may take a while)...${A.reset}`);
+  execSync(`yats index "${repoPath}"`, { stdio: "inherit", timeout: 600_000 });
+  console.log(`  ${A.green}✓${A.reset} Indexed`);
+}
+
+function writeSkill(repoPath, withYats) {
+  const skillDir = path.join(repoPath, ".claude", "skills", "yats");
+  if (withYats) {
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, "SKILL.md"), `---
 name: yats
@@ -221,67 +587,121 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
 3. find_callers / find_callees to trace
 4. Only then Read files at the line YATS gave you
 `);
-  } else if (!withYats) {
-    const skillDir = path.join(repoPath, ".claude", "skills", "yats");
-    if (fs.existsSync(skillDir)) {
-      fs.rmSync(skillDir, { recursive: true });
-    }
+  } else {
+    fs.rmSync(skillDir, { recursive: true, force: true });
   }
+}
 
-  // MCP config for Claude
-  if (agent.needsMcpConfig && withYats) {
-    const mcpConfig = {
-      mcpServers: {
-        yats: { url: "http://localhost:5555/mcp" },
-      },
-    };
-    fs.writeFileSync("/tmp/yats-bench-mcp.json", JSON.stringify(mcpConfig));
+function setupAgent(agent, repoPath, withYats) {
+  switch (agent.mcpKind) {
+    case "stdio": {
+      if (agent.needsSkill) writeSkill(repoPath, withYats);
+      if (withYats) {
+        fs.writeFileSync("/tmp/yats-bench-mcp.json", JSON.stringify({
+          mcpServers: { yats: { command: "yats", args: ["bridge"] } },
+        }, null, 2));
+      }
+      break;
+    }
 
-    const claudeJson = {
-      env: { API_TIMEOUT_MS: "3000000" },
-      permissions: { defaultMode: "default" },
-      projects: {
-        [repoPath]: {
-          mcpServers: {
-            yats: { type: "sse", url: "http://localhost:5555/mcp/sse" },
-          },
-        },
-      },
-    };
-    const claudeJsonPath = path.join(process.env.HOME ?? "/tmp", ".claude.json");
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(claudeJson));
-  } else if (agent.name === "claude") {
-    const claudeJsonPath = path.join(process.env.HOME ?? "/tmp", ".claude.json");
-    fs.writeFileSync(claudeJsonPath, JSON.stringify({
-      env: { API_TIMEOUT_MS: "3000000" },
-      permissions: { defaultMode: "default" },
-      projects: {},
-    }));
+    case "codex-config": {
+      const dir = path.join(repoPath, ".codex");
+      fs.mkdirSync(dir, { recursive: true });
+      const model = selectedModel ?? agent.defaultModel;
+      const mcp = withYats
+        ? `\n[mcp_servers.yats]\ncommand = "yats"\nargs = ["bridge"]\n`
+        : "";
+      fs.writeFileSync(path.join(dir, "config.toml"), `model = "${model}"
+model_reasoning_effort = "medium"
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+
+[features]
+multi_agent = false              # REQUIRED: force direct MCP tool usage
+${mcp}`);
+      break;
+    }
+
+    case "copilot-config": {
+      if (withYats) {
+        fs.writeFileSync("/tmp/copilot-mcp.json", JSON.stringify({
+          servers: [{ name: "yats", type: "local", command: "yats", args: ["bridge"] }],
+        }, null, 2));
+      }
+      break;
+    }
+
+    case "cursor-config": {
+      if (withYats) {
+        fs.writeFileSync("/tmp/cursor-mcp.json", JSON.stringify({
+          mcpServers: { yats: { url: "http://localhost:5555/mcp" } },
+        }, null, 2));
+        process.env.CURSOR_MCP_CONFIG = "/tmp/cursor-mcp.json";
+      } else {
+        delete process.env.CURSOR_MCP_CONFIG;
+      }
+      break;
+    }
+
+    case "gemini-config": {
+      const dir = path.join(repoPath, ".gemini");
+      if (withYats) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({
+          mcpServers: { yats: { command: "yats", args: ["bridge"], trust: true } },
+        }, null, 2));
+        process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
+      } else {
+        fs.rmSync(path.join(dir, "settings.json"), { force: true });
+      }
+      break;
+    }
   }
 }
 
 function checkAgent(agent) {
-  try {
-    execSync(agent.checkCmd, { stdio: "pipe" });
-    console.log(`  ✓ ${agent.name} CLI found`);
-  } catch {
-    console.log(`  ⚠ ${agent.name} CLI not found. Install: ${agent.installHint}`);
+  console.log(`\n  ${A.dim}Checking ${agent.name}...${A.reset}`);
+  if (!isInstalled(agent.cli)) {
+    console.log(`  ${A.red}✖ ${agent.cli} is not installed.${A.reset}`);
+    console.log(`     Install: ${agent.installHint}`);
+    return false;
   }
-
-  if (!process.env[agent.needsApiKey]) {
-    console.log(`  ⚠ ${agent.needsApiKey} not set. Set it in .env or export it.`);
-    console.log(`     Required for ${agent.name}. See benchmark/.env.example`);
-  } else {
-    console.log(`  ✓ ${agent.needsApiKey} is set`);
+  console.log(`  ${A.green}✓${A.reset} ${agent.cli} found`);
+  console.log(`  ${A.dim}Auth:  ${agent.authLabel}${A.reset}`);
+  if (!hasApiKey(agent.needsApiKey)) {
+    console.log(`  ${A.yellow}⚠${A.reset} ${agent.needsApiKey} not set (agent may use its own auth)`);
   }
+  return true;
 }
 
 // ============================================================
 // Run
 // ============================================================
 
+async function runWithSpinner(label, fn) {
+  if (!isTTY) {
+    console.log(`  ${A.dim}${label}...${A.reset}`);
+    return fn();
+  }
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let i = 0;
+  const start = Date.now();
+  const id = setInterval(() => {
+    const secs = Math.floor((Date.now() - start) / 1000);
+    process.stdout.write(`\r  ${A.cyan}${frames[i % frames.length]}${A.reset} ${A.dim}${label}${A.reset} ${A.gray}${secs}s${A.reset}   `);
+    i++;
+  }, 80);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(id);
+    process.stdout.write("\r\x1b[2K");
+  }
+}
+
 function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 180) {
-  const args = agent.runCmd(prompt, repoPath, withYats);
+  const model = selectedModel ?? agent.defaultModel;
+  const args = agent.runCmd(prompt, repoPath, withYats, model);
 
   return new Promise((resolve) => {
     const proc = spawn(agent.cli, args, {
@@ -308,54 +728,101 @@ function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 180) 
 function parseResult(logFile) {
   try {
     const content = fs.readFileSync(logFile, "utf-8");
-    const lines = content.trim().split("\n");
-    const events = lines
-      .map((l) => {
-        try { return JSON.parse(l); } catch { return null; }
-      })
-      .filter(Boolean);
-
-    const results = events.filter((e) => e.type === "result");
-    if (!results.length) return { error: "No result events found", logFile };
-
-    const last = results[results.length - 1];
-    const modelUsage = last.modelUsage ?? {};
+    const events = [];
+    for (const line of content.split("\n")) {
+      const l = line.trim();
+      if (!l) continue;
+      try {
+        const j = JSON.parse(l);
+        if (j && typeof j === "object") events.push(j);
+      } catch {
+        /* skip non-JSON lines */
+      }
+    }
 
     let tokens = 0;
     let outputTokens = 0;
     let cacheRead = 0;
     let cacheWrite = 0;
-    for (const mu of Object.values(modelUsage)) {
-      tokens += (mu.inputTokens ?? 0) + (mu.outputTokens ?? 0) +
-                (mu.cacheReadInputTokens ?? 0) + (mu.cacheCreationInputTokens ?? 0);
-      outputTokens += mu.outputTokens ?? 0;
-      cacheRead += mu.cacheReadInputTokens ?? 0;
-      cacheWrite += mu.cacheCreationInputTokens ?? 0;
+    let cost = 0;
+    let duration = 0;
+    let errorMsg = null;
+
+    // Claude / Cursor: "result" events with modelUsage
+    const results = events.filter((e) => e.type === "result");
+    if (results.length) {
+      const last = results[results.length - 1];
+      if (last.is_error || last.is_api_error_message) {
+        errorMsg = last.result || last.error || "agent reported an error";
+      }
+      const mu = last.modelUsage ?? {};
+      for (const k of Object.keys(mu)) {
+        tokens += (mu[k].inputTokens ?? 0) + (mu[k].outputTokens ?? 0) +
+          (mu[k].cacheReadInputTokens ?? 0) + (mu[k].cacheCreationInputTokens ?? 0);
+        outputTokens += mu[k].outputTokens ?? 0;
+        cacheRead += mu[k].cacheReadInputTokens ?? 0;
+        cacheWrite += mu[k].cacheCreationInputTokens ?? 0;
+      }
+      cost = last.total_cost_usd ?? cost;
+      duration = last.duration_ms ?? duration;
+    }
+
+    // Codex: "turn.completed" events with usage
+    for (const e of events) {
+      if (e.type === "turn.completed" && e.usage) {
+        const u = e.usage;
+        tokens += (u.input_tokens ?? 0) + (u.cached_input_tokens ?? 0) +
+          (u.output_tokens ?? 0) + (u.reasoning_output_tokens ?? 0);
+        outputTokens += u.output_tokens ?? 0;
+        cacheRead += u.cached_input_tokens ?? 0;
+      }
+    }
+
+    // Copilot: "assistant.usage" events
+    for (const e of events) {
+      if (e.type === "assistant.usage") {
+        tokens += (e.inputTokens ?? 0) + (e.outputTokens ?? 0) + (e.cacheReadTokens ?? 0);
+        outputTokens += e.outputTokens ?? 0;
+        cacheRead += e.cacheReadTokens ?? 0;
+      }
+    }
+
+    // Gemini: "result" events with stats
+    for (const e of events) {
+      if (e.type === "result" && e.stats) {
+        tokens += (e.stats.input_tokens ?? 0) + (e.stats.output_tokens ?? 0);
+        outputTokens += e.stats.output_tokens ?? 0;
+      }
     }
 
     // Tool calls
     const toolCalls = {};
     for (const e of events) {
-      if (e.type === "assistant") {
-        for (const c of e.message?.content ?? []) {
-          if (c.type === "tool_use") {
-            toolCalls[c.name] = (toolCalls[c.name] ?? 0) + 1;
-          }
+      if (e.type === "assistant" && e.message?.content) {
+        for (const c of e.message.content) {
+          if (c.type === "tool_use") toolCalls[c.name] = (toolCalls[c.name] ?? 0) + 1;
         }
+      }
+      if (e.type === "item.completed" && e.item?.type === "mcp_tool_call") {
+        const name = e.item.tool ?? "mcp_tool_call";
+        toolCalls[name] = (toolCalls[name] ?? 0) + 1;
+      }
+      if (e.type === "item.completed" && e.item?.type === "function_call") {
+        const name = e.item.name ?? "function_call";
+        toolCalls[name] = (toolCalls[name] ?? 0) + 1;
       }
     }
 
     const yatsQueries = Object.entries(toolCalls)
-      .filter(([k]) => k.includes("yats") || k.includes("mcp__"))
+      .filter(([k]) => /yats|mcp__/i.test(k))
       .reduce((sum, [, v]) => sum + v, 0);
-    const fileReads = toolCalls["Read"] ?? 0;
-    const bashCmds = toolCalls["Bash"] ?? 0;
-    const agentSpawns = (toolCalls["Agent"] ?? 0) + (toolCalls["Task"] ?? 0);
+    const fileReads = (toolCalls["Read"] ?? 0) + (toolCalls["read_file"] ?? 0);
+    const bashCmds = (toolCalls["Bash"] ?? 0) + (toolCalls["bash"] ?? 0);
 
     let contentChars = 0;
     for (const e of events) {
-      if (e.type === "user") {
-        for (const c of e.message?.content ?? []) {
+      if (e.type === "user" && e.message?.content) {
+        for (const c of e.message.content) {
           if (c.type === "tool_result") {
             let t = c.content ?? "";
             if (Array.isArray(t)) t = t.map((x) => x.text ?? "").join("");
@@ -366,19 +833,9 @@ function parseResult(logFile) {
     }
 
     return {
-      tokens,
-      cost: last.total_cost_usd ?? 0,
-      outputTokens,
-      cacheRead,
-      cacheWrite,
-      toolCalls,
-      agentSpawns,
-      fileReads,
-      bashCmds,
-      yatsQueries,
-      contentChars,
-      duration: last.duration_ms ?? 0,
-      logFile,
+      tokens, cost, outputTokens, cacheRead, cacheWrite, toolCalls,
+      fileReads, bashCmds, yatsQueries, contentChars, duration,
+      error: errorMsg, logFile,
     };
   } catch (err) {
     return { error: err.message, logFile };
@@ -391,31 +848,65 @@ function parseResult(logFile) {
 
 function printTable(title, runs, withYats) {
   const label = withYats ? "With YATS" : "Baseline";
-  console.log(`\n  ${title} — ${label}`);
-  console.log("  ┌──────┬──────────┬────────┬───────┬──────┬──────┬──────┬──────────┐");
-  console.log("  │ Run  │  Tokens  │  Cost  │ Output│ Reads│ Bash │ YATS │  Result  │");
-  console.log("  ├──────┼──────────┼────────┼───────┼──────┼──────┼──────┼──────────┤");
+  const cols = [
+    { h: "Run", w: 5, right: false },
+    { h: "Tokens", w: 10, right: true },
+    { h: "Cost", w: 8, right: true },
+    { h: "Output", w: 7, right: true },
+    { h: "Reads", w: 6, right: true },
+    { h: "Bash", w: 5, right: true },
+    { h: "YATS", w: 5, right: true },
+    { h: "Result", w: 8, right: false },
+  ];
+  const cell = (txt, w, right) => {
+    const s = String(txt);
+    return right ? s.padStart(w) : s.padEnd(w);
+  };
+  const row = (vals) => "  │" + vals.map((v, i) => " " + cell(v, cols[i].w, cols[i].right) + " ").join("│") + "│";
+  const border = (l, m, r) => "  " + l + cols.map((c) => "─".repeat(c.w + 2)).join(m) + r;
+
+  console.log(`\n  ${A.bold}${title} — ${label}${A.reset}`);
+  console.log(border("┌", "┬", "┐"));
+  console.log(row(cols.map((c) => c.h)));
+  console.log(border("├", "┼", "┤"));
   for (const r of runs) {
     const status = r.error ? "ERROR" : "OK";
-    console.log(
-      `  │  ${String(r.run).padEnd(4)} │ ${String(r.tokens).padStart(8)} │ $${r.cost.toFixed(3).padStart(4)} │ ${String(r.outputTokens).padStart(5)} │ ${String(r.fileReads).padStart(4)} │ ${String(r.bashCmds).padStart(4)} │ ${String(r.yatsQueries).padStart(4)} │ ${status.padEnd(8)} │`,
-    );
+    console.log(row([
+      String(r.run),
+      r.tokens.toLocaleString(),
+      "$" + r.cost.toFixed(3),
+      String(r.outputTokens),
+      String(r.fileReads),
+      String(r.bashCmds),
+      String(r.yatsQueries),
+      status,
+    ]));
   }
-  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
   const good = runs.filter((r) => !r.error);
   if (good.length) {
-    console.log("  ├──────┼──────────┼────────┼───────┼──────┼──────┼──────┼──────────┤");
-    console.log(
-      `  │ AVG  │ ${String(Math.round(avg(good.map((r) => r.tokens)))).padStart(8)} │ $${avg(good.map((r) => r.cost)).toFixed(3).padStart(4)} │ ${String(Math.round(avg(good.map((r) => r.outputTokens)))).padStart(5)} │ ${String(Math.round(avg(good.map((r) => r.fileReads)))).padStart(4)} │ ${String(Math.round(avg(good.map((r) => r.bashCmds)))).padStart(4)} │ ${String(Math.round(avg(good.map((r) => r.yatsQueries)))).padStart(4)} │          │`,
-    );
+    console.log(border("├", "┼", "┤"));
+    console.log(row([
+      "AVG",
+      Math.round(avg(good.map((r) => r.tokens))).toLocaleString(),
+      "$" + avg(good.map((r) => r.cost)).toFixed(3),
+      String(Math.round(avg(good.map((r) => r.outputTokens)))),
+      String(Math.round(avg(good.map((r) => r.fileReads)))),
+      String(Math.round(avg(good.map((r) => r.bashCmds)))),
+      String(Math.round(avg(good.map((r) => r.yatsQueries)))),
+      "",
+    ]));
   }
-  console.log("  └──────┴──────────┴────────┴───────┴──────┴──────┴──────┴──────────┘");
+  console.log(border("└", "┴", "┘"));
 }
 
 function printComparison(baseline, yats) {
   const goodB = baseline.filter((r) => !r.error);
   const goodY = yats.filter((r) => !r.error);
-  if (!goodB.length || !goodY.length) return;
+  if (!goodB.length || !goodY.length) {
+    console.log(`\n  ${A.yellow}⚠ No valid results to compare.${A.reset}`);
+    return;
+  }
 
   const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const tB = avg(goodB.map((r) => r.tokens));
@@ -427,131 +918,149 @@ function printComparison(baseline, yats) {
   const bB = avg(goodB.map((r) => r.bashCmds));
   const bY = avg(goodY.map((r) => r.bashCmds));
 
-  const tokenSave = ((tB - tY) / tB * 100);
-  const costSave = ((cB - cY) / cB * 100);
-  const readSave = rB ? ((rB - rY) / rB * 100) : 0;
-  const bashSave = bB ? ((bB - bY) / bB * 100) : 0;
+  if (tB <= 0) {
+    console.log(`\n  ${A.yellow}⚠ Baseline returned 0 tokens — the agent likely failed (check credits/auth).${A.reset}`);
+    return;
+  }
 
-  console.log("\n  ╔══════════════════════════════════════════════════╗");
-  console.log("  ║" + "              SAVINGS (YATS vs Baseline)".padEnd(49) + "║");
-  console.log("  ╠══════════════════════════════════════════════════╣");
-  console.log(`  ║  Tokens:      ${String(Math.round(tB)).padStart(8)} → ${String(Math.round(tY)).padStart(8)}   ${tokenSave > 0 ? "↓" : "↑"} ${Math.abs(tokenSave).toFixed(1).padStart(5)}%`.padEnd(49) + "║");
-  console.log(`  ║  Cost:       $${cB.toFixed(3)} → $${cY.toFixed(3)}   ${costSave > 0 ? "↓" : "↑"} ${Math.abs(costSave).toFixed(1).padStart(5)}%`.padEnd(49) + "║");
-  console.log(`  ║  File reads:  ${String(Math.round(rB)).padStart(5)} → ${String(Math.round(rY)).padStart(5)}   ${readSave > 0 ? "↓" : "↑"} ${Math.abs(readSave).toFixed(1).padStart(5)}%`.padEnd(49) + "║");
-  console.log(`  ║  Bash cmds:   ${String(Math.round(bB)).padStart(5)} → ${String(Math.round(bY)).padStart(5)}   ${bashSave > 0 ? "↓" : "↑"} ${Math.abs(bashSave).toFixed(1).padStart(5)}%`.padEnd(49) + "║");
-  console.log("  ╚══════════════════════════════════════════════════╝");
+  const W = 46;
+  const n = (x) => Math.round(x).toLocaleString();
+  const pct = (a, b) => ((a - b) / a * 100);
+  const arrow = (p) => (p > 0 ? "↓" : p < 0 ? "↑" : "·");
+  const line = (txt) => "  ║ " + txt.padEnd(W) + " ║";
+
+  const tokenSave = pct(tB, tY);
+  const costSave = pct(cB, cY);
+  const readSave = rB ? pct(rB, rY) : 0;
+  const bashSave = bB ? pct(bB, bY) : 0;
+
+  console.log("  ╔" + "═".repeat(W + 2) + "╗");
+  console.log(line("SAVINGS (YATS vs Baseline)"));
+  console.log("  ╠" + "═".repeat(W + 2) + "╣");
+  console.log(line(`Tokens:      ${n(tB).padStart(8)} → ${n(tY).padStart(8)}   ${arrow(tokenSave)} ${Math.abs(tokenSave).toFixed(1).padStart(5)}%`));
+  console.log(line(`Cost:        $${cB.toFixed(3)} → $${cY.toFixed(3)}   ${arrow(costSave)} ${Math.abs(costSave).toFixed(1).padStart(5)}%`));
+  console.log(line(`File reads:  ${n(rB).padStart(5)} → ${n(rY).padStart(5)}   ${arrow(readSave)} ${Math.abs(readSave).toFixed(1).padStart(5)}%`));
+  console.log(line(`Bash cmds:   ${n(bB).padStart(5)} → ${n(bY).padStart(5)}   ${arrow(bashSave)} ${Math.abs(bashSave).toFixed(1).padStart(5)}%`));
+  console.log("  ╚" + "═".repeat(W + 2) + "╝");
 }
 
 // ============================================================
 // Main entry
 // ============================================================
 
-export async function runBenchmark() {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+function printIntro() {
+  console.log(`\n  ${A.bold}${A.purple}YATS Benchmark${A.reset}`);
+  console.log(`  ${A.dim}Measure token savings: the same question, answered with vs without YATS.${A.reset}\n`);
+  console.log(`  ${A.yellow}💡 Tip:${A.reset} ${A.dim}Pick an ${A.reset}${A.cyan}unknown${A.reset}${A.dim} or your own repo — the model can't answer it from memory, so that's where YATS shows its real value.${A.reset}`);
+}
 
-  console.log("\n  ╔══════════════════════════════════════════════════╗");
-  console.log("  ║" + "                YATS BENCHMARK".padEnd(49) + "║");
-  console.log("  ╚══════════════════════════════════════════════════╝");
+async function runOnce() {
+  printIntro();
+  selectedModel = null;
 
-  // 1. Select agent
-  const agent = await selectAgent(rl);
-  checkAgent(agent);
+  // 1. Agent
+  const agent = await selectAgent();
+  if (!checkAgent(agent)) {
+    restoreTerminal();
+    process.exit(1);
+  }
 
-  // 2. Select repo
-  const repo = await selectRepo(rl);
+  // 2. Model
+  await selectModel(agent);
 
-  // 3. Ensure repo cloned
+  // 3. Workdir
+  await selectWorkDir();
+
+  // 4. Repo
+  let repo = await selectRepo();
+  if (repo === "__custom__") {
+    repo = await selectCustomRepo();
+  }
+
+  // 3. Clone + index
   const repoPath = ensureRepo(repo);
+  ensureIndexed(repo, repoPath);
+  process.env.YATS_DEFAULT_REPO = repoPath;
 
-  // 4. Select question
-  const question = await selectQuestion(rl, repo);
+  // 4. Question
+  const question = await selectQuestion(repo);
 
-  // 5. Number of runs
-  const numRuns = await selectRuns(rl);
+  // 5. Runs
+  const numRuns = await selectRuns();
 
-  rl.close();
-
-  // 6. Ensure repo is indexed
-  console.log(`\n  Checking if ${repo.name} is indexed...`);
+  restoreTerminal();
 
   const resultsDir = path.join(process.cwd(), "benchmark", "results");
   fs.mkdirSync(resultsDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
-  // 7. Run baseline
-  console.log(`\n  ═══════ BASELINE (${numRuns} runs) ═══════`);
+  // 6. Baseline
+  console.log(`\n  ${A.bold}═══════ BASELINE (${numRuns} run${numRuns > 1 ? "s" : ""}) ═══════${A.reset}`);
   const baselineResults = [];
   for (let i = 1; i <= numRuns; i++) {
-    console.log(`\n  ▶ Run ${i}/${numRuns} — BASELINE...`);
     setupAgent(agent, repoPath, false);
     const logFile = path.join(resultsDir, `${repo.name}_baseline_${timestamp}_run${i}.jsonl`);
-    await runAgent(agent, question, repoPath, false, logFile);
+    await runWithSpinner(`Baseline ${i}/${numRuns} — ${agent.name} is reading files to answer`, () =>
+      runAgent(agent, question, repoPath, false, logFile));
     const result = parseResult(logFile);
     baselineResults.push({
-      run: i,
-      withYats: false,
-      tokens: result.tokens ?? 0,
-      cost: result.cost ?? 0,
+      run: i, withYats: false,
+      tokens: result.tokens ?? 0, cost: result.cost ?? 0,
       outputTokens: result.outputTokens ?? 0,
-      cacheRead: result.cacheRead ?? 0,
-      cacheWrite: result.cacheWrite ?? 0,
+      cacheRead: result.cacheRead ?? 0, cacheWrite: result.cacheWrite ?? 0,
       toolCalls: result.toolCalls ?? {},
-      agentSpawns: result.agentSpawns ?? 0,
-      fileReads: result.fileReads ?? 0,
-      bashCmds: result.bashCmds ?? 0,
-      yatsQueries: result.yatsQueries ?? 0,
-      contentChars: result.contentChars ?? 0,
-      duration: result.duration ?? 0,
-      error: result.error,
-      logFile,
+      fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
+      yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
+      duration: result.duration ?? 0, error: result.error, logFile,
     });
     const r = baselineResults[baselineResults.length - 1];
-    if (r.error) {
-      console.log(`    ❌ Error: ${r.error}`);
-    } else {
-      console.log(`    ✓ ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.fileReads} reads, ${r.bashCmds} bash`);
-    }
+    if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
+    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.fileReads} reads, ${r.bashCmds} bash`);
   }
 
-  // 8. Run YATS
-  console.log(`\n  ═══════ WITH YATS (${numRuns} runs) ═══════`);
+  // 7. YATS
+  console.log(`\n  ${A.bold}═══════ WITH YATS (${numRuns} run${numRuns > 1 ? "s" : ""}) ═══════${A.reset}`);
   const yatsResults = [];
   for (let i = 1; i <= numRuns; i++) {
-    console.log(`\n  ▶ Run ${i}/${numRuns} — YATS...`);
     setupAgent(agent, repoPath, true);
     const logFile = path.join(resultsDir, `${repo.name}_yats_${timestamp}_run${i}.jsonl`);
-    await runAgent(agent, question, repoPath, true, logFile);
+    await runWithSpinner(`With YATS ${i}/${numRuns} — ${agent.name} is querying the knowledge graph`, () =>
+      runAgent(agent, question, repoPath, true, logFile));
     const result = parseResult(logFile);
     yatsResults.push({
-      run: i,
-      withYats: true,
-      tokens: result.tokens ?? 0,
-      cost: result.cost ?? 0,
+      run: i, withYats: true,
+      tokens: result.tokens ?? 0, cost: result.cost ?? 0,
       outputTokens: result.outputTokens ?? 0,
-      cacheRead: result.cacheRead ?? 0,
-      cacheWrite: result.cacheWrite ?? 0,
+      cacheRead: result.cacheRead ?? 0, cacheWrite: result.cacheWrite ?? 0,
       toolCalls: result.toolCalls ?? {},
-      agentSpawns: result.agentSpawns ?? 0,
-      fileReads: result.fileReads ?? 0,
-      bashCmds: result.bashCmds ?? 0,
-      yatsQueries: result.yatsQueries ?? 0,
-      contentChars: result.contentChars ?? 0,
-      duration: result.duration ?? 0,
-      error: result.error,
-      logFile,
+      fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
+      yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
+      duration: result.duration ?? 0, error: result.error, logFile,
     });
     const r = yatsResults[yatsResults.length - 1];
-    if (r.error) {
-      console.log(`    ❌ Error: ${r.error}`);
-    } else {
-      console.log(`    ✓ ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.yatsQueries} yats, ${r.fileReads} reads`);
-    }
+    if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
+    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.yatsQueries} yats, ${r.fileReads} reads`);
   }
 
-  // 9. Show results
+  // 8. Results
   printTable(repo.name, baselineResults, false);
   printTable(repo.name, yatsResults, true);
   printComparison(baselineResults, yatsResults);
 
-  console.log(`\n  Logs saved to: ${resultsDir}\n`);
+  console.log(`\n  ${A.dim}Logs saved to: ${resultsDir}${A.reset}\n`);
+}
+
+export async function runBenchmark() {
+  while (true) {
+    await runOnce();
+    const again = await select("What's next?", [
+      { label: "Run another benchmark", value: true },
+      { label: "Exit", value: false },
+    ]);
+    if (!again) break;
+  }
+  console.log(`\n  ${A.dim}Bye 👋${A.reset}\n`);
+  restoreTerminal();
+  if (rl) rl.close();
+  process.exit(0);
 }

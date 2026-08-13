@@ -20,7 +20,7 @@
 import http from "node:http";
 import https from "node:https";
 import { createInterface } from "node:readline";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 
 // ── Config ──────────────────────────────────────────────
 let yatsUrl = process.env.YATS_URL || "http://localhost:5555";
@@ -37,8 +37,9 @@ for (let i = 0; i < args.length; i++) {
 
 const YATS_MCP_URL = yatsUrl.endsWith("/mcp") ? yatsUrl : yatsUrl + "/mcp";
 
-// Default repo: env var > cwd basename
-const DEFAULT_REPO = process.env.YATS_DEFAULT_REPO || basename(process.cwd());
+// Default repo: env var (full path) > cwd (full path). Resolved to absolute.
+const DEFAULT_REPO_PATH = resolve(process.env.YATS_DEFAULT_REPO || process.cwd());
+const DEFAULT_REPO_NAME = basename(DEFAULT_REPO_PATH);
 
 // Tools that require a repository parameter
 const REPO_TOOLS = new Set([
@@ -95,7 +96,7 @@ async function callTool(name, args) {
 async function start() {
   log(`Connecting to ${YATS_MCP_URL}...`);
   const tools = await fetchTools();
-  log(`Fetched ${tools.length} tools — default repo: "${DEFAULT_REPO}"`);
+  log(`Fetched ${tools.length} tools — default repo: "${DEFAULT_REPO_NAME}" (${DEFAULT_REPO_PATH})`);
 
   const rl = createInterface({ input: process.stdin, terminal: false });
   let pending = 0;
@@ -141,9 +142,10 @@ async function start() {
         const toolName = params?.name;
         const toolArgs = params?.arguments || {};
 
-        // Auto-inject repository if missing
+        // Auto-inject repo (full path) + name if missing
         if (REPO_TOOLS.has(toolName) && !toolArgs.repository && !toolArgs.path) {
-          toolArgs.repository = DEFAULT_REPO;
+          toolArgs.path = DEFAULT_REPO_PATH;
+          toolArgs.repository = DEFAULT_REPO_NAME;
         }
 
         log(`call: ${toolName}(${JSON.stringify(toolArgs).slice(0, 200)})`);
