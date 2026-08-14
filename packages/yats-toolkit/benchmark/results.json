@@ -227,6 +227,54 @@
         "with": 0
       },
       "savings_pct": null
+    },
+    {
+      "agent": "codex",
+      "model": "gpt-4.1-mini",
+      "repo": "lab_hub",
+      "date": "2026-08-14",
+      "question": "How does Hub Lab identify instruments and translate their protocols? Trace the flow from receiving a raw ASTM/HL7/CSV message from an analyzer to delivering a normalized FHIR result to the LIS. What key components handle identification, translation, normalization, and delivery?",
+      "tokens": {
+        "without": 703284,
+        "with": 0
+      },
+      "file_reads": {
+        "without": 0,
+        "with": 0
+      },
+      "bash_cmds": {
+        "without": 31,
+        "with": 2
+      },
+      "yats_queries": {
+        "without": 0,
+        "with": 51
+      },
+      "savings_pct": 100
+    },
+    {
+      "agent": "codex",
+      "model": "gpt-4.1-mini",
+      "repo": "lab_hub",
+      "date": "2026-08-14",
+      "question": "How does Hub Lab identify instruments and translate their protocols? Trace the flow from receiving a raw ASTM/HL7/CSV message from an analyzer to delivering a normalized FHIR result to the LIS. What key components handle identification, translation, normalization, and delivery?",
+      "tokens": {
+        "without": 797916,
+        "with": 987967
+      },
+      "file_reads": {
+        "without": 0,
+        "with": 0
+      },
+      "bash_cmds": {
+        "without": 41,
+        "with": 16
+      },
+      "yats_queries": {
+        "without": 0,
+        "with": 29
+      },
+      "savings_pct": -23.8
     }
   ]
 }

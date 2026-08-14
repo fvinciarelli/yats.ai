@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { spawn, execSync } from "node:child_process";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import * as os from "node:os";
 
 const logger = {
   info: (msg) => console.error(`[benchmark] ${msg}`),
@@ -291,6 +292,23 @@ let workDir = path.join(process.cwd(), "repos");
 // ============================================================
 
 const BENCH_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "benchmark");
+const CONNECT_DIR = path.join(BENCH_DIR, "..", "..", "..", "connect");
+let BENCH_HOME = null;
+
+function benchHome() {
+  if (!BENCH_HOME) {
+    BENCH_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "yats-bench-"));
+  }
+  return BENCH_HOME;
+}
+
+function readConnect(agentDir, file) {
+  try {
+    return fs.readFileSync(path.join(CONNECT_DIR, agentDir, file), "utf8");
+  } catch {
+    return null;
+  }
+}
 
 // Private/unknown repos (the LLM has never seen them) — the real proof.
 const UNKNOWN_REPOS = [
@@ -672,90 +690,116 @@ async function ensureIndexed(repo, repoPath) {
 function writeSkill(repoPath, withYats) {
   const skillDir = path.join(repoPath, ".claude", "skills", "yats");
   if (withYats) {
-    fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), `---
+    const content = readConnect("claude", "SKILL.md") ?? `---
 name: yats
-description: YATS has this codebase indexed. Use when asked about the code — how something works, architecture, call chains, where something is defined.
-when_to_use: "How does X work?, Where is X defined?, What calls X?, architecture, trace, find routes, find config"
+description: YATS has this codebase indexed. Use when asked about the code.
 ---
 
 # YATS Code Intelligence
-This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relationship is in a knowledge graph.
-
-## Golden rule
-**YATS first, Read second.** MCP tools return in ms for ~100 tokens. Reading files costs thousands.
-
-## Workflow
-1. search_code — natural language query
-2. find_symbol on hits
-3. find_callers / find_callees to trace
-4. Only then Read files at the line YATS gave you
-`);
+Use YATS MCP tools first, file reads second.
+`;
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), content);
   } else {
     fs.rmSync(skillDir, { recursive: true, force: true });
   }
 }
 
 function setupAgent(agent, repoPath, withYats) {
+  const home = path.join(benchHome(), agent.name);
+  fs.mkdirSync(home, { recursive: true });
+
   switch (agent.mcpKind) {
-    case "stdio": {
+    case "stdio": { // Claude
+      process.env.CLAUDE_CONFIG_DIR = home;
       if (agent.needsSkill) writeSkill(repoPath, withYats);
       if (withYats) {
-        fs.writeFileSync("/tmp/yats-bench-mcp.json", JSON.stringify({
-          mcpServers: { yats: { command: "yats", args: ["bridge"] } },
-        }, null, 2));
+        const mcp = readConnect("claude", "mcp.json")
+          ?? JSON.stringify({ mcpServers: { yats: { command: "yats", args: ["bridge"] } } });
+        fs.writeFileSync("/tmp/yats-bench-mcp.json", mcp);
       }
       break;
     }
 
-    case "codex-config": {
-      const dir = path.join(repoPath, ".codex");
-      fs.mkdirSync(dir, { recursive: true });
+    case "codex-config": { // Codex
+      process.env.CODEX_HOME = home;
+      if (process.env.OPENAI_API_KEY) {
+        fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: process.env.OPENAI_API_KEY }));
+      }
+      fs.rmSync(path.join(repoPath, ".codex", "config.toml"), { force: true });
       const model = selectedModel ?? agent.defaultModel;
-      const mcp = withYats
-        ? `\n[mcp_servers.yats]\ncommand = "yats"\nargs = ["bridge"]\n`
-        : "";
-      fs.writeFileSync(path.join(dir, "config.toml"), `model = "${model}"
-sandbox_mode = "danger-full-access"
-approval_policy = "never"
-
-[features]
-multi_agent = false              # REQUIRED: force direct MCP tool usage
-${mcp}`);
-      break;
-    }
-
-    case "copilot-config": {
+      const base = readConnect("codex", "config.toml")
+        ?? `model = "gpt-4.1-mini"\nsandbox_mode = "danger-full-access"\napproval_policy = "never"\n\n[features]\nmulti_agent = false\n`;
+      let config = base.replace(/^model\s*=.*$/m, `model = "${model}"`);
       if (withYats) {
-        fs.writeFileSync("/tmp/copilot-mcp.json", JSON.stringify({
-          servers: [{ name: "yats", type: "local", command: "yats", args: ["bridge"] }],
-        }, null, 2));
+        if (!/\[mcp_servers\.yats\]/.test(config)) {
+          config += `\n[mcp_servers.yats]\ncommand = "yats"\nargs = ["bridge"]\n`;
+        }
+      } else {
+        config = config.replace(/\n\[mcp_servers\.yats\][\s\S]*$/, "");
+      }
+      fs.writeFileSync(path.join(home, "config.toml"), config);
+      if (withYats) {
+        const ag = readConnect("codex", "AGENTS.md");
+        if (ag) fs.writeFileSync(path.join(repoPath, "AGENTS.md"), ag);
+      } else {
+        fs.rmSync(path.join(repoPath, "AGENTS.md"), { force: true });
       }
       break;
     }
 
-    case "cursor-config": {
+    case "copilot-config": { // Copilot
+      process.env.COPILOT_HOME = home;
       if (withYats) {
-        fs.writeFileSync("/tmp/cursor-mcp.json", JSON.stringify({
-          mcpServers: { yats: { url: "http://localhost:5555/mcp" } },
-        }, null, 2));
+        const mcp = readConnect("copilot", "mcp.json")
+          ?? JSON.stringify({ servers: [{ name: "yats", type: "local", command: "yats", args: ["bridge"] }] });
+        fs.writeFileSync("/tmp/copilot-mcp.json", mcp);
+        const instr = readConnect("copilot", "instructions.md");
+        if (instr) {
+          const ghDir = path.join(repoPath, ".github");
+          fs.mkdirSync(ghDir, { recursive: true });
+          fs.writeFileSync(path.join(ghDir, "copilot-instructions.md"), instr);
+        }
+      } else {
+        fs.rmSync(path.join(repoPath, ".github", "copilot-instructions.md"), { force: true });
+      }
+      break;
+    }
+
+    case "cursor-config": { // Cursor
+      if (withYats) {
+        const mcp = readConnect("cursor", "mcp.json")
+          ?? JSON.stringify({ mcpServers: { yats: { url: "http://localhost:5555/mcp" } } });
+        fs.writeFileSync("/tmp/cursor-mcp.json", mcp);
         process.env.CURSOR_MCP_CONFIG = "/tmp/cursor-mcp.json";
+        const rules = readConnect("cursor", "rules.mdc");
+        if (rules) {
+          const rulesDir = path.join(repoPath, ".cursor", "rules");
+          fs.mkdirSync(rulesDir, { recursive: true });
+          fs.writeFileSync(path.join(rulesDir, "yats.mdc"), rules);
+        }
       } else {
         delete process.env.CURSOR_MCP_CONFIG;
+        fs.rmSync(path.join(repoPath, ".cursor", "rules", "yats.mdc"), { force: true });
       }
       break;
     }
 
-    case "gemini-config": {
-      const dir = path.join(repoPath, ".gemini");
+    case "gemini-config": { // Gemini
+      process.env.GEMINI_CLI_HOME = home;
       process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
+      fs.rmSync(path.join(repoPath, ".gemini", "settings.json"), { force: true });
       if (withYats) {
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({
-          mcpServers: { yats: { command: "yats", args: ["bridge"], trust: true } },
-        }, null, 2));
+        const mcp = readConnect("gemini", "mcp.json")
+          ?? JSON.stringify({ mcpServers: { yats: { command: "yats", args: ["bridge"], trust: true } } });
+        const settingsDir = path.join(home, ".gemini");
+        fs.mkdirSync(settingsDir, { recursive: true });
+        fs.writeFileSync(path.join(settingsDir, "settings.json"), mcp);
+        const gmd = readConnect("gemini", "GEMINI.md");
+        if (gmd) fs.writeFileSync(path.join(repoPath, "GEMINI.md"), gmd);
       } else {
-        fs.rmSync(path.join(dir, "settings.json"), { force: true });
+        fs.rmSync(path.join(home, ".gemini", "settings.json"), { force: true });
+        fs.rmSync(path.join(repoPath, "GEMINI.md"), { force: true });
       }
       break;
     }
@@ -802,7 +846,7 @@ async function runWithSpinner(label, fn) {
   }
 }
 
-function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 180) {
+function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 600) {
   const model = selectedModel ?? agent.defaultModel;
   const args = agent.runCmd(prompt, repoPath, withYats, model);
 
