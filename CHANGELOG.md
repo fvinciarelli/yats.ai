@@ -5,7 +5,23 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-13
+
+### Added
+- **Benchmark wizard v2** — interactive arrow-key UI with colors, model selection per agent, spinner + stage text during runs, and a run-again/exit menu.
+- **5 benchmark agents** — Claude, Codex, Copilot, Gemini, and Cursor (CLI).
+- **Custom repos** — benchmark your own repo via local path or git URL.
+- **Configurable download directory** — the wizard asks where to clone repos (default `./repos`).
+- **Smaller benchmark repos** — flask, express, koa, chi, slim (replacing django, nestjs, nextjs, terraform, laravel, symfony).
+
+### Changed
+- **MCP repo resolution** — the bridge now identifies repos by full absolute path (with name fallback); `~` and `./` resolve to absolute.
+- **API keys auto-loaded** — the benchmark loads `.env` (cwd → repo root) so spawned agents inherit `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+- **README** — rewritten with hero narrative, ROI section, logo, and demo GIF.
+
+### Fixed
+- Gemini baseline run now sets `GEMINI_CLI_TRUST_WORKSPACE` in both with/without YATS.
+- Benchmark surfaces agent errors (e.g. "Credit balance is too low") instead of showing 0 tokens.
 
 ## [0.1.14] - 2026-08-02
 
@@ -32,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker Compose** one-command deployment (`docker compose up`).
 - **Docker image** published to `ghcr.io/fvinciarelli/yats.ai`.
 
-[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.1.14...HEAD
+[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.3.0
 [0.1.14]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.1.14
 [0.1.0]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.1.0
