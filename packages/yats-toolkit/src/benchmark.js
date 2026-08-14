@@ -1020,6 +1020,13 @@ function parseResult(logFile) {
 // Output
 // ============================================================
 
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
 function printTable(title, runs, withYats) {
   const label = withYats ? "With YATS" : "Baseline";
   const cols = [
@@ -1030,6 +1037,7 @@ function printTable(title, runs, withYats) {
     { h: "Reads", w: 6, right: true },
     { h: "Bash", w: 5, right: true },
     { h: "YATS", w: 5, right: true },
+    { h: "Time", w: 8, right: true },
     { h: "Result", w: 8, right: false },
   ];
   const cell = (txt, w, right) => {
@@ -1053,6 +1061,7 @@ function printTable(title, runs, withYats) {
       String(r.fileReads),
       String(r.bashCmds),
       String(r.yatsQueries),
+      fmtDuration(r.duration ?? 0),
       status,
     ]));
   }
@@ -1068,6 +1077,7 @@ function printTable(title, runs, withYats) {
       String(Math.round(avg(good.map((r) => r.fileReads)))),
       String(Math.round(avg(good.map((r) => r.bashCmds)))),
       String(Math.round(avg(good.map((r) => r.yatsQueries)))),
+      fmtDuration(avg(good.map((r) => r.duration ?? 0))),
       "",
     ]));
   }
@@ -1091,6 +1101,8 @@ function printComparison(baseline, yats) {
   const rY = avg(goodY.map((r) => r.fileReads));
   const bB = avg(goodB.map((r) => r.bashCmds));
   const bY = avg(goodY.map((r) => r.bashCmds));
+  const dB = avg(goodB.map((r) => r.duration ?? 0));
+  const dY = avg(goodY.map((r) => r.duration ?? 0));
 
   if (tB <= 0) {
     console.log(`\n  ${A.yellow}⚠ Baseline returned 0 tokens — the agent likely failed (check credits/auth).${A.reset}`);
@@ -1114,6 +1126,7 @@ function printComparison(baseline, yats) {
   const costSave = cB > 0 ? pct(cB, cY) : null;
   const readSave = rB ? pct(rB, rY) : 0;
   const bashSave = bB ? pct(bB, bY) : 0;
+  const timeSave = dB ? pct(dB, dY) : 0;
 
   const costCell = cB > 0 ? `$${cB.toFixed(3)} → $${cY.toFixed(3)}` : `${A.dim}n/a${A.reset}`;
 
@@ -1124,6 +1137,7 @@ function printComparison(baseline, yats) {
   console.log(line(`Cost:        ${costCell}   ${costSave === null ? `${A.dim}n/a${A.reset}` : sign(costSave)}`));
   console.log(line(`File reads:  ${n(rB).padStart(5)} → ${n(rY).padStart(5)}   ${sign(readSave)}`));
   console.log(line(`Bash cmds:   ${n(bB).padStart(5)} → ${n(bY).padStart(5)}   ${sign(bashSave)}`));
+  console.log(line(`Time:        ${fmtDuration(dB).padStart(8)} → ${fmtDuration(dY).padStart(8)}   ${sign(timeSave)}`));
   console.log("  ╚" + "═".repeat(W + 2) + "╝");
 }
 
@@ -1198,8 +1212,10 @@ async function runOnce() {
   for (let i = 1; i <= numRuns; i++) {
     setupAgent(agent, repoPath, false);
     const logFile = path.join(resultsDir, `${baseName}__baseline.jsonl`);
+    const t0 = Date.now();
     await runWithSpinner(`Baseline ${i}/${numRuns} — ${agent.name} is reading files to answer`, () =>
       runAgent(agent, question, repoPath, false, logFile));
+    const elapsedMs = Date.now() - t0;
     const result = parseResult(logFile);
     baselineResults.push({
       run: i, withYats: false,
@@ -1209,11 +1225,11 @@ async function runOnce() {
       toolCalls: result.toolCalls ?? {},
       fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
       yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
-      duration: result.duration ?? 0, error: result.error, logFile,
+      duration: elapsedMs, error: result.error, logFile,
     });
     const r = baselineResults[baselineResults.length - 1];
     if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
-    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.fileReads} reads, ${r.bashCmds} bash`);
+    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.fileReads} reads, ${r.bashCmds} bash, ${fmtDuration(elapsedMs)}`);
   }
 
   // 7. YATS
@@ -1222,8 +1238,10 @@ async function runOnce() {
   for (let i = 1; i <= numRuns; i++) {
     setupAgent(agent, repoPath, true);
     const logFile = path.join(resultsDir, `${baseName}__yats.jsonl`);
+    const t0 = Date.now();
     await runWithSpinner(`With YATS ${i}/${numRuns} — ${agent.name} is querying the knowledge graph`, () =>
       runAgent(agent, question, repoPath, true, logFile));
+    const elapsedMs = Date.now() - t0;
     const result = parseResult(logFile);
     yatsResults.push({
       run: i, withYats: true,
@@ -1233,11 +1251,11 @@ async function runOnce() {
       toolCalls: result.toolCalls ?? {},
       fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
       yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
-      duration: result.duration ?? 0, error: result.error, logFile,
+      duration: elapsedMs, error: result.error, logFile,
     });
     const r = yatsResults[yatsResults.length - 1];
     if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
-    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.yatsQueries} yats, ${r.fileReads} reads`);
+    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.yatsQueries} yats, ${r.fileReads} reads, ${fmtDuration(elapsedMs)}`);
   }
 
   // 8. Results
@@ -1270,6 +1288,10 @@ async function runOnce() {
     yats_queries: {
       without: Math.round(avgField(baselineResults, (r) => r.yatsQueries)),
       with: Math.round(avgField(yatsResults, (r) => r.yatsQueries)),
+    },
+    time_ms: {
+      without: Math.round(avgField(baselineResults, (r) => r.duration ?? 0)),
+      with: Math.round(avgField(yatsResults, (r) => r.duration ?? 0)),
     },
     savings_pct: tB > 0 ? Math.round(((tB - tY) / tB * 100) * 10) / 10 : null,
   });
