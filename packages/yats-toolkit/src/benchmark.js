@@ -575,7 +575,7 @@ async function selectRuns() {
 // Setup
 // ============================================================
 
-function ensureRepo(repo) {
+async function ensureRepo(repo) {
   const repoPath = path.resolve(repo.defaultPath);
   const gitDir = path.join(repoPath, ".git");
   if (fs.existsSync(repoPath) && fs.existsSync(gitDir)) {
@@ -587,13 +587,13 @@ function ensureRepo(repo) {
       console.log(`  ${A.yellow}⚠${A.reset} Removing incomplete clone at ${repoPath}...`);
       fs.rmSync(repoPath, { recursive: true, force: true });
     }
-    console.log(`  ${A.dim}Cloning ${repo.name} from ${repo.url}...${A.reset}`);
     const parent = path.dirname(repoPath);
     fs.mkdirSync(parent, { recursive: true });
-    execSync(`git clone --depth 1 ${repo.url} ${repoPath}`, {
-      stdio: "inherit",
-      timeout: 120_000,
-    });
+    await runWithSpinner(`Cloning ${repo.name}...`, () => new Promise((resolve, reject) => {
+      const proc = spawn("git", ["clone", "--depth", "1", repo.url, repoPath], { stdio: ["ignore", "pipe", "pipe"] });
+      proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`git clone exited with code ${code}`))));
+      proc.on("error", reject);
+    }));
     console.log(`  ${A.green}✓${A.reset} Cloned to ${repoPath}`);
     return repoPath;
   }
@@ -601,20 +601,62 @@ function ensureRepo(repo) {
   process.exit(1);
 }
 
-function ensureIndexed(repo, repoPath) {
+const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", "vendor", "target", "bin", "obj", ".venv", "venv", ".yarn", ".pnpm"]);
+
+function countFiles(dir) {
+  let n = 0;
+  try {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith(".")) continue;
+      if (IGNORE_DIRS.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) n += countFiles(full);
+      else if (e.isFile()) n++;
+    }
+  } catch {
+    /* ignore unreadable dirs */
+  }
+  return n;
+}
+
+function getRepoSummary(repoName) {
+  try {
+    const out = execSync(`yats summary "${repoName}"`, { encoding: "utf8", stdio: "pipe", timeout: 30_000 });
+    return JSON.parse(out);
+  } catch {
+    return null;
+  }
+}
+
+async function ensureIndexed(repo, repoPath) {
   console.log(`\n  ${A.dim}Checking if ${repo.name} is indexed...${A.reset}`);
+  let already = false;
   try {
     const out = execSync("yats list", { encoding: "utf8", stdio: "pipe" });
-    if (out.includes(repoPath)) {
-      console.log(`  ${A.green}✓${A.reset} Already indexed`);
-      return;
-    }
+    if (out.includes(repoPath)) already = true;
   } catch {
     /* not indexed yet */
   }
-  console.log(`  ${A.dim}Indexing ${repo.name} (this may take a while)...${A.reset}`);
-  execSync(`yats index "${repoPath}"`, { stdio: "inherit", timeout: 600_000 });
-  console.log(`  ${A.green}✓${A.reset} Indexed`);
+
+  if (!already) {
+    await runWithSpinner(`Indexing ${repo.name}...`, () => new Promise((resolve, reject) => {
+      const proc = spawn("yats", ["index", repoPath], { stdio: ["ignore", "pipe", "pipe"] });
+      proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`yats index exited with code ${code}`))));
+      proc.on("error", reject);
+    }));
+    console.log(`  ${A.green}✓${A.reset} Indexed`);
+  } else {
+    console.log(`  ${A.green}✓${A.reset} Already indexed`);
+  }
+
+  const summary = getRepoSummary(repo.name);
+  const files = countFiles(repoPath);
+  if (summary) {
+    const langs = (summary.languages || []).join(", ");
+    console.log(`  ${A.dim}${files.toLocaleString()} files · ${(summary.totalSymbols ?? 0).toLocaleString()} symbols · ${(summary.totalRelationships ?? 0).toLocaleString()} relationships${langs ? ` · ${langs}` : ""}${A.reset}`);
+  } else {
+    console.log(`  ${A.dim}${files.toLocaleString()} files${A.reset}`);
+  }
 }
 
 function writeSkill(repoPath, withYats) {
@@ -863,6 +905,9 @@ function parseResult(logFile) {
         const name = e.item.name ?? "function_call";
         toolCalls[name] = (toolCalls[name] ?? 0) + 1;
       }
+      if (e.type === "tool_use" && e.tool_name) {
+        toolCalls[e.tool_name] = (toolCalls[e.tool_name] ?? 0) + 1;
+      }
     }
 
     const yatsQueries = Object.entries(toolCalls)
@@ -978,21 +1023,30 @@ function printComparison(baseline, yats) {
   const W = 46;
   const n = (x) => Math.round(x).toLocaleString();
   const pct = (a, b) => ((a - b) / a * 100);
-  const arrow = (p) => (p > 0 ? "↓" : p < 0 ? "↑" : "·");
-  const line = (txt) => "  ║ " + txt.padEnd(W) + " ║";
+  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const pad = (s) => s + " ".repeat(Math.max(0, W - strip(s).length));
+  const line = (txt) => "  ║ " + pad(txt) + " ║";
+
+  const sign = (p) => {
+    if (p > 0) return `${A.green}↓ ${Math.abs(p).toFixed(1).padStart(5)}%${A.reset}`;
+    if (p < 0) return `${A.red}↑ ${Math.abs(p).toFixed(1).padStart(5)}%${A.reset}`;
+    return `${A.dim}·    0.0%${A.reset}`;
+  };
 
   const tokenSave = pct(tB, tY);
-  const costSave = pct(cB, cY);
+  const costSave = cB > 0 ? pct(cB, cY) : null;
   const readSave = rB ? pct(rB, rY) : 0;
   const bashSave = bB ? pct(bB, bY) : 0;
 
+  const costCell = cB > 0 ? `$${cB.toFixed(3)} → $${cY.toFixed(3)}` : `${A.dim}n/a${A.reset}`;
+
   console.log("  ╔" + "═".repeat(W + 2) + "╗");
-  console.log(line("SAVINGS (YATS vs Baseline)"));
+  console.log("  ║ " + "SAVINGS (YATS vs Baseline)".padEnd(W) + " ║");
   console.log("  ╠" + "═".repeat(W + 2) + "╣");
-  console.log(line(`Tokens:      ${n(tB).padStart(8)} → ${n(tY).padStart(8)}   ${arrow(tokenSave)} ${Math.abs(tokenSave).toFixed(1).padStart(5)}%`));
-  console.log(line(`Cost:        $${cB.toFixed(3)} → $${cY.toFixed(3)}   ${arrow(costSave)} ${Math.abs(costSave).toFixed(1).padStart(5)}%`));
-  console.log(line(`File reads:  ${n(rB).padStart(5)} → ${n(rY).padStart(5)}   ${arrow(readSave)} ${Math.abs(readSave).toFixed(1).padStart(5)}%`));
-  console.log(line(`Bash cmds:   ${n(bB).padStart(5)} → ${n(bY).padStart(5)}   ${arrow(bashSave)} ${Math.abs(bashSave).toFixed(1).padStart(5)}%`));
+  console.log(line(`Tokens:      ${n(tB).padStart(8)} → ${n(tY).padStart(8)}   ${sign(tokenSave)}`));
+  console.log(line(`Cost:        ${costCell}   ${costSave === null ? `${A.dim}n/a${A.reset}` : sign(costSave)}`));
+  console.log(line(`File reads:  ${n(rB).padStart(5)} → ${n(rY).padStart(5)}   ${sign(readSave)}`));
+  console.log(line(`Bash cmds:   ${n(bB).padStart(5)} → ${n(bY).padStart(5)}   ${sign(bashSave)}`));
   console.log("  ╚" + "═".repeat(W + 2) + "╝");
 }
 
@@ -1030,8 +1084,8 @@ async function runOnce() {
   }
 
   // 3. Clone + index
-  const repoPath = ensureRepo(repo);
-  ensureIndexed(repo, repoPath);
+  const repoPath = await ensureRepo(repo);
+  await ensureIndexed(repo, repoPath);
   process.env.YATS_DEFAULT_REPO = repoPath;
 
   // 4. Question
@@ -1042,16 +1096,15 @@ async function runOnce() {
 
   restoreTerminal();
 
-  const resultsDir = path.join(process.cwd(), "benchmark", "results");
+  const resultsDir = path.join(BENCH_DIR, "results");
   fs.mkdirSync(resultsDir, { recursive: true });
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
   // 6. Baseline
   console.log(`\n  ${A.bold}═══════ BASELINE (${numRuns} run${numRuns > 1 ? "s" : ""}) ═══════${A.reset}`);
   const baselineResults = [];
   for (let i = 1; i <= numRuns; i++) {
     setupAgent(agent, repoPath, false);
-    const logFile = path.join(resultsDir, `${repo.name}_baseline_${timestamp}_run${i}.jsonl`);
+    const logFile = path.join(resultsDir, `${repo.name}__${agent.name}__baseline.jsonl`);
     await runWithSpinner(`Baseline ${i}/${numRuns} — ${agent.name} is reading files to answer`, () =>
       runAgent(agent, question, repoPath, false, logFile));
     const result = parseResult(logFile);
@@ -1075,7 +1128,7 @@ async function runOnce() {
   const yatsResults = [];
   for (let i = 1; i <= numRuns; i++) {
     setupAgent(agent, repoPath, true);
-    const logFile = path.join(resultsDir, `${repo.name}_yats_${timestamp}_run${i}.jsonl`);
+    const logFile = path.join(resultsDir, `${repo.name}__${agent.name}__yats.jsonl`);
     await runWithSpinner(`With YATS ${i}/${numRuns} — ${agent.name} is querying the knowledge graph`, () =>
       runAgent(agent, question, repoPath, true, logFile));
     const result = parseResult(logFile);
