@@ -1277,6 +1277,10 @@ async function runOnce() {
     date: new Date().toISOString().slice(0, 10),
     question,
     tokens: { without: Math.round(tB), with: Math.round(tY) },
+    cost: {
+      without: Math.round(avgField(baselineResults, (r) => r.cost) * 1000) / 1000,
+      with: Math.round(avgField(yatsResults, (r) => r.cost) * 1000) / 1000,
+    },
     file_reads: {
       without: Math.round(avgField(baselineResults, (r) => r.fileReads)),
       with: Math.round(avgField(yatsResults, (r) => r.fileReads)),
