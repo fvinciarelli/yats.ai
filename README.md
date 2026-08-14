@@ -109,6 +109,16 @@ yats benchmark
 4. Your agent answers the same questions twice — with and without YATS
 5. You get a side-by-side comparison: tokens, credits, cost
 
+**Where your agent's keys come from** — `yats benchmark` runs *your* agent, which uses *your* credentials with its provider. The benchmark auto-loads `.env` (from the current directory, walking up to the repo root) into the environment; shell env vars take precedence.
+
+| Agent | Credential |
+|---|---|
+| Gemini | `GEMINI_API_KEY` (free key: [aistudio.google.com/apikey](https://aistudio.google.com/apikey)) |
+| Claude | `ANTHROPIC_API_KEY`, or your `claude` OAuth login |
+| Codex | `OPENAI_API_KEY`, or your `codex` login (`~/.codex/auth.json`) |
+| Copilot | your GitHub Copilot login (no env var) |
+| Cursor | your `cursor-agent` login |
+
 ### Our results (that you can verify)
 
 Same questions. Same repos. Fresh sessions. Every token counted.

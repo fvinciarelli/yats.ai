@@ -172,8 +172,20 @@ Deletes all indexed data for a repository (symbols, relationships, vectors). Use
 yats benchmark
 ```
 Runs an interactive AI agent benchmark. Compares token usage answering the same
-codebase questions with and without YATS. Supports Claude CLI and Codex.
-Automatically clones test repos, indexes them, and saves results with averages.
+codebase questions with and without YATS. Supports Claude, Codex, Copilot, Gemini,
+and Cursor (CLI). Clones/indexes test repos and saves results with averages.
+
+**Where your agent's keys come from** — the benchmark runs *your* agent, which uses
+*your* credentials with its provider. It auto-loads `.env` (from the current dir,
+walking up to the repo root) into the environment; shell env vars take precedence.
+
+| Agent | Credential |
+|---|---|
+| Gemini | `GEMINI_API_KEY` (free: aistudio.google.com/apikey) |
+| Claude | `ANTHROPIC_API_KEY`, or `claude` OAuth login |
+| Codex | `OPENAI_API_KEY`, or `codex` login (`~/.codex/auth.json`) |
+| Copilot | GitHub Copilot login (no env var) |
+| Cursor | `cursor-agent` login |
 
 ## License
 

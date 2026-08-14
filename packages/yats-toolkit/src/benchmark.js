@@ -228,6 +228,58 @@ function toAbsolute(p) {
   return path.resolve(s);
 }
 
+// ============================================================
+// .env loading — so spawned agents inherit API keys
+// ============================================================
+
+function loadEnvFile(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    let count = 0;
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (key && !(key in process.env)) {
+        process.env[key] = value;
+        count++;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+function loadEnv() {
+  const candidates = [];
+  candidates.push(path.join(process.cwd(), ".env"));
+
+  // walk up from this module (src/) to find a repo-root .env
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    const p = path.join(dir, ".env");
+    if (!candidates.includes(p)) candidates.push(p);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  for (const c of candidates) {
+    if (loadEnvFile(c) > 0) return c;
+  }
+  return null;
+}
+
+const LOADED_ENV = loadEnv();
+if (LOADED_ENV) logger.info(`Loaded ${LOADED_ENV}`);
+
 let selectedModel = null;
 let workDir = path.join(process.cwd(), "repos");
 
@@ -645,12 +697,12 @@ ${mcp}`);
 
     case "gemini-config": {
       const dir = path.join(repoPath, ".gemini");
+      process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
       if (withYats) {
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({
           mcpServers: { yats: { command: "yats", args: ["bridge"], trust: true } },
         }, null, 2));
-        process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
       } else {
         fs.rmSync(path.join(dir, "settings.json"), { force: true });
       }
