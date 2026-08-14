@@ -393,7 +393,7 @@ const KNOWN_AGENTS = [
     authLabel: "codex login (~/.codex/auth.json)",
     needsSkill: false,
     mcpKind: "codex-config",
-    runCmd: (prompt, repoDir, hasMcp, model) => ["exec", "--json", "--skip-git-repo-check", prompt],
+    runCmd: (prompt, repoDir, hasMcp, model) => ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", prompt],
   },
   {
     name: "copilot",
@@ -716,7 +716,6 @@ function setupAgent(agent, repoPath, withYats) {
         ? `\n[mcp_servers.yats]\ncommand = "yats"\nargs = ["bridge"]\n`
         : "";
       fs.writeFileSync(path.join(dir, "config.toml"), `model = "${model}"
-model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 approval_policy = "never"
 
@@ -874,12 +873,25 @@ function parseResult(logFile) {
       duration = last.duration_ms ?? duration;
     }
 
+    // Codex: "turn.failed" or "error" events
+    if (!errorMsg) {
+      for (const e of events) {
+        if (e.type === "turn.failed" && e.error?.message) {
+          errorMsg = e.error.message;
+          break;
+        }
+        if (e.type === "error" && e.message) {
+          errorMsg = e.message;
+          break;
+        }
+      }
+    }
+
     // Codex: "turn.completed" events with usage
     for (const e of events) {
       if (e.type === "turn.completed" && e.usage) {
         const u = e.usage;
-        tokens += (u.input_tokens ?? 0) + (u.cached_input_tokens ?? 0) +
-          (u.output_tokens ?? 0) + (u.reasoning_output_tokens ?? 0);
+        tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.reasoning_output_tokens ?? 0);
         outputTokens += u.output_tokens ?? 0;
         cacheRead += u.cached_input_tokens ?? 0;
       }
@@ -910,24 +922,32 @@ function parseResult(logFile) {
           if (c.type === "tool_use") toolCalls[c.name] = (toolCalls[c.name] ?? 0) + 1;
         }
       }
-      if (e.type === "item.completed" && e.item?.type === "mcp_tool_call") {
-        const name = e.item.tool ?? "mcp_tool_call";
-        toolCalls[name] = (toolCalls[name] ?? 0) + 1;
-      }
-      if (e.type === "item.completed" && e.item?.type === "function_call") {
-        const name = e.item.name ?? "function_call";
-        toolCalls[name] = (toolCalls[name] ?? 0) + 1;
+      if (e.type === "item.completed" && e.item) {
+        const it = e.item;
+        if (it.type !== "agent_message" && it.type !== "message") {
+          const name = it.tool || it.name || it.type;
+          if (name) toolCalls[name] = (toolCalls[name] ?? 0) + 1;
+        }
       }
       if (e.type === "tool_use" && e.tool_name) {
         toolCalls[e.tool_name] = (toolCalls[e.tool_name] ?? 0) + 1;
       }
     }
 
+    const YATS_TOOLS = new Set([
+      "search_code", "search_documentation", "search_similar",
+      "find_symbol", "find_references", "find_callers", "find_callees",
+      "find_implementations", "find_inheritors", "find_tests",
+      "find_routes", "find_configuration", "expand_graph", "related_symbols",
+      "list_symbols", "list_repositories", "repository_summary",
+      "architecture_summary", "index_repository", "delete_repository",
+      "reindex", "index_file", "remove_file",
+    ]);
     const yatsQueries = Object.entries(toolCalls)
-      .filter(([k]) => /yats|mcp__/i.test(k))
+      .filter(([k]) => /yats|mcp__/i.test(k) || YATS_TOOLS.has(k))
       .reduce((sum, [, v]) => sum + v, 0);
     const fileReads = (toolCalls["Read"] ?? 0) + (toolCalls["read_file"] ?? 0);
-    const bashCmds = (toolCalls["Bash"] ?? 0) + (toolCalls["bash"] ?? 0);
+    const bashCmds = (toolCalls["Bash"] ?? 0) + (toolCalls["bash"] ?? 0) + (toolCalls["command_execution"] ?? 0);
 
     let contentChars = 0;
     for (const e of events) {
