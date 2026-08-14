@@ -1098,13 +1098,16 @@ async function runOnce() {
 
   const resultsDir = path.join(BENCH_DIR, "results");
   fs.mkdirSync(resultsDir, { recursive: true });
+  const model = selectedModel ?? agent.defaultModel;
+  const date = new Date().toISOString().slice(0, 10);
+  const baseName = `${repo.name}__${agent.name}__${model}__${date}`;
 
   // 6. Baseline
   console.log(`\n  ${A.bold}═══════ BASELINE (${numRuns} run${numRuns > 1 ? "s" : ""}) ═══════${A.reset}`);
   const baselineResults = [];
   for (let i = 1; i <= numRuns; i++) {
     setupAgent(agent, repoPath, false);
-    const logFile = path.join(resultsDir, `${repo.name}__${agent.name}__baseline.jsonl`);
+    const logFile = path.join(resultsDir, `${baseName}__baseline.jsonl`);
     await runWithSpinner(`Baseline ${i}/${numRuns} — ${agent.name} is reading files to answer`, () =>
       runAgent(agent, question, repoPath, false, logFile));
     const result = parseResult(logFile);
@@ -1128,7 +1131,7 @@ async function runOnce() {
   const yatsResults = [];
   for (let i = 1; i <= numRuns; i++) {
     setupAgent(agent, repoPath, true);
-    const logFile = path.join(resultsDir, `${repo.name}__${agent.name}__yats.jsonl`);
+    const logFile = path.join(resultsDir, `${baseName}__yats.jsonl`);
     await runWithSpinner(`With YATS ${i}/${numRuns} — ${agent.name} is querying the knowledge graph`, () =>
       runAgent(agent, question, repoPath, true, logFile));
     const result = parseResult(logFile);
