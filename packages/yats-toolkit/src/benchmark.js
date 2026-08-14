@@ -1050,6 +1050,19 @@ function printComparison(baseline, yats) {
   console.log("  ╚" + "═".repeat(W + 2) + "╝");
 }
 
+function saveResult(entry) {
+  const file = path.join(BENCH_DIR, "results.json");
+  let data = { runs: [] };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Array.isArray(parsed.runs)) data = parsed;
+  } catch {
+    /* start fresh */
+  }
+  data.runs.push(entry);
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n");
+}
+
 // ============================================================
 // Main entry
 // ============================================================
@@ -1154,6 +1167,35 @@ async function runOnce() {
   printTable(repo.name, baselineResults, false);
   printTable(repo.name, yatsResults, true);
   printComparison(baselineResults, yatsResults);
+
+  // Persist a summary entry to results.json
+  const avgField = (arr, f) => {
+    const good = arr.filter((r) => !r.error);
+    return good.length ? good.reduce((s, r) => s + f(r), 0) / good.length : 0;
+  };
+  const tB = avgField(baselineResults, (r) => r.tokens);
+  const tY = avgField(yatsResults, (r) => r.tokens);
+  saveResult({
+    agent: agent.name,
+    model: selectedModel ?? agent.defaultModel,
+    repo: repo.name,
+    date: new Date().toISOString().slice(0, 10),
+    question,
+    tokens: { without: Math.round(tB), with: Math.round(tY) },
+    file_reads: {
+      without: Math.round(avgField(baselineResults, (r) => r.fileReads)),
+      with: Math.round(avgField(yatsResults, (r) => r.fileReads)),
+    },
+    bash_cmds: {
+      without: Math.round(avgField(baselineResults, (r) => r.bashCmds)),
+      with: Math.round(avgField(yatsResults, (r) => r.bashCmds)),
+    },
+    yats_queries: {
+      without: Math.round(avgField(baselineResults, (r) => r.yatsQueries)),
+      with: Math.round(avgField(yatsResults, (r) => r.yatsQueries)),
+    },
+    savings_pct: tB > 0 ? Math.round(((tB - tY) / tB * 100) * 10) / 10 : null,
+  });
 
   console.log(`\n  ${A.dim}Logs saved to: ${resultsDir}${A.reset}\n`);
 }

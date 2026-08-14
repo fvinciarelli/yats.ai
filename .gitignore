@@ -33,4 +33,5 @@ bin/
 !.plans/benchmark/
 AGENTS.md
 .aider*
+packages/yats-toolkit/benchmark/results/
 repos/
