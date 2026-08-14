@@ -741,7 +741,7 @@ function setupAgent(agent, repoPath, withYats) {
       fs.writeFileSync(path.join(home, "config.toml"), config);
       if (withYats) {
         const ag = readConnect("codex", "AGENTS.md");
-        if (ag) fs.writeFileSync(path.join(repoPath, "AGENTS.md"), ag);
+        if (ag) fs.writeFileSync(path.join(repoPath, "AGENTS.md"), ag.replaceAll("__REPO_NAME__", path.basename(repoPath)));
       } else {
         fs.rmSync(path.join(repoPath, "AGENTS.md"), { force: true });
       }
