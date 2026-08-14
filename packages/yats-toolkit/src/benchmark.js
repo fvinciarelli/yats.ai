@@ -156,6 +156,8 @@ async function select(title, options) {
   }
 
   let idx = 0;
+  const cols = process.stdout.columns || 80;
+  const maxLabel = Math.max(24, cols - 12);
   const draw = () => {
     let s = `  ${A.bold}${A.purple}${title}${A.reset}\n`;
     for (let i = 0; i < options.length; i++) {
@@ -163,6 +165,7 @@ async function select(title, options) {
       const sel = i === idx;
       const cursor = sel ? `${A.purple}›${A.reset}` : " ";
       let label = o.label;
+      if (label.length > maxLabel) label = label.slice(0, maxLabel - 1) + "…";
       if (sel) label = `${A.bold}${label}${A.reset}`;
       if (!sel && o.accent) label = `${A.cyan}${label}${A.reset}`;
       if (sel && o.accent) label = `${A.bold}${A.cyan}${label}${A.reset}`;
@@ -390,7 +393,7 @@ const KNOWN_AGENTS = [
     authLabel: "codex login (~/.codex/auth.json)",
     needsSkill: false,
     mcpKind: "codex-config",
-    runCmd: (prompt, repoDir, hasMcp, model) => ["exec", "--json", prompt],
+    runCmd: (prompt, repoDir, hasMcp, model) => ["exec", "--json", "--skip-git-repo-check", prompt],
   },
   {
     name: "copilot",
@@ -651,12 +654,19 @@ async function ensureIndexed(repo, repoPath) {
 
   const summary = getRepoSummary(repo.name);
   const files = countFiles(repoPath);
-  if (summary) {
-    const langs = (summary.languages || []).join(", ");
-    console.log(`  ${A.dim}${files.toLocaleString()} files · ${(summary.totalSymbols ?? 0).toLocaleString()} symbols · ${(summary.totalRelationships ?? 0).toLocaleString()} relationships${langs ? ` · ${langs}` : ""}${A.reset}`);
-  } else {
-    console.log(`  ${A.dim}${files.toLocaleString()} files${A.reset}`);
-  }
+  const rows = [
+    ["Files", files.toLocaleString()],
+    ["Symbols", (summary?.totalSymbols ?? 0).toLocaleString()],
+    ["Relationships", (summary?.totalRelationships ?? 0).toLocaleString()],
+    ["Languages", (summary?.languages || []).join(", ") || "—"],
+  ];
+  const w1 = Math.max(...rows.map((r) => r[0].length));
+  const w2 = Math.max(...rows.map((r) => r[1].length));
+  const border = (l, m, r) => "  " + l + "─".repeat(w1 + 2) + m + "─".repeat(w2 + 2) + r;
+  const row = (a, b) => `  │ ${a.padEnd(w1)} │ ${b.padEnd(w2)} │`;
+  console.log(border("┌", "┬", "┐"));
+  for (const [a, b] of rows) console.log(row(a, b));
+  console.log(border("└", "┴", "┘"));
 }
 
 function writeSkill(repoPath, withYats) {
@@ -800,7 +810,7 @@ function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 180) 
   return new Promise((resolve) => {
     const proc = spawn(agent.cli, args, {
       cwd: repoPath,
-      stdio: ["pipe", fs.openSync(logFile, "w"), "pipe"],
+      stdio: ["ignore", fs.openSync(logFile, "w"), "pipe"],
       timeout: timeoutSec * 1000,
     });
 
@@ -848,6 +858,9 @@ function parseResult(logFile) {
       const last = results[results.length - 1];
       if (last.is_error || last.is_api_error_message) {
         errorMsg = last.result || last.error || "agent reported an error";
+      }
+      if (last.status === "error") {
+        errorMsg = last.error?.message || last.result || "agent reported an error";
       }
       const mu = last.modelUsage ?? {};
       for (const k of Object.keys(mu)) {
