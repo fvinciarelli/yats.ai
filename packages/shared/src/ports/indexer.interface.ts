@@ -29,4 +29,5 @@ export interface Indexer {
     status: "indexed" | "reindexed" | "fresh";
     result?: IndexResult;
   }>;
+  rebuildVectors(): Promise<{ repositories: number; symbols: number; errors: number }>;
 }

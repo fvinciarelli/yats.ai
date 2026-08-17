@@ -23,13 +23,22 @@ function loadVoyageConfig(): VoyageConfig {
   };
 }
 
+const VOYAGE_MODEL_DIMENSIONS: Record<string, number> = {
+  "voyage-code-2": 1536,
+  "voyage-3": 1024,
+  "voyage-3-large": 1024,
+  "voyage-3-lite": 512,
+  "voyage-2": 1024,
+};
+
 export class VoyageEmbeddingGenerator implements EmbeddingGenerator {
-  readonly dimensions = 1536; // voyage-code-2
+  readonly dimensions: number;
   private readonly config: VoyageConfig;
   private readonly logger: Logger;
 
   constructor(config?: Partial<VoyageConfig>) {
     this.config = { ...loadVoyageConfig(), ...config };
+    this.dimensions = VOYAGE_MODEL_DIMENSIONS[this.config.model] ?? 1536;
     this.logger = createLogger("embeddings:voyage");
   }
 

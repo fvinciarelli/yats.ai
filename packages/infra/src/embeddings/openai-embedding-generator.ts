@@ -21,13 +21,20 @@ function loadOpenAIConfig(): OpenAIConfig {
   };
 }
 
+const OPENAI_MODEL_DIMENSIONS: Record<string, number> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
+};
+
 export class OpenAIEmbeddingGenerator implements EmbeddingGenerator {
-  readonly dimensions = 1536; // text-embedding-3-small
+  readonly dimensions: number;
   private readonly config: OpenAIConfig;
   private readonly logger: Logger;
 
   constructor(config?: Partial<OpenAIConfig>) {
     this.config = { ...loadOpenAIConfig(), ...config };
+    this.dimensions = OPENAI_MODEL_DIMENSIONS[this.config.model] ?? 1536;
     this.logger = createLogger("embeddings:openai");
   }
 

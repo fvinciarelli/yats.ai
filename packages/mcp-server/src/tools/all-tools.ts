@@ -58,6 +58,7 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     INDEX_REPOSITORY,
     DELETE_REPOSITORY,
     REINDEX,
+    REBUILD_VECTORS,
     INDEX_FILE,
     REMOVE_FILE,
   ];
@@ -447,6 +448,16 @@ const REINDEX: ToolDefinition = {
   },
 };
 
+const REBUILD_VECTORS: ToolDefinition = {
+  name: "rebuild_vectors",
+  description: "Rebuild the vector index after the embedding model/dimension changed. Re-embeds all symbols and may incur API costs — always ask the user before proceeding.",
+  inputSchema: {
+    type: "object",
+    properties: {},
+    required: [],
+  },
+};
+
 const INDEX_FILE: ToolDefinition = {
   name: "index_file",
   description: "Re-index a single file after editing it. Call this immediately after you modify a file so the knowledge graph stays up to date.",
@@ -617,11 +628,30 @@ async function resolveSymbolId(
 // Tool Handler Factory
 // ============================================================
 
+function vectorIndexMismatchMessage(): string {
+  return [
+    "The vector index dimension does not match the current embedding model — semantic search is degraded.",
+    "",
+    "This happens when the embedding provider/model changed since the last index.",
+    "",
+    "To fix it, the vector index must be rebuilt. This re-embeds every indexed symbol via the current",
+    "embedding provider and MAY INCUR API COSTS.",
+    "",
+    "Tell the user the impact and ask for explicit confirmation. If they confirm, run:",
+    "  yats reindex --rebuild-vectors",
+    "",
+    "Graph-only tools (find_symbol, find_callers, find_references, etc.) still work without the vector index.",
+  ].join("\n");
+}
+
 export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandler> {
   const handlers = new Map<string, ToolHandler>();
   const logger = createLogger("mcp:tools");
 
   handlers.set("search_code", async (args) => {
+    if (deps.vectorRepository.dimensionMismatch) {
+      return { content: [{ type: "text", text: vectorIndexMismatchMessage() }], isError: true };
+    }
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
@@ -641,6 +671,9 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("search_documentation", async (args) => {
+    if (deps.vectorRepository.dimensionMismatch) {
+      return { content: [{ type: "text", text: vectorIndexMismatchMessage() }], isError: true };
+    }
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
@@ -805,6 +838,9 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("search_similar", async (args) => {
+    if (deps.vectorRepository.dimensionMismatch) {
+      return { content: [{ type: "text", text: vectorIndexMismatchMessage() }], isError: true };
+    }
     const symbol = await deps.graphRepository.findSymbol(args.symbolId as string);
     if (!symbol) {
       return { content: [{ type: "text", text: "Symbol not found" }], isError: true };
@@ -938,6 +974,30 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
             duration: `${(result.duration / 1000).toFixed(1)}s`,
           } : null,
         }, null, 2),
+      }],
+    };
+  });
+
+  handlers.set("rebuild_vectors", async () => {
+    return {
+      content: [{
+        type: "text",
+        text: [
+          "The vector index needs to be rebuilt — the embedding model or its dimension changed.",
+          "",
+          "⚠️  IMPORTANT: Rebuilding re-embeds every indexed symbol using the current embedding provider",
+          "and MAY INCUR API COSTS. Do NOT run this automatically.",
+          "",
+          "Tell the user:",
+          "  - Semantic search is degraded until the vector index matches the current embedding model.",
+          "  - Rebuilding re-embeds all symbols across all indexed repositories and may cost money.",
+          "  - Ask for explicit confirmation before proceeding.",
+          "",
+          "If the user confirms, run:",
+          "  yats reindex --rebuild-vectors",
+          "",
+          "If the user declines, graph-only tools (find_symbol, find_callers, find_references, etc.) still work.",
+        ].join("\n"),
       }],
     };
   });

@@ -5,6 +5,15 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-08-17
+
+### Added
+- Embedding model selection per provider in `yats setup` (models stored in `.env` as `EMBEDDING_<PROVIDER>_MODEL`).
+- Dynamic vector dimensions per embedding model (no more hardcoded 768/1024/1536).
+- Dimension-change detection: Qdrant startup warns when the collection dimension doesn't match the model, and search tools return rebuild instructions.
+- `rebuild_vectors` MCP tool + `yats reindex --rebuild-vectors` CLI (re-embeds all symbols; warns about API costs and asks for confirmation).
+- Infra tests: generator dimension maps, `extractVectorSize`, and a `.env`-gated Qdrant E2E test (`YATS_E2E=1`).
+
 ## [0.3.1] - 2026-08-17
 
 ### Fixed
@@ -60,7 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker Compose** one-command deployment (`docker compose up`).
 - **Docker image** published to `ghcr.io/fvinciarelli/yats.ai`.
 
-[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.3.2
 [0.3.1]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.3.1
 [0.3.0]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.3.0
 [0.1.14]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.1.14

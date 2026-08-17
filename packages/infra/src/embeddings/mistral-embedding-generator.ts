@@ -22,13 +22,18 @@ function loadMistralConfig(): MistralConfig {
   };
 }
 
+const MISTRAL_MODEL_DIMENSIONS: Record<string, number> = {
+  "mistral-embed": 1024,
+};
+
 export class MistralEmbeddingGenerator implements EmbeddingGenerator {
-  readonly dimensions = 1024; // mistral-embed
+  readonly dimensions: number;
   private readonly config: MistralConfig;
   private readonly logger: Logger;
 
   constructor(config?: Partial<MistralConfig>) {
     this.config = { ...loadMistralConfig(), ...config };
+    this.dimensions = MISTRAL_MODEL_DIMENSIONS[this.config.model] ?? 1024;
     this.logger = createLogger("embeddings:mistral");
   }
 

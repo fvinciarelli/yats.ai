@@ -159,6 +159,8 @@ export const schemas = {
     path: safePath,
   }),
 
+  rebuild_vectors: z.object({}),
+
   index_file: z.object({
     path: safePath,
     repository: safeRepoName,

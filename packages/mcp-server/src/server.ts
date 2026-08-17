@@ -331,6 +331,12 @@ export class McpServer {
         return;
       }
 
+      // Rebuild vector index (re-embed all symbols) — used by `yats reindex --rebuild-vectors`
+      if (req.method === "POST" && url.pathname === "/reindex") {
+        this.handleRebuildVectors(req, res);
+        return;
+      }
+
       // 404
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "not found" }));
@@ -524,6 +530,20 @@ export class McpServer {
       res.end(JSON.stringify({ ok: true, removed: result.removed, file: path }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleRebuildVectors(
+    _req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const result = await this.indexer.rebuildVectors();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+    } catch (err: any) {
+      res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));
     }
   }

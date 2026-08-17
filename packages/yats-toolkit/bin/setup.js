@@ -50,6 +50,9 @@ switch (cmd) {
     import("../src/indexer.js").then(m => m.default(cleanArgs, { skipDocs }));
     break;
   }
+  case "reindex":
+    import("../src/reindex.js").then(m => m.default(args));
+    break;
   case "search":
     import("../src/search.js").then(m => m.default(args));
     break;

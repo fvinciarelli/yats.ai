@@ -558,6 +558,68 @@ export class IndexerService implements Indexer {
     return { status: "fresh" };
   }
 
+  /**
+   * Rebuild the entire vector index with the current embedding model.
+   * Recreates the Qdrant collections at the model's dimension, then re-embeds
+   * every symbol already stored in Neo4j (no re-analysis of source code).
+   * May incur API embedding costs.
+   */
+  async rebuildVectors(): Promise<{ repositories: number; symbols: number; errors: number }> {
+    this.logger.info("Rebuilding vector index (re-embedding all symbols)...");
+
+    await this.deps.vectorRepository.recreateCollections(this.deps.embeddingGenerator.dimensions);
+
+    const repos = await this.deps.graphRepository.listRepositories();
+    let totalSymbols = 0;
+    let errors = 0;
+    const PAGE = 500;
+
+    for (const repo of repos) {
+      let offset = 0;
+      while (true) {
+        const symbols = await this.deps.graphRepository.listSymbols(repo.name, undefined, PAGE, offset);
+        if (symbols.length === 0) break;
+        offset += symbols.length;
+
+        for (let i = 0; i < symbols.length; i += this.embedBatchSize) {
+          const chunk = symbols.slice(i, i + this.embedBatchSize);
+          const texts = chunk.map((s) => this.buildEmbeddingText(s));
+          try {
+            const vectors = await this.deps.embeddingGenerator.embedBatch(texts);
+            await this.deps.vectorRepository.upsertVectors(
+              chunk.map((symbol, j) => ({
+                id: symbol.id,
+                vector: vectors[j] ?? [],
+                payload: {
+                  symbolId: symbol.id,
+                  language: symbol.language as any,
+                  repository: symbol.location.repository,
+                  relativePath: symbol.location.relativePath,
+                  namespace: symbol.namespace,
+                  className: symbol.parentClass,
+                  methodName: symbol.kind === "method" ? symbol.name : null,
+                  kind: symbol.kind,
+                  contentHash: symbol.contentHash,
+                  gitCommit: null,
+                  timestamp: new Date().toISOString(),
+                },
+              })),
+            );
+            totalSymbols += chunk.length;
+          } catch (e) {
+            errors += chunk.length;
+            this.logger.error(`Rebuild vectors failed for "${repo.name}": ${(e as Error).message}`);
+          }
+        }
+
+        if (symbols.length < PAGE) break;
+      }
+    }
+
+    this.logger.info(`Vector rebuild done — ${totalSymbols} symbols re-embedded across ${repos.length} repositories (${errors} errors)`);
+    return { repositories: repos.length, symbols: totalSymbols, errors };
+  }
+
   // ============================================================
   // Single File Index
   // ============================================================

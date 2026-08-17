@@ -43,6 +43,33 @@ const Y = "\x1b[33m";
 const C = "\x1b[36m";
 const RED = "\x1b[31m";
 
+// Embedding models per provider (with their vector dimensions)
+const PROVIDER_MODELS = {
+  openai: [
+    { label: "text-embedding-3-small (1536d, fast & cheap)", value: "text-embedding-3-small" },
+    { label: "text-embedding-3-large (3072d, more accurate)", value: "text-embedding-3-large" },
+    { label: "text-embedding-ada-002 (1536d, legacy)", value: "text-embedding-ada-002" },
+  ],
+  mistral: [
+    { label: "mistral-embed (1024d)", value: "mistral-embed" },
+  ],
+  voyage: [
+    { label: "voyage-code-2 (1536d, code-optimized)", value: "voyage-code-2" },
+    { label: "voyage-3 (1024d)", value: "voyage-3" },
+    { label: "voyage-3-large (1024d, most accurate)", value: "voyage-3-large" },
+    { label: "voyage-3-lite (512d, fastest & cheapest)", value: "voyage-3-lite" },
+    { label: "voyage-2 (1024d, legacy)", value: "voyage-2" },
+  ],
+  ollama: [
+    { label: "nomic-embed-text (768d, fast, ~274MB)", value: "nomic-embed-text" },
+    { label: "mxbai-embed-large (1024d, more accurate, ~669MB)", value: "mxbai-embed-large" },
+    { label: "bge-m3 (1024d, multilingual)", value: "bge-m3" },
+    { label: "snowflake-arctic-embed (1024d)", value: "snowflake-arctic-embed" },
+  ],
+};
+
+const DEFAULT_MODEL = { openai: "text-embedding-3-small", mistral: "mistral-embed", voyage: "voyage-code-2", ollama: "nomic-embed-text" };
+
 // Minimal embedded docker-compose as fallback
 const EMBEDDED_COMPOSE = `services:
   neo4j:
@@ -92,10 +119,13 @@ const EMBEDDED_COMPOSE = `services:
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDING_PROVIDER=\${EMBEDDING_PROVIDER:-ollama}
       - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=__OLLAMA_MODEL__
+      - OLLAMA_MODEL=\${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text}
       - OPENAI_API_KEY=\${EMBEDDING_OPENAI_API_KEY:-}
+      - OPENAI_MODEL=\${EMBEDDING_OPENAI_MODEL:-text-embedding-3-small}
       - MISTRAL_API_KEY=\${EMBEDDING_MISTRAL_API_KEY:-}
+      - MISTRAL_MODEL=\${EMBEDDING_MISTRAL_MODEL:-mistral-embed}
       - VOYAGE_API_KEY=\${EMBEDDING_VOYAGE_API_KEY:-}
+      - VOYAGE_MODEL=\${EMBEDDING_VOYAGE_MODEL:-voyage-code-2}
       - REPOSITORIES_PATH=/repos
       - YATS_PORT=__MCP_PORT__
       - EMBEDDING_BATCH_SIZE=__BATCH_SIZE__
@@ -129,7 +159,7 @@ const OLLAMA_SERVICE = `  ollama:
       - |
         ollama serve &
         sleep 5
-        ollama pull __OLLAMA_MODEL__ 2>/dev/null || true
+        ollama pull \${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text} 2>/dev/null || true
         wait
   ollama-models:
 `;
@@ -322,17 +352,16 @@ async function checkYatsRunning() {
 // Compose file generation
 // ============================================================
 
-function generateCompose(provider, ollamaModel, apiKey, mcpPort, batchSize, indexDocs, docMaxFiles) {
+function generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles) {
   let compose = EMBEDDED_COMPOSE;
 
   if (provider === "ollama") {
-    compose = compose.replace("__OLLAMA_PLACEHOLDER__", OLLAMA_SERVICE.replace("__OLLAMA_MODEL__", ollamaModel));
+    compose = compose.replace("__OLLAMA_PLACEHOLDER__", OLLAMA_SERVICE);
   } else {
     compose = compose.replace("__OLLAMA_PLACEHOLDER__", "");
   }
 
   compose = compose
-    .replace(/__OLLAMA_MODEL__/g, ollamaModel)
     .replace(/__MCP_PORT__/g, String(mcpPort))
     .replace(/__BATCH_SIZE__/g, String(batchSize))
     .replace(/__INDEX_DOCS__/g, indexDocs ? "true" : "false")
@@ -496,15 +525,9 @@ async function main(options = {}) {
   }
 
   let apiKey = "";
-  let ollamaModel = "nomic-embed-text";
+  let model = DEFAULT_MODEL[provider];
 
-  if (provider === "ollama") {
-    step("Step 2 — Ollama model");
-    ollamaModel = await choose("Which model?", [
-      { label: "nomic-embed-text (768d, fast, ~274MB)", value: "nomic-embed-text" },
-      { label: "mxbai-embed-large (1024d, more accurate, ~669MB)", value: "mxbai-embed-large" },
-    ]);
-  } else {
+  if (provider !== "ollama") {
     const providerNames = { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
     step(`Step 2 — ${providerNames[provider]} API key`);
 
@@ -561,7 +584,16 @@ async function main(options = {}) {
     console.log("");
   }
 
-  // Step 3: Embedding batch size
+  // Embedding model (every provider)
+  if (nonInteractive) {
+    console.log(`  Embedding model: ${model}`);
+  } else {
+    step(provider === "ollama" ? "Step 2 — Embedding model" : "Step 3 — Embedding model");
+    model = await choose("Which embedding model?", PROVIDER_MODELS[provider]);
+    console.log("");
+  }
+
+  // Step 4: Embedding batch size
   const BATCH_DEFAULTS = { openai: 200, mistral: 200, voyage: 100, ollama: 4 };
   const BATCH_MAX = { openai: 2048, mistral: 1024, voyage: 128, ollama: 4 };
   const defaultBatch = prefill.batch || BATCH_DEFAULTS[provider];
@@ -571,7 +603,7 @@ async function main(options = {}) {
   if (nonInteractive) {
     console.log(`  Batch size: ${batchSize}`);
   } else {
-    step(`Step 3 — Embedding batch size`);
+    step(`Step 4 — Embedding batch size`);
     console.log(`  ${D}How many texts to embed per API request.${R}`);
     console.log(`  ${D}Higher = faster indexing, lower = safer for rate limits.${R}`);
     console.log(`  ${D}Provider max: ${maxBatch}${R}`);
@@ -594,7 +626,7 @@ async function main(options = {}) {
   let indexDocs = !prefill.noDocs;
 
   if (!nonInteractive) {
-    step("Step 4 — Documentation indexing");
+    step("Step 5 — Documentation indexing");
     console.log(`  ${D}Index README, ARCHITECTURE, AI/ docs, and docs/ directory.${R}`);
     console.log(`  ${D}Patterns (edit via DOC_PATTERNS env): AI/*.md, README.md, docs/${R}`);
     console.log(`  ${D}If docs/ has >${docMaxFiles} .md files, you'll get a warning.${R}`);
@@ -670,7 +702,7 @@ async function main(options = {}) {
   if (!nonInteractive && !prefill.skipConfirm) {
     step(`Step ${pathsToIndex.length ? "6" : "5"} — Confirm`);
     const providerName = provider === "ollama"
-      ? `Ollama (${ollamaModel})`
+      ? `Ollama (${model})`
       : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
     box([
       `${B}Provider:${R}     ${providerName}`,
@@ -703,7 +735,7 @@ async function main(options = {}) {
   mkdirSync(REPOS_DIR, { recursive: true });
 
   // Generate and write docker-compose
-  const compose = generateCompose(provider, ollamaModel, apiKey, mcpPort, batchSize, indexDocs, docMaxFiles);
+  const compose = generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles);
   writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
@@ -718,6 +750,8 @@ async function main(options = {}) {
   if (provider === "openai" && apiKey) envMap.EMBEDDING_OPENAI_API_KEY = apiKey;
   if (provider === "mistral" && apiKey) envMap.EMBEDDING_MISTRAL_API_KEY = apiKey;
   if (provider === "voyage" && apiKey) envMap.EMBEDDING_VOYAGE_API_KEY = apiKey;
+  const modelVar = { openai: "EMBEDDING_OPENAI_MODEL", mistral: "EMBEDDING_MISTRAL_MODEL", voyage: "EMBEDDING_VOYAGE_MODEL", ollama: "EMBEDDING_OLLAMA_MODEL" }[provider];
+  if (model && modelVar) envMap[modelVar] = model;
   writeFileSync(ENV_FILE, Object.entries(envMap).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 
   // Pull the YATS Docker image from GitHub Container Registry
