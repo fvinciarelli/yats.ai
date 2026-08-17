@@ -510,12 +510,18 @@ export class IndexerService implements Indexer {
   }> {
     const repoName = this.getRepoName(repositoryPath);
 
-    // Check if repository exists in the graph
+    // Check if repository exists in the graph. YATS identifies repos by rootPath
+    // (findRepositoryByPath + the bridge injects the full path), so a same-named
+    // repo at a different path is effectively a different repo. Reindex fully so
+    // the stored rootPath gets corrected instead of staying stale forever.
     const repos = await this.deps.graphRepository.listRepositories();
-    const exists = repos.some((r) => r.name === repoName);
+    const existing = repos.find((r) => r.name === repoName);
+    const pathChanged = existing ? existing.rootPath !== repositoryPath : false;
 
-    if (!exists) {
-      this.logger.info(`Repository "${repoName}" not indexed yet — full indexing...`);
+    if (!existing || pathChanged) {
+      this.logger.info(
+        `Repository "${repoName}" ${pathChanged ? "moved to a new path" : "not indexed yet"} — full indexing...`,
+      );
       const result = await this.indexRepository(repositoryPath, options);
       return { status: "indexed", result };
     }

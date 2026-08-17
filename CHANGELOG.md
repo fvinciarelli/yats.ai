@@ -5,7 +5,7 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-08-13
+## [0.3.0] - 2026-08-17
 
 ### Added
 - **Benchmark wizard v2** — interactive arrow-key UI with colors, model selection per agent, spinner + stage text during runs, and a run-again/exit menu.
@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Gemini baseline run now sets `GEMINI_CLI_TRUST_WORKSPACE` in both with/without YATS.
 - Benchmark surfaces agent errors (e.g. "Credit balance is too low") instead of showing 0 tokens.
+- Indexer fully reindexes when a repo is indexed at a new rootPath (previously it deduped by name and never updated the stored path, causing "always reindexes" loops).
+- Benchmark instructs agents to answer inline without writing files (Claude was generating .md artifacts during baseline runs).
+- Benchmark drains agent stderr (removes a pipe deadlock risk) and detects "already indexed" by exact rootPath instead of substring.
+- Benchmark shows live agent activity next to the spinner during runs.
 
 ## [0.1.14] - 2026-08-02
 

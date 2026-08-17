@@ -313,7 +313,7 @@ function readConnect(agentDir, file) {
 // Private/unknown repos (the LLM has never seen them) — the real proof.
 const UNKNOWN_REPOS = [
   {
-    name: "lab_hub",
+    name: "hub-lab",
     url: "https://github.com/fvinciarelli/hub-lab.git",
     language: "go",
     known: false,
@@ -430,7 +430,7 @@ const KNOWN_AGENTS = [
       "-p", prompt,
       "--output-format", "json",
       "--allow-all",
-      ...(hasMcp ? ["--mcp-config", "/tmp/copilot-mcp.json"] : []),
+      ...(hasMcp ? ["--additional-mcp-config", "@/tmp/copilot-mcp.json"] : []),
     ],
   },
   {
@@ -649,15 +649,25 @@ function getRepoSummary(repoName) {
   }
 }
 
-async function ensureIndexed(repo, repoPath) {
-  console.log(`\n  ${A.dim}Checking if ${repo.name} is indexed...${A.reset}`);
-  let already = false;
+function isIndexedAtPath(repoPath) {
   try {
     const out = execSync("yats list", { encoding: "utf8", stdio: "pipe" });
-    if (out.includes(repoPath)) already = true;
+    // yats list prints "  <name>  →  <rootPath>". YATS identifies repos by
+    // rootPath, so compare exact paths (not substring — avoids hub-lab matching hub-lab-2).
+    return out.split("\n").some((line) => {
+      const arrow = line.lastIndexOf("→");
+      if (arrow === -1) return false;
+      return line.slice(arrow + 1).trim() === repoPath;
+    });
   } catch {
     /* not indexed yet */
+    return false;
   }
+}
+
+async function ensureIndexed(repo, repoPath) {
+  console.log(`\n  ${A.dim}Checking if ${repo.name} is indexed...${A.reset}`);
+  const already = isIndexedAtPath(repoPath);
 
   if (!already) {
     await runWithSpinner(`Indexing ${repo.name}...`, () => new Promise((resolve, reject) => {
@@ -750,9 +760,18 @@ function setupAgent(agent, repoPath, withYats) {
 
     case "copilot-config": { // Copilot
       process.env.COPILOT_HOME = home;
+      // Copilot 1.x stores its auth metadata in ~/.copilot/config.json (the token
+      // itself lives in the OS keyring). Copy it into the isolated home so auth
+      // keeps working while we control the MCP config per run.
+      const realConfig = path.join(os.homedir(), ".copilot", "config.json");
+      if (fs.existsSync(realConfig)) {
+        fs.copyFileSync(realConfig, path.join(home, "config.json"));
+      }
       if (withYats) {
-        const mcp = readConnect("copilot", "mcp.json")
-          ?? JSON.stringify({ servers: [{ name: "yats", type: "local", command: "yats", args: ["bridge"] }] });
+        const bridge = path.join(BENCH_DIR, "adapters", "mcp-bridge-stdio.cjs");
+        const mcp = JSON.stringify({
+          mcpServers: { yats: { type: "local", command: "node", args: [bridge, "--stdio"] } },
+        });
         fs.writeFileSync("/tmp/copilot-mcp.json", mcp);
         const instr = readConnect("copilot", "instructions.md");
         if (instr) {
@@ -825,17 +844,82 @@ function checkAgent(agent) {
 // Run
 // ============================================================
 
+let agentActivity = "";
+
+// Generic activity extractor — tails the agent's JSONL log and shows the most
+// recent meaningful event (a tool call, or the event type). No per-agent parsing.
+function tailAgentActivity(logFile) {
+  try {
+    const size = fs.statSync(logFile).size;
+    if (size === 0) { agentActivity = ""; return; }
+    const fd = fs.openSync(logFile, "r");
+    const len = Math.min(size, 32 * 1024);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+
+    const events = [];
+    for (const line of buf.toString("utf8").split("\n")) {
+      const l = line.trim();
+      if (!l) continue;
+      try {
+        const e = JSON.parse(l);
+        if (e && typeof e === "object") events.push(e);
+      } catch { /* partial line */ }
+    }
+
+    const toolName = (e) => {
+      const name =
+        (typeof e.name === "string" && e.name) ||
+        e.tool_name ||
+        e.tool_call?.name ||
+        e.tool_use?.name ||
+        e.tool?.name ||
+        (Array.isArray(e.message?.content) &&
+          e.message.content.find((c) => c && c.type === "tool_use")?.name);
+      return typeof name === "string" && name ? name : null;
+    };
+
+    // Prefer the most recent tool call in the tail
+    for (let i = events.length - 1; i >= 0; i--) {
+      const name = toolName(events[i]);
+      if (!name) continue;
+      const e = events[i];
+      const input =
+        e.input || e.arguments || e.tool_call?.input || e.tool_call?.arguments ||
+        e.tool_use?.input ||
+        (Array.isArray(e.message?.content) &&
+          e.message.content.find((c) => c && c.type === "tool_use")?.input);
+      let detail = input?.file_path ?? input?.query ?? input?.pattern ?? input?.command ?? input?.url ?? "";
+      if (!detail && input && typeof input === "object") {
+        detail = Object.values(input).find((v) => typeof v === "string") ?? "";
+      }
+      agentActivity = `${name}${detail ? " " + String(detail).slice(0, 48) : ""}`;
+      return;
+    }
+
+    // Fallback: most recent event type
+    const last = events[events.length - 1];
+    if (last && typeof last.type === "string") {
+      agentActivity = `${last.type}${last.subtype ? ":" + last.subtype : ""}`;
+    }
+  } catch {
+    /* file not ready yet */
+  }
+}
+
 async function runWithSpinner(label, fn) {
   if (!isTTY) {
     console.log(`  ${A.dim}${label}...${A.reset}`);
     return fn();
   }
+  agentActivity = "";
   const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   let i = 0;
   const start = Date.now();
   const id = setInterval(() => {
     const secs = Math.floor((Date.now() - start) / 1000);
-    process.stdout.write(`\r  ${A.cyan}${frames[i % frames.length]}${A.reset} ${A.dim}${label}${A.reset} ${A.gray}${secs}s${A.reset}   `);
+    process.stdout.write(`\r  ${A.cyan}${frames[i % frames.length]}${A.reset} ${A.dim}${label}${A.reset} ${A.gray}${secs}s${A.reset}  ${A.dim}${agentActivity}${A.reset}   `);
     i++;
   }, 80);
   try {
@@ -848,20 +932,25 @@ async function runWithSpinner(label, fn) {
 
 function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 600) {
   const model = selectedModel ?? agent.defaultModel;
-  const args = agent.runCmd(prompt, repoPath, withYats, model);
+  const constrained = `Answer the following question about this codebase. Reply concisely in plain text in your final message only. Do NOT create, write, edit, or delete any files, and do not run commands that modify the repo.\n\nQuestion:\n${prompt}`;
+  const args = agent.runCmd(constrained, repoPath, withYats, model);
 
   return new Promise((resolve) => {
     const proc = spawn(agent.cli, args, {
       cwd: repoPath,
-      stdio: ["ignore", fs.openSync(logFile, "w"), "pipe"],
+      stdio: ["ignore", fs.openSync(logFile, "w"), "ignore"],
       timeout: timeoutSec * 1000,
     });
 
+    const watcher = setInterval(() => tailAgentActivity(logFile), 400);
+
     proc.on("close", (code, signal) => {
+      clearInterval(watcher);
       resolve({ exitCode: code ?? -1, signal });
     });
 
     proc.on("error", (err) => {
+      clearInterval(watcher);
       fs.appendFileSync(logFile, `\nSPAWN_ERROR: ${err.message}\n`);
       resolve({ exitCode: -1, signal: null });
     });
@@ -941,12 +1030,29 @@ function parseResult(logFile) {
       }
     }
 
-    // Copilot: "assistant.usage" events
+    // Copilot (legacy): "assistant.usage" events
     for (const e of events) {
       if (e.type === "assistant.usage") {
         tokens += (e.inputTokens ?? 0) + (e.outputTokens ?? 0) + (e.cacheReadTokens ?? 0);
         outputTokens += e.outputTokens ?? 0;
         cacheRead += e.cacheReadTokens ?? 0;
+      }
+    }
+
+    // Copilot 1.x: "assistant.message" carries outputTokens. Input tokens are NOT
+    // exposed in the JSON stream, so for Copilot `tokens` == output tokens only.
+    for (const e of events) {
+      if (e.type === "assistant.message" && e.data && typeof e.data.outputTokens === "number") {
+        outputTokens += e.data.outputTokens;
+        tokens += e.data.outputTokens;
+      }
+    }
+
+    // Copilot 1.x credits (nano AI units) — the only full-cost signal available.
+    let nanoAiu = 0;
+    for (const e of events) {
+      if (e.type === "session.usage_checkpoint" && e.data && typeof e.data.totalNanoAiu === "number") {
+        nanoAiu = e.data.totalNanoAiu;
       }
     }
 
@@ -1008,7 +1114,7 @@ function parseResult(logFile) {
 
     return {
       tokens, cost, outputTokens, cacheRead, cacheWrite, toolCalls,
-      fileReads, bashCmds, yatsQueries, contentChars, duration,
+      fileReads, bashCmds, yatsQueries, contentChars, nanoAiu, duration,
       error: errorMsg, logFile,
     };
   } catch (err) {
@@ -1084,6 +1190,48 @@ function printTable(title, runs, withYats) {
   console.log(border("└", "┴", "┘"));
 }
 
+function printCopilotTable(title, runs, withYats) {
+  const label = withYats ? "With YATS" : "Baseline";
+  const cols = [
+    { h: "Run", w: 5, right: false },
+    { h: "AIU (cost)", w: 12, right: true },
+    { h: "Time", w: 8, right: true },
+    { h: "Result", w: 8, right: false },
+  ];
+  const cell = (txt, w, right) => {
+    const s = String(txt);
+    return right ? s.padStart(w) : s.padEnd(w);
+  };
+  const row = (vals) => "  │" + vals.map((v, i) => " " + cell(v, cols[i].w, cols[i].right) + " ").join("│") + "│";
+  const border = (l, m, r) => "  " + l + cols.map((c) => "─".repeat(c.w + 2)).join(m) + r;
+
+  console.log(`\n  ${A.bold}${title} — ${label}${A.reset}`);
+  console.log(border("┌", "┬", "┐"));
+  console.log(row(cols.map((c) => c.h)));
+  console.log(border("├", "┼", "┤"));
+  for (const r of runs) {
+    const status = r.error ? "ERROR" : "OK";
+    console.log(row([
+      String(r.run),
+      ((r.nanoAiu ?? 0) / 1e9).toFixed(3),
+      fmtDuration(r.duration ?? 0),
+      status,
+    ]));
+  }
+  const good = runs.filter((r) => !r.error);
+  if (good.length) {
+    const avg = (arr, f) => arr.reduce((a, b) => a + f(b), 0) / arr.length;
+    console.log(border("├", "┼", "┤"));
+    console.log(row([
+      "AVG",
+      (avg(good, (r) => r.nanoAiu ?? 0) / 1e9).toFixed(3),
+      fmtDuration(avg(good, (r) => r.duration ?? 0)),
+      "",
+    ]));
+  }
+  console.log(border("└", "┴", "┘"));
+}
+
 function printComparison(baseline, yats) {
   const goodB = baseline.filter((r) => !r.error);
   const goodY = yats.filter((r) => !r.error);
@@ -1138,6 +1286,45 @@ function printComparison(baseline, yats) {
   console.log(line(`File reads:  ${n(rB).padStart(5)} → ${n(rY).padStart(5)}   ${sign(readSave)}`));
   console.log(line(`Bash cmds:   ${n(bB).padStart(5)} → ${n(bY).padStart(5)}   ${sign(bashSave)}`));
   console.log(line(`Time:        ${fmtDuration(dB).padStart(8)} → ${fmtDuration(dY).padStart(8)}   ${sign(timeSave)}`));
+  console.log("  ╚" + "═".repeat(W + 2) + "╝");
+}
+
+function printCopilotComparison(baseline, yats) {
+  const goodB = baseline.filter((r) => !r.error);
+  const goodY = yats.filter((r) => !r.error);
+  if (!goodB.length || !goodY.length) {
+    console.log(`\n  ${A.yellow}⚠ No valid results to compare.${A.reset}`);
+    return;
+  }
+
+  const avg = (arr, f) => arr.reduce((a, b) => a + f(b), 0) / arr.length;
+  const aB = avg(goodB, (r) => r.nanoAiu ?? 0);
+  const aY = avg(goodY, (r) => r.nanoAiu ?? 0);
+  const dB = avg(goodB, (r) => r.duration ?? 0);
+  const dY = avg(goodY, (r) => r.duration ?? 0);
+
+  if (aB <= 0) {
+    console.log(`\n  ${A.yellow}⚠ Baseline used 0 AIU — the agent likely failed (check credits/auth).${A.reset}`);
+    return;
+  }
+
+  const W = 46;
+  const pct = (a, b) => ((a - b) / a * 100);
+  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const pad = (s) => s + " ".repeat(Math.max(0, W - strip(s).length));
+  const line = (txt) => "  ║ " + pad(txt) + " ║";
+  const sign = (p) => {
+    if (p > 0) return `${A.green}↓ ${Math.abs(p).toFixed(1).padStart(5)}%${A.reset}`;
+    if (p < 0) return `${A.red}↑ ${Math.abs(p).toFixed(1).padStart(5)}%${A.reset}`;
+    return `${A.dim}·    0.0%${A.reset}`;
+  };
+  const aiu = (x) => (x / 1e9).toFixed(3);
+
+  console.log("  ╔" + "═".repeat(W + 2) + "╗");
+  console.log("  ║ " + "SAVINGS (YATS vs Baseline)".padEnd(W) + " ║");
+  console.log("  ╠" + "═".repeat(W + 2) + "╣");
+  console.log(line(`AIU (cost):  ${aiu(aB).padStart(7)} → ${aiu(aY).padStart(7)}   ${sign(pct(aB, aY))}`));
+  console.log(line(`Time:        ${fmtDuration(dB).padStart(8)} → ${fmtDuration(dY).padStart(8)}   ${sign(pct(dB, dY))}`));
   console.log("  ╚" + "═".repeat(W + 2) + "╝");
 }
 
@@ -1225,11 +1412,23 @@ async function runOnce() {
       toolCalls: result.toolCalls ?? {},
       fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
       yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
+      nanoAiu: result.nanoAiu ?? 0,
       duration: elapsedMs, error: result.error, logFile,
     });
     const r = baselineResults[baselineResults.length - 1];
     if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
-    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.fileReads} reads, ${r.bashCmds} bash, ${fmtDuration(elapsedMs)}`);
+    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens${r.nanoAiu ? `, ${(r.nanoAiu / 1e9).toFixed(3)} AIU` : ""}, $${r.cost.toFixed(4)}, ${r.fileReads} reads, ${r.bashCmds} bash, ${fmtDuration(elapsedMs)}`);
+  }
+
+  // 6.5 — Ask before continuing to the with-YATS runs
+  console.log(`\n  ${A.dim}Baseline finished. Next up: the same question answered ${A.bold}with YATS${A.reset}${A.dim}.${A.reset}`);
+  const proceed = await select("Continue with the YATS runs?", [
+    { label: "Yes, run with YATS", value: true },
+    { label: "No, stop here", value: false },
+  ]);
+  if (!proceed) {
+    console.log(`\n  ${A.yellow}✖ Stopped before the YATS runs${A.reset}\n`);
+    return;
   }
 
   // 7. YATS
@@ -1251,54 +1450,74 @@ async function runOnce() {
       toolCalls: result.toolCalls ?? {},
       fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
       yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
+      nanoAiu: result.nanoAiu ?? 0,
       duration: elapsedMs, error: result.error, logFile,
     });
     const r = yatsResults[yatsResults.length - 1];
     if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
-    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens, $${r.cost.toFixed(4)}, ${r.yatsQueries} yats, ${r.fileReads} reads, ${fmtDuration(elapsedMs)}`);
+    else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens${r.nanoAiu ? `, ${(r.nanoAiu / 1e9).toFixed(3)} AIU` : ""}, $${r.cost.toFixed(4)}, ${r.yatsQueries} yats, ${r.fileReads} reads, ${fmtDuration(elapsedMs)}`);
   }
 
   // 8. Results
-  printTable(repo.name, baselineResults, false);
-  printTable(repo.name, yatsResults, true);
-  printComparison(baselineResults, yatsResults);
+  const isCopilot = agent.name === "copilot";
+  if (isCopilot) {
+    console.log(`\n  ${A.yellow}⚠ ${A.bold}Copilot CLI doesn't expose Input Tokens${A.reset}${A.yellow} — comparing ${A.bold}AIU (cost)${A.reset}${A.yellow} & time instead.${A.reset}`);
+    printCopilotTable(repo.name, baselineResults, false);
+    printCopilotTable(repo.name, yatsResults, true);
+    printCopilotComparison(baselineResults, yatsResults);
+  } else {
+    printTable(repo.name, baselineResults, false);
+    printTable(repo.name, yatsResults, true);
+    printComparison(baselineResults, yatsResults);
+  }
 
   // Persist a summary entry to results.json
   const avgField = (arr, f) => {
     const good = arr.filter((r) => !r.error);
     return good.length ? good.reduce((s, r) => s + f(r), 0) / good.length : 0;
   };
-  const tB = avgField(baselineResults, (r) => r.tokens);
-  const tY = avgField(yatsResults, (r) => r.tokens);
-  saveResult({
+  const entry = {
     agent: agent.name,
     model: selectedModel ?? agent.defaultModel,
     repo: repo.name,
     date: new Date().toISOString().slice(0, 10),
     question,
-    tokens: { without: Math.round(tB), with: Math.round(tY) },
-    cost: {
-      without: Math.round(avgField(baselineResults, (r) => r.cost) * 1000) / 1000,
-      with: Math.round(avgField(yatsResults, (r) => r.cost) * 1000) / 1000,
-    },
-    file_reads: {
-      without: Math.round(avgField(baselineResults, (r) => r.fileReads)),
-      with: Math.round(avgField(yatsResults, (r) => r.fileReads)),
-    },
-    bash_cmds: {
-      without: Math.round(avgField(baselineResults, (r) => r.bashCmds)),
-      with: Math.round(avgField(yatsResults, (r) => r.bashCmds)),
-    },
-    yats_queries: {
-      without: Math.round(avgField(baselineResults, (r) => r.yatsQueries)),
-      with: Math.round(avgField(yatsResults, (r) => r.yatsQueries)),
-    },
     time_ms: {
       without: Math.round(avgField(baselineResults, (r) => r.duration ?? 0)),
       with: Math.round(avgField(yatsResults, (r) => r.duration ?? 0)),
     },
-    savings_pct: tB > 0 ? Math.round(((tB - tY) / tB * 100) * 10) / 10 : null,
-  });
+  };
+  if (isCopilot) {
+    const aB = avgField(baselineResults, (r) => r.nanoAiu ?? 0);
+    const aY = avgField(yatsResults, (r) => r.nanoAiu ?? 0);
+    entry.aiu = {
+      without: Math.round((aB / 1e9) * 1e6) / 1e6,
+      with: Math.round((aY / 1e9) * 1e6) / 1e6,
+    };
+    entry.savings_pct = aB > 0 ? Math.round(((aB - aY) / aB * 100) * 10) / 10 : null;
+  } else {
+    const tB = avgField(baselineResults, (r) => r.tokens);
+    const tY = avgField(yatsResults, (r) => r.tokens);
+    entry.tokens = { without: Math.round(tB), with: Math.round(tY) };
+    entry.cost = {
+      without: Math.round(avgField(baselineResults, (r) => r.cost) * 1000) / 1000,
+      with: Math.round(avgField(yatsResults, (r) => r.cost) * 1000) / 1000,
+    };
+    entry.file_reads = {
+      without: Math.round(avgField(baselineResults, (r) => r.fileReads)),
+      with: Math.round(avgField(yatsResults, (r) => r.fileReads)),
+    };
+    entry.bash_cmds = {
+      without: Math.round(avgField(baselineResults, (r) => r.bashCmds)),
+      with: Math.round(avgField(yatsResults, (r) => r.bashCmds)),
+    };
+    entry.yats_queries = {
+      without: Math.round(avgField(baselineResults, (r) => r.yatsQueries)),
+      with: Math.round(avgField(yatsResults, (r) => r.yatsQueries)),
+    };
+    entry.savings_pct = tB > 0 ? Math.round(((tB - tY) / tB * 100) * 10) / 10 : null;
+  }
+  saveResult(entry);
 
   console.log(`\n  ${A.dim}Logs saved to: ${resultsDir}${A.reset}\n`);
 }

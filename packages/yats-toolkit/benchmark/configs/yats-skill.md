@@ -11,7 +11,10 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
 **YATS first, Read second.** MCP tools return in ms for ~100 tokens. Reading files costs thousands.
 
 ## Workflow
-1. search_code with natural language query — always pass repository="lab_hub"
-2. find_symbol on hits — always pass repository="lab_hub"  
+1. search_code with natural language query — ALWAYS start here
+2. find_symbol on hits to get exact locations
 3. find_callers / find_callees to trace
 4. Only then Read files at the line YATS gave you
+
+## Repository
+Pass `repository="<repo-name>"` on every call — usually the directory name. Check `list_repositories` if unsure.

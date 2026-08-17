@@ -9,7 +9,7 @@ MODEL="${YATS_BENCH_MODEL:-haiku}"
 REPOS_DIR="${YATS_BENCH_REPOS_DIR:-$HOME/yats-bench-repos}"
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Resolve repo from question path (e.g. questions/go/lab_hub/... → lab_hub)
+# Resolve repo from question path (e.g. questions/go/hub-lab/... → hub-lab)
 REPO=$(echo "$QUESTION_FILE" | sed 's|.*/\([^/]*\)/[^/]*\.md|\1|')
 QUESTION=$(cat "$QUESTION_FILE")
 RUN_ID=$(basename "$QUESTION_FILE" .md)-$(date +%H%M%S)
