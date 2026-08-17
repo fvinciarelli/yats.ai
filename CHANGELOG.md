@@ -5,6 +5,14 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-08-17
+
+### Fixed
+- Setup persists keys to `~/.yats/.env` (canonical) instead of embedding them in `docker-compose.yml`; compose now reads them via interpolation.
+- Embedding keys use an `EMBEDDING_*` prefix so they can differ from benchmark agent keys for the same provider.
+- Benchmark reads keys from `~/.yats/.env` and refuses to run an agent whose key is missing (clear message + exit).
+- Copilot auth no longer copies `~/.copilot/config.json` silently — explicit consent is asked at start.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added
@@ -52,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker Compose** one-command deployment (`docker compose up`).
 - **Docker image** published to `ghcr.io/fvinciarelli/yats.ai`.
 
-[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/fvinciarelli/yats.ai/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.3.1
 [0.3.0]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.3.0
 [0.1.14]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.1.14
 [0.1.0]: https://github.com/fvinciarelli/yats.ai/releases/tag/v0.1.0

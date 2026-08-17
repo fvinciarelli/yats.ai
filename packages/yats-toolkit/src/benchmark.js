@@ -263,9 +263,11 @@ function loadEnvFile(filePath) {
 
 function loadEnv() {
   const candidates = [];
+  // Canonical: ~/.yats/.env (setup writes embedding + benchmark keys there)
+  candidates.push(path.join(process.env.HOME ?? "/tmp", ".yats", ".env"));
   candidates.push(path.join(process.cwd(), ".env"));
 
-  // walk up from this module (src/) to find a repo-root .env
+  // walk up from this module (src/) to find a repo-root .env (legacy fallback)
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     const p = path.join(dir, ".env");
@@ -275,16 +277,19 @@ function loadEnv() {
     dir = parent;
   }
 
+  // Load ALL candidates so keys accumulate (first one wins per key).
+  let loaded = null;
   for (const c of candidates) {
-    if (loadEnvFile(c) > 0) return c;
+    if (loadEnvFile(c) > 0 && !loaded) loaded = c;
   }
-  return null;
+  return loaded;
 }
 
 const LOADED_ENV = loadEnv();
 if (LOADED_ENV) logger.info(`Loaded ${LOADED_ENV}`);
 
 let selectedModel = null;
+let copilotConsent = false;
 let workDir = path.join(process.cwd(), "repos");
 
 // ============================================================
@@ -384,7 +389,7 @@ const KNOWN_AGENTS = [
       { name: "sonnet", hint: "balanced" },
       { name: "opus", hint: "most powerful" },
     ],
-    authLabel: "ANTHROPIC_API_KEY or `claude` login (~/.claude)",
+    authLabel: "ANTHROPIC_API_KEY (in ~/.yats/.env)",
     needsSkill: true,
     mcpKind: "stdio",
     runCmd: (prompt, repoDir, hasMcp, model) => [
@@ -401,14 +406,14 @@ const KNOWN_AGENTS = [
     cli: "codex",
     checkCmd: "which codex",
     installHint: "npm install -g @openai/codex",
-    needsApiKey: "",
+    needsApiKey: "OPENAI_API_KEY",
     defaultModel: "gpt-4.1-mini",
     models: [
       { name: "gpt-4.1-mini", hint: "fastest & cheapest" },
       { name: "gpt-4.1", hint: "balanced" },
       { name: "gpt-5.4", hint: "most powerful" },
     ],
-    authLabel: "codex login (~/.codex/auth.json)",
+    authLabel: "OPENAI_API_KEY (in ~/.yats/.env)",
     needsSkill: false,
     mcpKind: "codex-config",
     runCmd: (prompt, repoDir, hasMcp, model) => ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", prompt],
@@ -423,7 +428,7 @@ const KNOWN_AGENTS = [
     models: [
       { name: "default", hint: "Copilot-managed model" },
     ],
-    authLabel: "copilot CLI login",
+    authLabel: "copilot auth (consent asked at start)",
     needsSkill: false,
     mcpKind: "copilot-config",
     runCmd: (prompt, repoDir, hasMcp, model) => [
@@ -466,7 +471,7 @@ const KNOWN_AGENTS = [
       { name: "gemini-2.5-pro", hint: "most powerful" },
       { name: "gemini-pro-latest", hint: "balanced" },
     ],
-    authLabel: "GEMINI_API_KEY",
+    authLabel: "GEMINI_API_KEY (in ~/.yats/.env)",
     needsSkill: false,
     mcpKind: "gemini-config",
     runCmd: (prompt, repoDir, hasMcp, model) => [
@@ -483,12 +488,13 @@ const KNOWN_AGENTS = [
 // ============================================================
 
 async function selectAgent() {
-  const opts = KNOWN_AGENTS.map((a) => ({
-    label: a.name,
-    hint: isInstalled(a.cli) ? "installed" : "not installed",
-    ok: isInstalled(a.cli),
-    value: a,
-  }));
+  const opts = KNOWN_AGENTS.map((a) => {
+    const installed = isInstalled(a.cli);
+    const hasKey = !a.needsApiKey || hasApiKey(a.needsApiKey);
+    let hint = installed ? "installed" : "not installed";
+    if (installed && a.needsApiKey && !hasKey) hint = `missing ${a.needsApiKey} in ~/.yats/.env`;
+    return { label: a.name, hint, ok: installed && hasKey, value: a };
+  });
   return select("Select your AI agent", opts);
 }
 
@@ -760,12 +766,12 @@ function setupAgent(agent, repoPath, withYats) {
 
     case "copilot-config": { // Copilot
       process.env.COPILOT_HOME = home;
-      // Copilot 1.x stores its auth metadata in ~/.copilot/config.json (the token
-      // itself lives in the OS keyring). Copy it into the isolated home so auth
-      // keeps working while we control the MCP config per run.
-      const realConfig = path.join(os.homedir(), ".copilot", "config.json");
-      if (fs.existsSync(realConfig)) {
-        fs.copyFileSync(realConfig, path.join(home, "config.json"));
+      // Only copy the user's auth metadata if they explicitly consented in checkAgent().
+      if (copilotConsent) {
+        const realConfig = path.join(os.homedir(), ".copilot", "config.json");
+        if (fs.existsSync(realConfig)) {
+          fs.copyFileSync(realConfig, path.join(home, "config.json"));
+        }
       }
       if (withYats) {
         const bridge = path.join(BENCH_DIR, "adapters", "mcp-bridge-stdio.cjs");
@@ -825,7 +831,7 @@ function setupAgent(agent, repoPath, withYats) {
   }
 }
 
-function checkAgent(agent) {
+async function checkAgent(agent) {
   console.log(`\n  ${A.dim}Checking ${agent.name}...${A.reset}`);
   if (!isInstalled(agent.cli)) {
     console.log(`  ${A.red}✖ ${agent.cli} is not installed.${A.reset}`);
@@ -833,10 +839,41 @@ function checkAgent(agent) {
     return false;
   }
   console.log(`  ${A.green}✓${A.reset} ${agent.cli} found`);
-  console.log(`  ${A.dim}Auth:  ${agent.authLabel}${A.reset}`);
-  if (!hasApiKey(agent.needsApiKey)) {
-    console.log(`  ${A.yellow}⚠${A.reset} ${agent.needsApiKey} not set (agent may use its own auth)`);
+
+  // API-key agents (claude/codex/gemini) read keys from ~/.yats/.env
+  if (agent.needsApiKey) {
+    if (!hasApiKey(agent.needsApiKey)) {
+      console.log(`  ${A.red}✖ ${agent.needsApiKey} not set.${A.reset}`);
+      console.log(`     Add it to ${A.bold}~/.yats/.env${A.reset} to use ${agent.name}.`);
+      return false;
+    }
+    console.log(`  ${A.green}✓${A.reset} ${agent.needsApiKey} found in ~/.yats/.env`);
+    return true;
   }
+
+  // copilot / cursor use their own OAuth login (no API key in .env)
+  if (agent.name === "copilot") {
+    const realConfig = path.join(os.homedir(), ".copilot", "config.json");
+    if (fs.existsSync(realConfig)) {
+      const use = await select("Copilot login", [
+        { label: "Use my existing Copilot login (copy ~/.copilot/config.json)", value: true },
+        { label: "No — cancel", value: false },
+      ]);
+      if (!use) {
+        console.log(`  ${A.yellow}✖ Cancelled${A.reset}`);
+        return false;
+      }
+      copilotConsent = true;
+      console.log(`  ${A.green}✓${A.reset} Will use your existing Copilot login`);
+    } else {
+      console.log(`  ${A.red}✖ No ~/.copilot/config.json found.${A.reset}`);
+      console.log(`     Run ${A.bold}copilot auth${A.reset} first.`);
+      return false;
+    }
+    return true;
+  }
+
+  console.log(`  ${A.dim}Auth:  ${agent.authLabel}${A.reset}`);
   return true;
 }
 
@@ -1357,7 +1394,7 @@ async function runOnce() {
 
   // 1. Agent
   const agent = await selectAgent();
-  if (!checkAgent(agent)) {
+  if (!(await checkAgent(agent))) {
     restoreTerminal();
     process.exit(1);
   }

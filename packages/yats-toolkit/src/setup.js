@@ -30,6 +30,7 @@ const REPOS_DIR = join(YATS_DIR, "repos");
 const COMPOSE_FILE = join(YATS_DIR, "docker-compose.yml");
 const MCP_CONFIG_FILE = join(YATS_DIR, "mcp-config.json");
 const YATS_BIN_DIR = join(YATS_DIR, "bin");
+const ENV_FILE = join(YATS_DIR, ".env");
 
 const GITHUB_COMPOSE_URL =
   "https://raw.githubusercontent.com/fvinciarelli/yats.ai/main/docker/docker-compose.yml";
@@ -89,12 +90,12 @@ const EMBEDDED_COMPOSE = `services:
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=\${NEO4J_PASSWORD:-password}
       - QDRANT_URL=http://qdrant:6333
-      - EMBEDDING_PROVIDER=__PROVIDER__
+      - EMBEDDING_PROVIDER=\${EMBEDDING_PROVIDER:-ollama}
       - OLLAMA_URL=http://ollama:11434
       - OLLAMA_MODEL=__OLLAMA_MODEL__
-      - OPENAI_API_KEY=__OPENAI_KEY__
-      - MISTRAL_API_KEY=__MISTRAL_KEY__
-      - VOYAGE_API_KEY=__VOYAGE_KEY__
+      - OPENAI_API_KEY=\${EMBEDDING_OPENAI_API_KEY:-}
+      - MISTRAL_API_KEY=\${EMBEDDING_MISTRAL_API_KEY:-}
+      - VOYAGE_API_KEY=\${EMBEDDING_VOYAGE_API_KEY:-}
       - REPOSITORIES_PATH=/repos
       - YATS_PORT=__MCP_PORT__
       - EMBEDDING_BATCH_SIZE=__BATCH_SIZE__
@@ -331,11 +332,7 @@ function generateCompose(provider, ollamaModel, apiKey, mcpPort, batchSize, inde
   }
 
   compose = compose
-    .replace(/__PROVIDER__/g, provider)
     .replace(/__OLLAMA_MODEL__/g, ollamaModel)
-    .replace(/__OPENAI_KEY__/g, provider === "openai" ? apiKey : "")
-    .replace(/__MISTRAL_KEY__/g, provider === "mistral" ? apiKey : "")
-    .replace(/__VOYAGE_KEY__/g, provider === "voyage" ? apiKey : "")
     .replace(/__MCP_PORT__/g, String(mcpPort))
     .replace(/__BATCH_SIZE__/g, String(batchSize))
     .replace(/__INDEX_DOCS__/g, indexDocs ? "true" : "false")
@@ -418,8 +415,8 @@ async function main(options = {}) {
   const env = loadEnv();
   const nonInteractive = options.nonInteractive || false;
   const prefill = {
-    provider: options.provider || env.YATS_PROVIDER || null,
-    apiKey: options.apiKey || env.OPENAI_API_KEY || env.MISTRAL_API_KEY || env.VOYAGE_API_KEY || null,
+    provider: options.provider || env.YATS_PROVIDER || env.EMBEDDING_PROVIDER || null,
+    apiKey: options.apiKey || env.EMBEDDING_OPENAI_API_KEY || env.EMBEDDING_MISTRAL_API_KEY || env.EMBEDDING_VOYAGE_API_KEY || null,
     port: options.port ? parseInt(options.port, 10) : null,
     batch: options.batch ? parseInt(options.batch, 10) : null,
     noDocs: options.noDocs || false,
@@ -713,6 +710,16 @@ async function main(options = {}) {
   const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp/sse` } } };
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
+  // Persist keys to ~/.yats/.env — canonical source (embedding + benchmark keys).
+  // Merge with any keys the user already added (e.g. ANTHROPIC_API_KEY, GEMINI_API_KEY).
+  const envMap = loadEnv();
+  envMap.EMBEDDING_PROVIDER = provider;
+  envMap.YATS_PROVIDER = provider;
+  if (provider === "openai" && apiKey) envMap.EMBEDDING_OPENAI_API_KEY = apiKey;
+  if (provider === "mistral" && apiKey) envMap.EMBEDDING_MISTRAL_API_KEY = apiKey;
+  if (provider === "voyage" && apiKey) envMap.EMBEDDING_VOYAGE_API_KEY = apiKey;
+  writeFileSync(ENV_FILE, Object.entries(envMap).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
+
   // Pull the YATS Docker image from GitHub Container Registry
   const sPull = spinner("Pulling YATS image from registry...");
   try {
@@ -827,6 +834,7 @@ async function main(options = {}) {
   console.log(`  ✅  ${G}YATS is ready!${R}  →  ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
   console.log("");
   console.log(`  Config saved to ${C}~/.yats/.env${R}`);
+  console.log(`  ${D}Benchmark agent keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) go there too.${R}`);
   console.log("");
   box([
     `${B}Copy this URL into your AI agent:${R}`,
