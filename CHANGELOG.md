@@ -5,6 +5,21 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-08-18
+
+### Fixed
+- Documentation indexing now routes doc files to the documentation pipeline from the per-file content sent over the network (instead of reading the server filesystem), fixing `search_documentation` returning empty results.
+- Benchmark `.env` loader ignores empty values so placeholder keys in `~/.yats/.env` don't shadow real keys from other `.env` files.
+
+### Changed
+- Benchmark: claude runs with the raw question prompt (matching end-user behavior); other agents keep the neutral "do not modify files" guard.
+- Benchmark: agent instruction files (SKILL.md, AGENTS.md, rules.mdc, GEMINI.md, instructions.md) are inlined, making the benchmark self-contained and reproducible from npm.
+
+### Added
+- `DOC_EXTENSIONS`, `SKIP_EXTENSIONS`, `IGNORED_DIRS` in `~/.yats/.env` (user-configurable file filtering).
+- Benchmark extracts and shows the agent's final answer (on screen + saved in `results.json`).
+- Benchmark spinner stays on a single line and shows live tool activity.
+
 ## [0.3.3] - 2026-08-18
 
 ### Fixed

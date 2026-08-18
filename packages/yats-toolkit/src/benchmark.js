@@ -250,7 +250,7 @@ function loadEnvFile(filePath) {
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
       }
-      if (key && !(key in process.env)) {
+      if (key && value && !(key in process.env)) {
         process.env[key] = value;
         count++;
       }
@@ -314,6 +314,128 @@ function readConnect(agentDir, file) {
     return null;
   }
 }
+
+// Inline per-agent instruction files (option A: aggressive "YATS first, max 3
+// calls"). Kept inline so the benchmark is self-contained and reproducible when
+// run from npm — no dependency on the repo's connect/ directory.
+const CLAUDE_SKILL_MD = `---
+name: yats
+description: YATS has this codebase indexed in a knowledge graph. Use when asked about the code — how something works, architecture, call chains, where something is defined. Use YATS tools first before reading files.
+---
+
+# YATS Code Intelligence
+
+This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relationship is in a knowledge graph.
+
+## Golden rule
+
+**YATS first, Read second.** MCP tools return results in milliseconds for ~100 tokens. Reading files costs thousands of tokens and takes seconds.
+
+## Efficient workflow
+
+1. \`search_code\` — natural language query about the code (ALWAYS start here)
+2. \`find_symbol\` on top 2-3 hits to get exact locations
+3. \`find_callers\` / \`find_callees\` on 1-2 key symbols to trace the flow
+4. \`expand_graph\` on seeds to get the full subgraph in one call
+5. Only then \`Read\` files at the exact lines YATS gave you
+
+## Rules
+
+- Max 3-5 YATS tool calls per task. Synthesize what you have.
+- Never guess symbol names — always start with \`search_code\`.
+- Prefer \`expand_graph\` over multiple individual \`find_symbol\` calls.
+- If YATS returns empty, try a different query before falling back to file reads.
+- Repository name is usually the directory name. Check \`list_repositories\` if unsure.
+`;
+
+const CODEX_AGENTS_MD = `# YATS Code Intelligence
+
+This repository is indexed by YATS MCP. You have these tools:
+\`search_code\`, \`find_symbol\`, \`find_callers\`, \`find_callees\`, \`expand_graph\`,
+\`find_references\`, \`find_implementations\`, \`find_inheritors\`, \`find_routes\`,
+\`repository_summary\`, \`architecture_summary\`, \`list_repositories\`.
+
+## ⚠️ ABSOLUTE HARD LIMIT: 3 TOOL CALLS TOTAL
+
+You are allowed **AT MOST 3 YATS tool calls** for this entire task. This is a hard budget, not a suggestion.
+
+- After your 3rd call, you MUST write your final answer immediately.
+- Do NOT call \`find_symbol\` separately for every symbol. \`expand_graph\` returns callers + callees + neighbors in ONE call.
+- Do NOT re-run \`search_code\` with slightly different wording.
+- Do NOT verify each result with another call. Trust the graph.
+- Do NOT read source files with shell commands (\`head\`, \`cat\`, \`sed\`, \`rg\`, \`grep\`). YATS already has the symbols and relationships — use the YATS tools instead.
+- Every extra call wastes tokens and fails this task.
+
+## Workflow (exactly 3 calls, in this order)
+
+1. \`search_code("<your question>", repository="__REPO_NAME__")\` — call 1
+2. \`expand_graph([top 2 symbol ids], repository="__REPO_NAME__")\` — call 2 (full subgraph)
+3. \`find_callers("<key symbol>", repository="__REPO_NAME__")\` — call 3 (only if you still need it)
+4. STOP. Write the answer.
+
+## Repository
+
+Use \`repository="__REPO_NAME__"\` for every call. Do NOT call \`list_repositories\` — the repo name is already given.
+`;
+
+const COPILOT_INSTRUCTIONS_MD = `# YATS Code Intelligence
+
+This repo is indexed by YATS MCP. You have tools: search_code, find_symbol, find_callers, find_callees, expand_graph, find_references, find_implementations, find_inheritors, find_routes, repository_summary, list_repositories.
+
+## Rules
+- YATS first, file reads second. YATS is ~100 tokens and instant.
+- Max 3 YATS calls per task. After call 3, answer with what you have.
+- Start with search_code, then find_symbol on top hits, then expand_graph.
+- Do NOT invent answers — verify with YATS or read files.
+`;
+
+const CURSOR_RULES_MDC = `# YATS Code Intelligence
+
+This repo is indexed by YATS. Use these MCP tools for code questions:
+\`search_code\`, \`find_symbol\`, \`find_callers\`, \`find_callees\`, \`expand_graph\`,
+\`find_references\`, \`find_implementations\`, \`find_inheritors\`, \`find_routes\`.
+
+## Rules
+
+- Start with \`search_code\` for any codebase question.
+- Max 3 YATS calls per task. Synthesize, don't keep searching.
+- YATS returns results in ms. File reads cost thousands of tokens.
+- If unsure about repo name, call \`list_repositories\` first.
+
+## Workflow
+
+1. \`search_code("your question", repository="<name>")\`
+2. \`find_symbol\` on top hits
+3. \`expand_graph\` or \`find_callers\`/\`find_callees\` to trace flow
+4. Read files only at exact lines from YATS results
+`;
+
+const GEMINI_MD = `# YATS Code Intelligence
+
+This repository is indexed by YATS MCP. You have access to a knowledge graph.
+
+## Tools available
+\`search_code\`, \`find_symbol\`, \`find_callers\`, \`find_callees\`, \`expand_graph\`,
+\`find_references\`, \`find_implementations\`, \`find_inheritors\`, \`find_routes\`,
+\`repository_summary\`, \`architecture_summary\`, \`list_repositories\`.
+
+## GOLDEN RULE: YATS first, files second
+- YATS queries cost ~100 tokens, return in milliseconds.
+- Reading files costs THOUSANDS of tokens.
+- Always try \`search_code()\` BEFORE reading any file.
+
+## Workflow (3 steps max)
+1. \`search_code("your question", repository="<name>")\` — ALWAYS start here
+2. \`find_symbol(name, repository="<name>")\` on top 2-3 hits
+3. \`expand_graph([top1, top2], repository="<name>")\` — callers+callees in one call
+4. Only then read files at exact lines from YATS
+
+## Rules
+- Max 3 YATS calls per task. Synthesize and answer.
+- NEVER guess symbol names — always start with search_code.
+- Prefer expand_graph over multiple find_symbol calls.
+- Repository name is usually the directory name. Check list_repositories if unsure.
+`;
 
 // Private/unknown repos (the LLM has never seen them) — the real proof.
 const UNKNOWN_REPOS = [
@@ -706,16 +828,8 @@ async function ensureIndexed(repo, repoPath) {
 function writeSkill(repoPath, withYats) {
   const skillDir = path.join(repoPath, ".claude", "skills", "yats");
   if (withYats) {
-    const content = readConnect("claude", "SKILL.md") ?? `---
-name: yats
-description: YATS has this codebase indexed. Use when asked about the code.
----
-
-# YATS Code Intelligence
-Use YATS MCP tools first, file reads second.
-`;
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), content);
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), CLAUDE_SKILL_MD);
   } else {
     fs.rmSync(skillDir, { recursive: true, force: true });
   }
@@ -756,8 +870,8 @@ function setupAgent(agent, repoPath, withYats) {
       }
       fs.writeFileSync(path.join(home, "config.toml"), config);
       if (withYats) {
-        const ag = readConnect("codex", "AGENTS.md");
-        if (ag) fs.writeFileSync(path.join(repoPath, "AGENTS.md"), ag.replaceAll("__REPO_NAME__", path.basename(repoPath)));
+        const content = CODEX_AGENTS_MD.replaceAll("__REPO_NAME__", path.basename(repoPath));
+        fs.writeFileSync(path.join(repoPath, "AGENTS.md"), content);
       } else {
         fs.rmSync(path.join(repoPath, "AGENTS.md"), { force: true });
       }
@@ -779,12 +893,9 @@ function setupAgent(agent, repoPath, withYats) {
           mcpServers: { yats: { type: "local", command: "node", args: [bridge, "--stdio"] } },
         });
         fs.writeFileSync("/tmp/copilot-mcp.json", mcp);
-        const instr = readConnect("copilot", "instructions.md");
-        if (instr) {
-          const ghDir = path.join(repoPath, ".github");
-          fs.mkdirSync(ghDir, { recursive: true });
-          fs.writeFileSync(path.join(ghDir, "copilot-instructions.md"), instr);
-        }
+        const ghDir = path.join(repoPath, ".github");
+        fs.mkdirSync(ghDir, { recursive: true });
+        fs.writeFileSync(path.join(ghDir, "copilot-instructions.md"), COPILOT_INSTRUCTIONS_MD);
       } else {
         fs.rmSync(path.join(repoPath, ".github", "copilot-instructions.md"), { force: true });
       }
@@ -797,12 +908,9 @@ function setupAgent(agent, repoPath, withYats) {
           ?? JSON.stringify({ mcpServers: { yats: { url: "http://localhost:5555/mcp" } } });
         fs.writeFileSync("/tmp/cursor-mcp.json", mcp);
         process.env.CURSOR_MCP_CONFIG = "/tmp/cursor-mcp.json";
-        const rules = readConnect("cursor", "rules.mdc");
-        if (rules) {
-          const rulesDir = path.join(repoPath, ".cursor", "rules");
-          fs.mkdirSync(rulesDir, { recursive: true });
-          fs.writeFileSync(path.join(rulesDir, "yats.mdc"), rules);
-        }
+        const rulesDir = path.join(repoPath, ".cursor", "rules");
+        fs.mkdirSync(rulesDir, { recursive: true });
+        fs.writeFileSync(path.join(rulesDir, "yats.mdc"), CURSOR_RULES_MDC);
       } else {
         delete process.env.CURSOR_MCP_CONFIG;
         fs.rmSync(path.join(repoPath, ".cursor", "rules", "yats.mdc"), { force: true });
@@ -820,8 +928,7 @@ function setupAgent(agent, repoPath, withYats) {
         const settingsDir = path.join(home, ".gemini");
         fs.mkdirSync(settingsDir, { recursive: true });
         fs.writeFileSync(path.join(settingsDir, "settings.json"), mcp);
-        const gmd = readConnect("gemini", "GEMINI.md");
-        if (gmd) fs.writeFileSync(path.join(repoPath, "GEMINI.md"), gmd);
+        fs.writeFileSync(path.join(repoPath, "GEMINI.md"), GEMINI_MD);
       } else {
         fs.rmSync(path.join(home, ".gemini", "settings.json"), { force: true });
         fs.rmSync(path.join(repoPath, "GEMINI.md"), { force: true });
@@ -912,6 +1019,8 @@ function tailAgentActivity(logFile) {
         e.tool_call?.name ||
         e.tool_use?.name ||
         e.tool?.name ||
+        e.item?.name ||
+        e.item?.tool ||
         (Array.isArray(e.message?.content) &&
           e.message.content.find((c) => c && c.type === "tool_use")?.name);
       return typeof name === "string" && name ? name : null;
@@ -923,7 +1032,8 @@ function tailAgentActivity(logFile) {
       if (!name) continue;
       const e = events[i];
       const input =
-        e.input || e.arguments || e.tool_call?.input || e.tool_call?.arguments ||
+        e.input || e.arguments || e.item?.input || e.item?.arguments ||
+        e.tool_call?.input || e.tool_call?.arguments ||
         e.tool_use?.input ||
         (Array.isArray(e.message?.content) &&
           e.message.content.find((c) => c && c.type === "tool_use")?.input);
@@ -954,23 +1064,42 @@ async function runWithSpinner(label, fn) {
   const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   let i = 0;
   const start = Date.now();
-  const id = setInterval(() => {
+  const width = Math.max(20, (process.stdout.columns || 80) - 1);
+  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const draw = () => {
     const secs = Math.floor((Date.now() - start) / 1000);
-    process.stdout.write(`\r  ${A.cyan}${frames[i % frames.length]}${A.reset} ${A.dim}${label}${A.reset} ${A.gray}${secs}s${A.reset}  ${A.dim}${agentActivity}${A.reset}   `);
+    const prefix = `  ${A.cyan}${frames[i % frames.length]}${A.reset} ${A.dim}${label}${A.reset} ${A.gray}${secs}s${A.reset}  ${A.dim}`;
+    const suffix = `${A.reset}`;
+    const budget = Math.max(0, width - strip(prefix).length - strip(suffix).length);
+    const activity = agentActivity.length > budget
+      ? agentActivity.slice(0, Math.max(0, budget - 1)) + "…"
+      : agentActivity;
+    const line = prefix + activity + suffix;
+    const visible = strip(line).length;
+    readline.cursorTo(process.stdout, 0);
+    readline.clearLine(process.stdout, 0);
+    process.stdout.write(line + (visible < width ? " ".repeat(width - visible) : ""));
     i++;
-  }, 80);
+  };
+  draw();
+  const id = setInterval(draw, 80);
   try {
     return await fn();
   } finally {
     clearInterval(id);
-    process.stdout.write("\r\x1b[2K");
+    readline.cursorTo(process.stdout, 0);
+    readline.clearLine(process.stdout, 0);
   }
 }
 
 function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 600) {
   const model = selectedModel ?? agent.defaultModel;
-  const constrained = `Answer the following question about this codebase. Reply concisely in plain text in your final message only. Do NOT create, write, edit, or delete any files, and do not run commands that modify the repo.\n\nQuestion:\n${prompt}`;
-  const args = agent.runCmd(constrained, repoPath, withYats, model);
+  // Claude: raw question (end-user behavior). Other agents keep the neutral
+  // "do not modify files" guard.
+  const wrapped = agent.name === "claude"
+    ? prompt
+    : `Do NOT create, write, edit, or delete any files, and do not run commands that modify the repository.\n\nQuestion:\n${prompt}`;
+  const args = agent.runCmd(wrapped, repoPath, withYats, model);
 
   return new Promise((resolve) => {
     const proc = spawn(agent.cli, args, {
@@ -998,7 +1127,52 @@ function runAgent(agent, prompt, repoPath, withYats, logFile, timeoutSec = 600) 
 // Parse results
 // ============================================================
 
-function parseResult(logFile) {
+export function extractAnswer(events, agentName) {
+  const parts = [];
+  const push = (s) => { if (typeof s === "string" && s.trim()) parts.push(s.trim()); };
+
+  if (agentName === "codex") {
+    for (const e of events) {
+      if (e.type === "item.completed" && e.item?.type === "agent_message") push(e.item.text);
+    }
+  } else if (agentName === "claude" || agentName === "cursor") {
+    for (const e of events) {
+      if (e.type === "assistant" && Array.isArray(e.message?.content)) {
+        for (const c of e.message.content) if (c?.type === "text") push(c.text);
+      } else if (e.type === "stream_event" && e.event?.type === "content_block_delta" && e.event.delta?.type === "text_delta") {
+        push(e.event.delta.text);
+      }
+    }
+  } else if (agentName === "gemini") {
+    for (const e of events) {
+      if (e.type === "message" && e.role === "assistant") {
+        if (typeof e.content === "string") push(e.content);
+        else if (Array.isArray(e.content)) for (const c of e.content) push(typeof c === "string" ? c : c?.text);
+      }
+    }
+  } else if (agentName === "copilot") {
+    for (const e of events) {
+      if (e.type === "assistant.message") {
+        const c = e.data?.content ?? e.content;
+        if (typeof c === "string") push(c);
+        else if (Array.isArray(c)) for (const b of c) push(typeof b === "string" ? b : b?.text);
+      }
+    }
+  }
+
+  return parts.join("\n\n");
+}
+
+function printAnswerPreview(answer, max = 600) {
+  if (!answer) return;
+  const text = answer.length > max ? answer.slice(0, max).replace(/\n+$/, "") + "\n    …" : answer;
+  console.log(`    ${A.dim}— answer —${A.reset}`);
+  for (const line of text.split("\n")) {
+    console.log(`    ${A.dim}${line}${A.reset}`);
+  }
+}
+
+function parseResult(logFile, agentName) {
   try {
     const content = fs.readFileSync(logFile, "utf-8");
     const events = [];
@@ -1152,6 +1326,7 @@ function parseResult(logFile) {
     return {
       tokens, cost, outputTokens, cacheRead, cacheWrite, toolCalls,
       fileReads, bashCmds, yatsQueries, contentChars, nanoAiu, duration,
+      answer: extractAnswer(events, agentName),
       error: errorMsg, logFile,
     };
   } catch (err) {
@@ -1440,7 +1615,7 @@ async function runOnce() {
     await runWithSpinner(`Baseline ${i}/${numRuns} — ${agent.name} is reading files to answer`, () =>
       runAgent(agent, question, repoPath, false, logFile));
     const elapsedMs = Date.now() - t0;
-    const result = parseResult(logFile);
+    const result = parseResult(logFile, agent.name);
     baselineResults.push({
       run: i, withYats: false,
       tokens: result.tokens ?? 0, cost: result.cost ?? 0,
@@ -1449,12 +1624,13 @@ async function runOnce() {
       toolCalls: result.toolCalls ?? {},
       fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
       yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
-      nanoAiu: result.nanoAiu ?? 0,
+      nanoAiu: result.nanoAiu ?? 0, answer: result.answer ?? "",
       duration: elapsedMs, error: result.error, logFile,
     });
     const r = baselineResults[baselineResults.length - 1];
     if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
     else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens${r.nanoAiu ? `, ${(r.nanoAiu / 1e9).toFixed(3)} AIU` : ""}, $${r.cost.toFixed(4)}, ${r.fileReads} reads, ${r.bashCmds} bash, ${fmtDuration(elapsedMs)}`);
+    printAnswerPreview(r.answer);
   }
 
   // 6.5 — Ask before continuing to the with-YATS runs
@@ -1478,7 +1654,7 @@ async function runOnce() {
     await runWithSpinner(`With YATS ${i}/${numRuns} — ${agent.name} is querying the knowledge graph`, () =>
       runAgent(agent, question, repoPath, true, logFile));
     const elapsedMs = Date.now() - t0;
-    const result = parseResult(logFile);
+    const result = parseResult(logFile, agent.name);
     yatsResults.push({
       run: i, withYats: true,
       tokens: result.tokens ?? 0, cost: result.cost ?? 0,
@@ -1487,12 +1663,13 @@ async function runOnce() {
       toolCalls: result.toolCalls ?? {},
       fileReads: result.fileReads ?? 0, bashCmds: result.bashCmds ?? 0,
       yatsQueries: result.yatsQueries ?? 0, contentChars: result.contentChars ?? 0,
-      nanoAiu: result.nanoAiu ?? 0,
+      nanoAiu: result.nanoAiu ?? 0, answer: result.answer ?? "",
       duration: elapsedMs, error: result.error, logFile,
     });
     const r = yatsResults[yatsResults.length - 1];
     if (r.error) console.log(`    ${A.red}✖ ${r.error}${A.reset}`);
     else console.log(`    ${A.green}✓${A.reset} ${r.tokens.toLocaleString()} tokens${r.nanoAiu ? `, ${(r.nanoAiu / 1e9).toFixed(3)} AIU` : ""}, $${r.cost.toFixed(4)}, ${r.yatsQueries} yats, ${r.fileReads} reads, ${fmtDuration(elapsedMs)}`);
+    printAnswerPreview(r.answer);
   }
 
   // 8. Results
@@ -1554,6 +1731,10 @@ async function runOnce() {
     };
     entry.savings_pct = tB > 0 ? Math.round(((tB - tY) / tB * 100) * 10) / 10 : null;
   }
+  entry.answers = {
+    without: baselineResults.filter((r) => !r.error).map((r) => r.answer || "").join("\n\n---\n\n"),
+    with: yatsResults.filter((r) => !r.error).map((r) => r.answer || "").join("\n\n---\n\n"),
+  };
   saveResult(entry);
 
   console.log(`\n  ${A.dim}Logs saved to: ${resultsDir}${A.reset}\n`);

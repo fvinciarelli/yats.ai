@@ -32,6 +32,11 @@ const MCP_CONFIG_FILE = join(YATS_DIR, "mcp-config.json");
 const YATS_BIN_DIR = join(YATS_DIR, "bin");
 const ENV_FILE = join(YATS_DIR, ".env");
 
+// User-configurable documentation extensions (overridable via ~/.yats/.env)
+const DEFAULT_DOC_EXTENSIONS = ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme";
+const DEFAULT_SKIP_EXTENSIONS = ".exe,.dll,.so,.o,.a,.bin,.zip,.tar,.gz,.bz2,.xz,.7z,.rar,.png,.jpg,.jpeg,.gif,.ico,.webp,.bmp,.svg,.woff,.woff2,.ttf,.eot,.otf,.mp3,.mp4,.avi,.mov,.mkv,.flv,.wmv,.webm,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.lock,.log,.map,.min.js,.min.css";
+const DEFAULT_IGNORED_DIRS = "node_modules,.git,dist,build,.next,__pycache__,vendor,target,bin,obj,.venv,venv,.yarn,.pnpm";
+
 const GITHUB_COMPOSE_URL =
   "https://raw.githubusercontent.com/fvinciarelli/yats.ai/main/docker/docker-compose.yml";
 
@@ -131,6 +136,9 @@ const EMBEDDED_COMPOSE = `services:
       - EMBEDDING_BATCH_SIZE=__BATCH_SIZE__
       - INDEX_DOCS=__INDEX_DOCS__
       - DOC_MAX_FILES=__DOC_MAX__
+      - DOC_EXTENSIONS=\${DOC_EXTENSIONS:-__DOC_EXTENSIONS__}
+      - SKIP_EXTENSIONS=\${SKIP_EXTENSIONS:-__SKIP_EXTENSIONS__}
+      - IGNORED_DIRS=\${IGNORED_DIRS:-__IGNORED_DIRS__}
       - LOG_LEVEL=info
     volumes:
       - \${REPOS_PATH:-~/.yats/repos}:/repos:ro
@@ -366,6 +374,9 @@ function generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles) {
     .replace(/__BATCH_SIZE__/g, String(batchSize))
     .replace(/__INDEX_DOCS__/g, indexDocs ? "true" : "false")
     .replace(/__DOC_MAX__/g, String(docMaxFiles))
+    .replace(/__DOC_EXTENSIONS__/g, DEFAULT_DOC_EXTENSIONS)
+    .replace(/__SKIP_EXTENSIONS__/g, DEFAULT_SKIP_EXTENSIONS)
+    .replace(/__IGNORED_DIRS__/g, DEFAULT_IGNORED_DIRS)
 
   return compose;
 }
@@ -430,6 +441,9 @@ export function applyEnvKeys(envMap, { provider, apiKey, model }) {
   for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"]) {
     if (!(k in envMap)) envMap[k] = "";
   }
+  if (!envMap.DOC_EXTENSIONS) envMap.DOC_EXTENSIONS = DEFAULT_DOC_EXTENSIONS;
+  if (!envMap.SKIP_EXTENSIONS) envMap.SKIP_EXTENSIONS = DEFAULT_SKIP_EXTENSIONS;
+  if (!envMap.IGNORED_DIRS) envMap.IGNORED_DIRS = DEFAULT_IGNORED_DIRS;
   return envMap;
 }
 

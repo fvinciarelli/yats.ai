@@ -637,6 +637,13 @@ export class IndexerService implements Indexer {
     filePath: string,
     content: string,
   ): Promise<void> {
+    // Route documentation files to the doc pipeline — indexed from the content
+    // received over the network (not from the server filesystem).
+    if (this.isDocumentationFile(filePath)) {
+      await this.indexDocFileContent(filePath, repositoryName, content);
+      return;
+    }
+
     const language = detectLanguage(filePath, content);
     if (!language) return;
 
@@ -814,6 +821,18 @@ export class IndexerService implements Indexer {
     repoName: string,
   ): Promise<number> {
     const content = await this.deps.fileSystem.readFile(filePath);
+    return this.indexDocFileContent(filePath, repoName, content);
+  }
+
+  /**
+   * Index a documentation file from in-memory content (per-file indexing path —
+   * the CLI sends file content over the network; no filesystem access here).
+   */
+  private async indexDocFileContent(
+    filePath: string,
+    repoName: string,
+    content: string,
+  ): Promise<number> {
     const sections = this.parseMarkdownSections(content, filePath);
 
     if (sections.length === 0) return 0;
@@ -842,6 +861,16 @@ export class IndexerService implements Indexer {
     );
 
     return sections.length;
+  }
+
+  /**
+   * Check if a file is a documentation file based on DOC_EXTENSIONS env var.
+   */
+  private isDocumentationFile(filePath: string): boolean {
+    const docExtensions = (process.env.DOC_EXTENSIONS || ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme")
+      .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+    const lower = filePath.toLowerCase();
+    return docExtensions.some((ext) => lower.endsWith(ext));
   }
 
   private parseMarkdownSections(
