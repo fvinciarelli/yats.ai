@@ -109,7 +109,7 @@ yats benchmark
 4. Your agent answers the same questions twice — with and without YATS
 5. You get a side-by-side comparison: tokens, credits, cost
 
-**Where your agent's keys come from** — `yats benchmark` runs *your* agent, which uses *your* credentials with its provider. The benchmark auto-loads `.env` (from the current directory, walking up to the repo root) into the environment; shell env vars take precedence.
+**Where your agent's keys come from** — `yats benchmark` runs *your* agent, which uses *your* credentials with its provider. The benchmark loads `~/.yats/.env` (written by `yats setup`, which pre-fills the agent key names) and any `.env` in the current directory or repo root; shell env vars take precedence.
 
 | Agent | Credential |
 |---|---|

@@ -126,7 +126,7 @@ See the [GitHub repository](https://github.com/fvinciarelli/yats.ai) for the ful
 ```bash
 yats setup
 ```
-Runs the one-time setup wizard. Detects if YATS is already running, asks for embedding provider (Ollama/OpenAI/Mistral/Voyage), API keys if needed, batch size, docs indexing preference, optional pre-index directories, and MCP port. Generates `~/.yats/docker-compose.yml` and starts all services.
+Runs the one-time setup wizard. Detects if YATS is already running, asks for embedding provider (Ollama/OpenAI/Mistral/Voyage), API keys if needed, batch size, docs indexing preference, optional pre-index directories, and MCP port. Generates `~/.yats/docker-compose.yml`, writes `~/.yats/.env` (embedding keys plus empty `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `DEEPSEEK_API_KEY` placeholders for `yats benchmark`), and starts all services.
 
 ```bash
 yats index <path> [--skip-docs]
@@ -176,8 +176,9 @@ codebase questions with and without YATS. Supports Claude, Codex, Copilot, Gemin
 and Cursor (CLI). Clones/indexes test repos and saves results with averages.
 
 **Where your agent's keys come from** — the benchmark runs *your* agent, which uses
-*your* credentials with its provider. It auto-loads `.env` (from the current dir,
-walking up to the repo root) into the environment; shell env vars take precedence.
+*your* credentials with its provider. It loads `~/.yats/.env` (written by `yats setup`,
+which pre-fills the agent key names) and any `.env` in the current dir or repo root;
+shell env vars take precedence.
 
 | Agent | Credential |
 |---|---|

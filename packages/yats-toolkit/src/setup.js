@@ -416,6 +416,23 @@ async function loadEnv() {
   return env;
 }
 
+// Merge embedding + benchmark keys into the env map before writing ~/.yats/.env.
+// Benchmark agent keys are added empty (if missing) so users see exactly what to
+// fill in for `yats benchmark`; any existing values are preserved.
+export function applyEnvKeys(envMap, { provider, apiKey, model }) {
+  envMap.EMBEDDING_PROVIDER = provider;
+  envMap.YATS_PROVIDER = provider;
+  if (provider === "openai" && apiKey) envMap.EMBEDDING_OPENAI_API_KEY = apiKey;
+  if (provider === "mistral" && apiKey) envMap.EMBEDDING_MISTRAL_API_KEY = apiKey;
+  if (provider === "voyage" && apiKey) envMap.EMBEDDING_VOYAGE_API_KEY = apiKey;
+  const modelVar = { openai: "EMBEDDING_OPENAI_MODEL", mistral: "EMBEDDING_MISTRAL_MODEL", voyage: "EMBEDDING_VOYAGE_MODEL", ollama: "EMBEDDING_OLLAMA_MODEL" }[provider];
+  if (model && modelVar) envMap[modelVar] = model;
+  for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"]) {
+    if (!(k in envMap)) envMap[k] = "";
+  }
+  return envMap;
+}
+
 async function testApiConnection(provider, apiKey) {
   const endpoints = {
     openai: { url: "https://api.openai.com/v1/embeddings", key: apiKey, body: { model: "text-embedding-3-small", input: ["test"] } },
@@ -743,15 +760,8 @@ async function main(options = {}) {
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
   // Persist keys to ~/.yats/.env — canonical source (embedding + benchmark keys).
-  // Merge with any keys the user already added (e.g. ANTHROPIC_API_KEY, GEMINI_API_KEY).
   const envMap = loadEnv();
-  envMap.EMBEDDING_PROVIDER = provider;
-  envMap.YATS_PROVIDER = provider;
-  if (provider === "openai" && apiKey) envMap.EMBEDDING_OPENAI_API_KEY = apiKey;
-  if (provider === "mistral" && apiKey) envMap.EMBEDDING_MISTRAL_API_KEY = apiKey;
-  if (provider === "voyage" && apiKey) envMap.EMBEDDING_VOYAGE_API_KEY = apiKey;
-  const modelVar = { openai: "EMBEDDING_OPENAI_MODEL", mistral: "EMBEDDING_MISTRAL_MODEL", voyage: "EMBEDDING_VOYAGE_MODEL", ollama: "EMBEDDING_OLLAMA_MODEL" }[provider];
-  if (model && modelVar) envMap[modelVar] = model;
+  applyEnvKeys(envMap, { provider, apiKey, model });
   writeFileSync(ENV_FILE, Object.entries(envMap).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 
   // Pull the YATS Docker image from GitHub Container Registry
