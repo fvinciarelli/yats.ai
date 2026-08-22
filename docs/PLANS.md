@@ -58,7 +58,27 @@ incremental flow (watch, commit-based or not).
 - Renames still lose incoming edges (old ID is gone; caller cannot be re-resolved without
   re-indexing the caller) — acceptable, documented.
 
+## P3 — Eliminate the "0 relationships" window during (re)indexing
+
+**Observed (2026-08-22, by an AI agent using the current pipeline):** during `yats index`,
+`repository_summary` reports 0 relationships (old edges die file-by-file via `DETACH DELETE`
+while new ones sit in the pending buffer), then jumps to the full count after the flush
+(`/index/complete` or the 3s debounce). The agent concluded "wait ~30s after indexing" —
+that is an observation, not a contract: the window lasts the whole indexing run (minutes on
+large repos), and if the CLI dies mid-run the flush never fires and the repo is left with 0
+relationships until the next full index. The "wait until relationships stops increasing"
+polling guidance is misleading with this pipeline (it drops to 0, then jumps).
+
+**Design options:**
+- Report pending+stored relationships in `repository_summary` (server knows its buffer size)
+  so the count never falsely drops to 0, and/or expose a `pending` field.
+- Fix the root cause via P2 (in-place symbol updates + final flush) — removes the window
+  entirely.
+- Make `/index/complete` idempotent + run it even when the CLI is interrupted
+  (e.g. `yats index` trap on SIGINT/SIGTERM).
+
 ## Status
 
 - P1: approved as plan by user (2026-08-22). Not started.
 - P2: approved as plan by user (2026-08-22). Not started.
+- P3: added to plan (2026-08-22). Not started.
