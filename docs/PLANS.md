@@ -69,7 +69,26 @@ large repos), and if the CLI dies mid-run the flush never fires and the repo is 
 relationships until the next full index. The "wait until relationships stops increasing"
 polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 
-**Design options:**
+**Design options (updated with UX approach):**
+- **Indexing-state flag + notice (user proposal, preferred):** the server tracks
+  per-repo indexing state and, when a graph tool is queried mid-index, returns an
+  explicit notice instead of confusing partial numbers:
+
+  ```
+  ⏳ Repository "X" is currently being indexed (N relationships pending resolution).
+  The relationship graph is only complete once indexing finishes.
+  Wait ~30s, then query repository_summary again.
+  ```
+
+  Implementation sketch:
+  - `IndexerService` tracks `lastActivityAt` per repo (updated on `registerRepository`
+    and every `indexFileContent`); `isIndexing(repo)` = pending buffer > 0 ||
+    timer pending || now - lastActivityAt < 15s.
+  - `repository_summary` returns the notice (+ partial symbol count) while indexing;
+    graph tools (`find_callers`, `expand_graph`, ...) prepend the notice to results;
+    semantic search keeps working (partial symbols are still useful).
+  - Edge case: CLI killed mid-run → the 3s debounce flush still fires (timer is
+    server-side), repo returns to idle with whatever made it into the buffer.
 - Report pending+stored relationships in `repository_summary` (server knows its buffer size)
   so the count never falsely drops to 0, and/or expose a `pending` field.
 - Fix the root cause via P2 (in-place symbol updates + final flush) — removes the window
