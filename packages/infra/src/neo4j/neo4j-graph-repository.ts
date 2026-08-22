@@ -535,7 +535,7 @@ export class Neo4jGraphRepository implements GraphRepository {
 
     const relCount = await this.connection.read<{ cnt: number }>(
       `
-      MATCH (s:Symbol {repository: $repository})-[r]-()
+      MATCH (s:Symbol {repository: $repository})-[r]->()
       RETURN count(r) AS cnt
       `,
       { repository },

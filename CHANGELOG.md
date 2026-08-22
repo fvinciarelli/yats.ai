@@ -5,6 +5,11 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-08-22
+
+### Fixed
+- `repository_summary` counted every relationship twice — the Cypher query used an undirected pattern (`-[r]-()`), which matches each directed edge once per direction. Now uses `-[r]->()`, so `totalRelationships` reflects the real edge count.
+
 ## [0.4.0] - 2026-08-22
 
 ### Removed
