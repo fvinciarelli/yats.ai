@@ -5,6 +5,22 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-22
+
+### Removed
+- **Server-side indexing is gone.** The MCP tools `index_repository`, `reindex`, `index_file`, and `remove_file` were removed. The server never walks the host filesystem (it may run in a container without access to host paths), so indexing happens exclusively through the thin host CLI (`yats index <path>`, `yats watch <path>`, `yats remove`), which streams files over HTTP. Search tools now return the exact `yats index` command to run when a repo isn't indexed yet — no more silent "0 symbols indexed" successes.
+- `POST /index` is now a lightweight repo registration (metadata only); the CLI streams files via `/index/file` and finalizes via `/index/complete`.
+
+### Fixed
+- **`yats watch <path>` crashed with ENOENT** — the CLI dispatcher never passed arguments to the watch command (`case "watch"` imported the module without args), so `watch.js` read `process.argv[2]` (= the subcommand "watch") as the repo path and tried to stat `CWD/watch`. `watch` now follows the same pattern as every other subcommand (`m.default(args)`) and handles `--help`/`-h`. It also sends **repository-relative** file paths to the server (previously absolute), so watch-reindexed symbols keep the same IDs as the ones from `yats index` instead of duplicating them.
+- **Cross-file relationships now actually work.** The per-file ingestion path (`yats index`, `yats watch`) stored relationships raw, so any edge pointing to a symbol in another file (cross-file CALLS, INHERITS, IMPORTS) was silently dropped by Neo4j — only same-file CALLS/CONTAINS/DECORATES survived. Relationships are now buffered per repository and flushed (debounced 3s, or immediately via `POST /index/complete`) with cross-file resolution against the full repo symbol table (`GlobalSymbolTable`). `find_callers`/`find_callees`/`expand_graph` now return cross-file edges.
+- Python bridge: `self.x()`/`cls.x()` calls now emit callee IDs qualified with the current class, so same-file method→method CALLS edges survive.
+- `resolveCallTarget` rewrites same-file method calls when there is exactly one unambiguous candidate repo-wide (raw target lacked the class qualifier).
+
+### Added
+- `POST /index/complete` HTTP endpoint — flushes pending relationships immediately; the `yats index` CLI calls it after sending all files.
+- `GraphRepository.listAllSymbols(repository)` — lightweight symbol rows for cross-file resolution (also replaces the 5000-symbol cap in `removeFileSymbols`).
+
 ## [0.3.4] - 2026-08-18
 
 ### Fixed

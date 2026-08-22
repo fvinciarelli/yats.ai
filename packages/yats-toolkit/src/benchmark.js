@@ -1301,8 +1301,7 @@ function parseResult(logFile, agentName) {
       "find_implementations", "find_inheritors", "find_tests",
       "find_routes", "find_configuration", "expand_graph", "related_symbols",
       "list_symbols", "list_repositories", "repository_summary",
-      "architecture_summary", "index_repository", "delete_repository",
-      "reindex", "index_file", "remove_file",
+      "architecture_summary", "delete_repository",
     ]);
     const yatsQueries = Object.entries(toolCalls)
       .filter(([k]) => /yats|mcp__/i.test(k) || YATS_TOOLS.has(k))

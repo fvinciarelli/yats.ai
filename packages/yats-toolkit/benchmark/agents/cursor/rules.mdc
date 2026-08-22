@@ -1,0 +1,19 @@
+# YATS Code Intelligence
+
+This repo is indexed by YATS. Use these MCP tools for code questions:
+`search_code`, `find_symbol`, `find_callers`, `find_callees`, `expand_graph`,
+`find_references`, `find_implementations`, `find_inheritors`, `find_routes`.
+
+## Rules
+
+- Start with `search_code` for any codebase question.
+- Max 3 YATS calls per task. Synthesize, don't keep searching.
+- YATS returns results in ms. File reads cost thousands of tokens.
+- If unsure about repo name, call `list_repositories` first.
+
+## Workflow
+
+1. `search_code("your question", repository="<name>")`
+2. `find_symbol` on top hits
+3. `expand_graph` or `find_callers`/`find_callees` to trace flow
+4. Read files only at exact lines from YATS results

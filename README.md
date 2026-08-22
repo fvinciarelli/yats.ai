@@ -188,9 +188,8 @@ Instead of reading 15 files, your agent calls:
 | **Inheritance** | `find_implementations`, `find_inheritors` |
 | **Graph** | `expand_graph`, `related_symbols` |
 | **Discovery** | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
-| **Repository** | `list_repositories`, `index_repository`, `delete_repository` |
+| **Repository** | `list_repositories`, `delete_repository` |
 | **Analysis** | `repository_summary`, `architecture_summary` |
-| **Live sync** | `index_file`, `remove_file`, `reindex` |
 
 ---
 

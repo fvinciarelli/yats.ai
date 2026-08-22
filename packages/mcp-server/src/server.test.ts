@@ -48,7 +48,8 @@ function makeMockDeps(): McpDependencies {
         languages: [],
       }),
       listRepositories: async () => [{ name: "test-repo", rootPath: "/tmp/test-repo" }],
-      findRepositoryByPath: async () => ({ name: "test-repo", rootPath: "/tmp/test-repo" }),
+      findRepositoryByPath: async (p: string) =>
+        p === "/tmp/test-repo" ? { name: "test-repo", rootPath: "/tmp/test-repo" } : null,
       upsertSymbols: async () => {},
       upsertRelationships: async () => {},
       upsertRepositoryMetadata: async () => {},
@@ -81,31 +82,11 @@ function makeMockDeps(): McpDependencies {
       resolvePath: async () => "/tmp/test-repo",
     },
     indexer: {
-      indexRepository: async () => ({
-        repository: "test-repo",
-        symbolsFound: 10,
-        relationshipsFound: 5,
-        vectorsCreated: 10,
-        docsIndexed: 2,
-        errors: 0,
-        duration: 1000,
-        timings: { walkMs: 100, analyzeMs: 500, embedMs: 200, storeMs: 200, docsMs: 0, totalMs: 1000 },
-      }),
-      ensureIndexed: async () => ({ status: "fresh" }),
-      indexFile: async () => {},
+      registerRepository: async () => {},
       indexFileContent: async () => {},
-      incrementalIndex: async () => ({
-        repository: "test-repo",
-        symbolsFound: 1,
-        relationshipsFound: 0,
-        vectorsCreated: 1,
-        docsIndexed: 0,
-        errors: 0,
-        duration: 100,
-        timings: { walkMs: 0, analyzeMs: 50, embedMs: 30, storeMs: 20, docsMs: 0, totalMs: 100 },
-      }),
       removeFile: async () => ({ removed: 3 }),
-      indexDocumentation: async () => 0,
+      finalizeRepository: async () => ({ stored: 0, filtered: 0, rewritten: 0 }),
+      rebuildVectors: async () => ({ repositories: 1, symbols: 10, errors: 0 }),
     },
     repositoriesRoot: "/tmp/repos",
   };
@@ -169,9 +150,14 @@ describe("MCP Server — protocol", () => {
     const toolNames = tools.map((t: any) => t.name);
     assert.ok(toolNames.includes("search_code"), "search_code should exist");
     assert.ok(toolNames.includes("find_symbol"), "find_symbol should exist");
-    assert.ok(toolNames.includes("index_repository"), "index_repository should exist");
-    assert.ok(toolNames.includes("reindex"), "reindex should exist");
-    assert.ok(toolNames.includes("index_file"), "index_file should exist");
+    assert.ok(toolNames.includes("list_repositories"), "list_repositories should exist");
+
+    // Indexing tools were removed — the server never walks the host filesystem.
+    // Indexing happens exclusively through the host CLI (`yats index`).
+    assert.ok(!toolNames.includes("index_repository"), "index_repository should NOT exist");
+    assert.ok(!toolNames.includes("reindex"), "reindex should NOT exist");
+    assert.ok(!toolNames.includes("index_file"), "index_file should NOT exist");
+    assert.ok(!toolNames.includes("remove_file"), "remove_file should NOT exist");
   });
 
   it("each tool has required fields", async () => {
@@ -267,69 +253,39 @@ describe("MCP Server — input validation", () => {
     server = new McpServer(makeMockDeps());
   });
 
-  it("rejects reindex with system path /", async () => {
-    const response = await server.handleRequest({
-      jsonrpc: "2.0",
-      id: 10,
-      method: "tools/call",
-      params: {
-        name: "reindex",
-        arguments: { path: "/" },
-      },
-    });
-
-    assert.equal(response.id, 10);
-    assert.ok((response as any).error, "should have validation error");
-    assert.equal((response as any).error.code, -32602, "should be invalid params");
-    assert.ok(
-      (response as any).error.message.includes("system"),
-      "error should mention system path",
-    );
+  it("removed indexing tools return method-not-found", async () => {
+    for (const [name, args] of [
+      ["index_repository", { path: "/home/user/my-project" }],
+      ["reindex", { path: "/home/user/my-project" }],
+      ["index_file", { path: "/home/user/project/src/file.ts", repository: "test-repo" }],
+      ["remove_file", { path: "/home/user/project/src/file.ts", repository: "test-repo" }],
+    ] as const) {
+      const response = await server.handleRequest({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: { name, arguments: args as any },
+      });
+      assert.ok((response as any).error, `${name} should be unknown`);
+      assert.equal((response as any).error.code, -32601, `${name} should be method not found`);
+    }
   });
 
-  it("rejects reindex with path /home", async () => {
+  it("search tool on unindexed repo returns the yats index command", async () => {
     const response = await server.handleRequest({
       jsonrpc: "2.0",
       id: 11,
       method: "tools/call",
       params: {
-        name: "reindex",
-        arguments: { path: "/home" },
+        name: "search_code",
+        arguments: { query: "whatever", path: "/home/user/my-project" },
       },
     });
 
-    assert.ok((response as any).error, "should have validation error");
-  });
-
-  it("rejects path traversal attempts", async () => {
-    const response = await server.handleRequest({
-      jsonrpc: "2.0",
-      id: 12,
-      method: "tools/call",
-      params: {
-        name: "index_repository",
-        arguments: { path: "../../etc/passwd" },
-      },
-    });
-
-    assert.ok((response as any).error, "should have validation error");
-    assert.ok(
-      (response as any).error.message.includes("Path traversal"),
-      "error should mention path traversal",
-    );
-  });
-
-  it("accepts valid path", async () => {
-    const response = await server.handleRequest({
-      jsonrpc: "2.0",
-      id: 13,
-      method: "tools/call",
-      params: {
-        name: "reindex",
-        arguments: { path: "/home/user/my-project" },
-      },
-    });
-
-    assert.ok((response as any).result, "should succeed with valid path");
+    const content = (response as any).result?.content;
+    assert.ok(content, "should have content");
+    const text = content[0].text as string;
+    assert.ok(text.includes("yats index /home/user/my-project"), "should suggest yats index command");
+    assert.ok(text.includes("repository_summary"), "should mention polling with repository_summary");
   });
 });

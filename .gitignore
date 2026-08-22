@@ -32,6 +32,8 @@ bin/
 .plans
 !.plans/benchmark/
 AGENTS.md
+!packages/yats-toolkit/benchmark/agents/codex/AGENTS.md
+!connect/codex/AGENTS.md
 .aider*
 packages/yats-toolkit/benchmark/results/
 repos/

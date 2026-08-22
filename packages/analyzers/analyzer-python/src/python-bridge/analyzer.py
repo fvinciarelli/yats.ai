@@ -306,9 +306,21 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
 
             # Extract callee name from different call forms
             callee_name = None
+            callee_id = None
             if hasattr(node.func, 'value') and hasattr(node.func, 'attr'):
                 # obj.method() calls
-                callee_name = node.func.attr.value if hasattr(node.func.attr, 'value') else str(node.func.attr)
+                obj = node.func.value
+                method = node.func.attr.value if hasattr(node.func.attr, 'value') else str(node.func.attr)
+                if isinstance(obj, cst.Name) and obj.value in ('self', 'cls'):
+                    # self.x() / cls.x() → qualify with the current class
+                    callee_name = method
+                    if self.current_class:
+                        callee_id = self.make_id(f"{self.namespace}.{self.current_class}.{method}")
+                else:
+                    # Call on another object — can't resolve the receiver's type
+                    # without type inference; the emitted ID would be dangling,
+                    # so skip it (it would be dropped at storage anyway).
+                    return
             elif hasattr(node.func, 'value'):
                 # Simple function calls
                 callee_name = node.func.value if isinstance(node.func.value, str) else (
@@ -316,7 +328,8 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                 )
 
             if callee_name:
-                callee_id = self.make_id(f"{self.namespace}.{callee_name}")
+                if callee_id is None:
+                    callee_id = self.make_id(f"{self.namespace}.{callee_name}")
                 self.relationships.append({
                     "id": f"{caller_id}--[CALLS]-->{callee_id}",
                     "sourceSymbolId": caller_id,

@@ -19,15 +19,23 @@ export interface IndexResult {
 }
 
 export interface Indexer {
-  indexRepository(repositoryPath: string, options?: { skipDocs?: boolean }): Promise<IndexResult>;
-  indexFile(repositoryName: string, filePath: string): Promise<void>;
+  /**
+   * Register repository metadata without walking the filesystem.
+   * Used by the host CLI (`yats index`) — the server may not have access
+   * to host paths, so indexing itself always happens via per-file HTTP.
+   */
+  registerRepository(repositoryName: string, rootPath: string): Promise<void>;
   indexFileContent(repositoryName: string, filePath: string, content: string): Promise<void>;
   removeFile(repositoryName: string, filePath: string): Promise<{ removed: number }>;
-  incrementalIndex(repositoryPath: string, sinceCommit: string): Promise<IndexResult>;
-  indexDocumentation(repositoryPath: string): Promise<number>;
-  ensureIndexed(repositoryPath: string, options?: { skipDocs?: boolean }): Promise<{
-    status: "indexed" | "reindexed" | "fresh";
-    result?: IndexResult;
+  /**
+   * Flush pending per-file relationships for a repository: resolve cross-file
+   * references against the full symbol table and store them in the graph.
+   * Called automatically after a quiet period, or explicitly via POST /index/complete.
+   */
+  finalizeRepository(repositoryName: string): Promise<{
+    stored: number;
+    filtered: number;
+    rewritten: number;
   }>;
   rebuildVectors(): Promise<{ repositories: number; symbols: number; errors: number }>;
 }

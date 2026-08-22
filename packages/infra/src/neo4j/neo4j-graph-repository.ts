@@ -1,5 +1,5 @@
 import type { Symbol, Relationship, SymbolKind, RelationshipKind } from "@yats/shared";
-import type { GraphSymbol, Subgraph, RepositorySummary } from "@yats/shared";
+import type { GraphSymbol, Subgraph, RepositorySummary, SymbolLite } from "@yats/shared";
 import type { GraphRepository } from "@yats/shared";
 import { createLogger, type Logger } from "@yats/shared";
 import { Neo4jConnection } from "./neo4j-connection.js";
@@ -205,6 +205,22 @@ export class Neo4jGraphRepository implements GraphRepository {
 
     const rows = await this.connection.read<any>(cypher, params);
     return rows.map((r) => this.rowToGraphSymbol(r));
+  }
+
+  async listAllSymbols(repository: string): Promise<SymbolLite[]> {
+    const rows = await this.connection.read<any>(
+      `
+      MATCH (s:Symbol {repository: $repository})
+      RETURN s.id AS id, s.name AS name, s.namespace AS namespace, s.relativePath AS relativePath
+      `,
+      { repository },
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name ?? "",
+      namespace: r.namespace ?? "",
+      relativePath: r.relativePath ?? "",
+    }));
   }
 
   async listSymbols(

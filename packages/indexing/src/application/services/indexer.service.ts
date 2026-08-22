@@ -19,6 +19,7 @@ import { detectLanguage } from "../../infrastructure/language-detector.js";
 import { hashContent, type RelationshipKind } from "@yats/shared";
 import { GlobalSymbolTable, resolveRelationships, type SymbolTableEntry } from "./global-symbol-table.js";
 import { IncrementalIndexerService } from "./incremental-indexer.service.js";
+import { PendingRelationshipStore } from "./pending-relationships.js";
 
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline
@@ -39,11 +40,13 @@ export class IndexerService implements Indexer {
   private readonly embedBatchSize: number;
   private readonly pipelineChunkSize: number;
   private readonly batchAnalyzerSize: number;
+  private readonly pendingRelationships: PendingRelationshipStore;
 
   constructor(
     private readonly deps: IndexerDependencies,
   ) {
     this.logger = createLogger("indexer:service");
+    this.pendingRelationships = new PendingRelationshipStore(deps.graphRepository);
 
     // Resolve config with provider-aware defaults.
     // Env vars override; without them, defaults adapt to the embedding provider.
@@ -95,6 +98,24 @@ export class IndexerService implements Indexer {
     };
   }
 
+  /**
+   * Register repository metadata without walking the filesystem.
+   * Used by the host CLI (`yats index`) which streams files via /index/file.
+   */
+  async registerRepository(repositoryName: string, rootPath: string): Promise<void> {
+    await this.deps.graphRepository.upsertRepositoryMetadata(repositoryName, rootPath);
+    this.logger.info(`Registered repository "${repositoryName}" at ${rootPath} (files arrive via CLI)`);
+  }
+
+  /**
+   * Flush pending per-file relationships: resolve cross-file references
+   * against the full symbol table and store them. Called by the debounce
+   * timer after indexing quiets down, or explicitly via POST /index/complete.
+   */
+  async finalizeRepository(repositoryName: string): Promise<{ stored: number; filtered: number; rewritten: number }> {
+    return this.pendingRelationships.flush(repositoryName);
+  }
+
   // ============================================================
   // Full Repository Index (Pipeline Architecture)
   //
@@ -108,6 +129,22 @@ export class IndexerService implements Indexer {
     const totalStart = Date.now();
     const repoName = this.getRepoName(repositoryPath);
     this.logger.info(`Indexing repository: ${repoName} at ${repositoryPath}`);
+
+    // Fail loudly instead of reporting a successful 0-symbol index. The server
+    // may run in a container without access to host paths — indexing must go
+    // through the host CLI (`yats index`), which streams files over HTTP.
+    let pathExists = false;
+    try {
+      pathExists = await this.deps.fileSystem.exists(repositoryPath);
+    } catch { /* stat failed — treat as inaccessible */ }
+    if (!pathExists) {
+      throw new Error(
+        `Repository path not accessible from the YATS server: "${repositoryPath}". ` +
+        `The server cannot walk host files. Index from the host machine instead:\n\n` +
+        `  yats index ${repositoryPath}\n\n` +
+        `Then poll with repository_summary(repository: "${repoName}").`,
+      );
+    }
 
     // Track cumulative metrics
     let totalRelationships = 0;
@@ -666,7 +703,10 @@ export class IndexerService implements Indexer {
       const vectors = await this.deps.embeddingGenerator.embedBatch(texts);
 
       await this.deps.graphRepository.upsertSymbols(result.symbols);
-      await this.deps.graphRepository.upsertRelationships(result.relationships);
+      // Relationships are buffered and flushed once the indexing session goes
+      // quiet (or on /index/complete), so cross-file targets can be resolved
+      // against the complete symbol table instead of being silently dropped.
+      this.pendingRelationships.add(repositoryName, result.relationships);
 
       await this.deps.vectorRepository.upsertVectors(
         result.symbols.map((symbol, i) => ({
@@ -706,9 +746,9 @@ export class IndexerService implements Indexer {
     repositoryName: string,
     filePath: string,
   ): Promise<number> {
-    const symbols = await this.deps.graphRepository.listSymbols(repositoryName, undefined, 5000, 0);
+    const symbols = await this.deps.graphRepository.listAllSymbols(repositoryName);
     const toDelete = symbols.filter(
-      (s) => s.location.relativePath === filePath || s.id.includes(filePath),
+      (s) => s.relativePath === filePath || s.id.includes(filePath),
     );
 
     if (toDelete.length > 0) {
@@ -743,6 +783,7 @@ export class IndexerService implements Indexer {
       fileSystem: this.deps.fileSystem,
       gitAdapter: this.deps.gitAdapter,
       analyzerFactory: this.deps.analyzerFactory,
+      pendingRelationships: this.pendingRelationships,
     });
 
     const repoName = this.getRepoName(repositoryPath);

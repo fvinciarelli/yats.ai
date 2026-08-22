@@ -96,5 +96,22 @@ export default async function indexRepo(args, options = {}) {
     process.stdout.write(`\r  ${sent + errors}/${total} files`);
   }
   console.log(`\r  ✓ ${sent} files indexed${errors > 0 ? `, ${errors} skipped` : ""}`);
+
+  // Finalize: resolve cross-file references and store relationships.
+  // The server also flushes automatically after a quiet period, but an
+  // explicit call makes the graph available immediately.
+  try {
+    const res = await fetch(`${YATS_URL}/index/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repository: repoName }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      console.log(`  ✓ Graph finalized: ${data.stored} relationships (${data.rewritten} cross-file resolved)`);
+    }
+  } catch {
+    // Non-fatal — the server flushes on its own debounce timer.
+  }
   console.log(``);
 }

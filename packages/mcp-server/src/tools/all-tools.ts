@@ -55,18 +55,14 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     ARCHITECTURE_SUMMARY,
     SEARCH_SIMILAR,
     LIST_REPOSITORIES,
-    INDEX_REPOSITORY,
     DELETE_REPOSITORY,
-    REINDEX,
     REBUILD_VECTORS,
-    INDEX_FILE,
-    REMOVE_FILE,
   ];
 }
 
 const SEARCH_CODE: ToolDefinition = {
   name: "search_code",
-  description: "Search indexed code using natural language. Finds relevant symbols, functions, and classes. If the repo isn't indexed yet, you'll get a hint to call index_repository first.",
+  description: "Search indexed code using natural language. Finds relevant symbols, functions, and classes. If the repo isn't indexed yet, you'll get the exact command to index it from the host (yats index).",
   inputSchema: {
     type: "object",
     properties: {
@@ -409,19 +405,6 @@ const LIST_REPOSITORIES: ToolDefinition = {
   },
 };
 
-const INDEX_REPOSITORY: ToolDefinition = {
-  name: "index_repository",
-  description: "Index a repository so it becomes searchable. This tool tells you the command to run — the actual indexing happens via the 'yats index' CLI on your machine, which walks local files and sends them to the YATS server.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the repository to index" },
-      skipDocs: { type: "boolean", description: "Skip documentation files (markdown, etc.) for faster indexing. Use true for large repos with lots of docs." },
-    },
-    required: ["path"],
-  },
-};
-
 const DELETE_REPOSITORY: ToolDefinition = {
   name: "delete_repository",
   description: "Delete an indexed repository from YATS (removes all symbols, relationships, and vectors). CAUTION: this is irreversible. The source code files are NOT deleted — only the indexed data.",
@@ -436,18 +419,6 @@ const DELETE_REPOSITORY: ToolDefinition = {
   },
 };
 
-const REINDEX: ToolDefinition = {
-  name: "reindex",
-  description: "Re-index a repository to pick up recent changes. Use this after you or the user has modified code files and the index may be stale. Only re-indexes changed files when git is available.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the repository to reindex" },
-    },
-    required: ["path"],
-  },
-};
-
 const REBUILD_VECTORS: ToolDefinition = {
   name: "rebuild_vectors",
   description: "Rebuild the vector index after the embedding model/dimension changed. Re-embeds all symbols and may incur API costs — always ask the user before proceeding.",
@@ -455,32 +426,6 @@ const REBUILD_VECTORS: ToolDefinition = {
     type: "object",
     properties: {},
     required: [],
-  },
-};
-
-const INDEX_FILE: ToolDefinition = {
-  name: "index_file",
-  description: "Re-index a single file after editing it. Call this immediately after you modify a file so the knowledge graph stays up to date.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the file that was modified" },
-      repository: { type: "string", description: "Repository name (as shown in list_repositories)" },
-    },
-    required: ["path", "repository"],
-  },
-};
-
-const REMOVE_FILE: ToolDefinition = {
-  name: "remove_file",
-  description: "Remove a deleted file from the index. Call this after you delete a file so the knowledge graph doesn't reference dead code.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the file that was deleted" },
-      repository: { type: "string", description: "Repository name (as shown in list_repositories)" },
-    },
-    required: ["path", "repository"],
   },
 };
 
@@ -525,66 +470,29 @@ async function ensureRepoIndexed(
   // Try to resolve from already-indexed repos
   const repo = await resolveRepo(repoPath, repoName, deps.graphRepository);
   if (repo) {
-    // Already indexed — but check if it's stale and update if needed
-    if (repoPath) {
-      await deps.indexer.ensureIndexed(repoPath);
-    }
     return repo;
   }
 
-  // Not indexed — if we have a path, index it now automatically
+  // Not indexed — the YATS server never walks the host filesystem (it may run
+  // in a container without access to host paths). Indexing happens exclusively
+  // through the thin host CLI, which streams files over HTTP.
   if (repoPath) {
-    const { status } = await deps.indexer.ensureIndexed(repoPath);
-    if (status === "indexed" || status === "reindexed") {
-      const repo = await resolveRepo(repoPath, repoName, deps.graphRepository);
-      if (repo) return repo;
-    }
-    return {
-      content: [{ type: "text", text: `Indexing failed for "${repoPath}".` }],
-      isError: true,
-    };
+    return notIndexed(repoPath);
   }
-
   return notIndexed(repoName as string);
 }
 
-/** Return a helpful "not indexed" message with the exact command */
+/** Return a helpful "not indexed" message with the exact command to run on the host */
 function notIndexed(hint?: string): ToolResult {
   const name = hint || "this repository";
-  const cmd = `npx yats index ${name}`;
+  const repoArg = name.startsWith("/") ? name : `"${name}"`;
+  const cmd = `yats index ${repoArg}`;
   return {
     content: [{
       type: "text",
-      text: `Repository "${name}" is not indexed yet.\n\nRun this command to index it:\n  ${cmd}\n\nThen ask me again.`,
+      text: `Repository "${name}" is not indexed yet.\n\nRun this command in a terminal on the host machine (I can run it for you):\n\n  ${cmd}\n\nThen poll with:\n\n  repository_summary(repository: "${name.split("/").pop() ?? name}")\n\nuntil 'relationships' stops increasing between two consecutive checks.`, 
     }],
   };
-}
-
-/**
- * Check if the repository has a massive docs/ directory and return a warning.
- * Returns null if docs are fine to index, or a warning string if there are too many.
- */
-async function checkDocsWarning(
-  repoPath: string,
-  deps: McpDependencies,
-): Promise<string | null> {
-  const MAX_DOC_FILES = 300;
-  const docsDir = `${repoPath}/docs`;
-  try {
-    const exists = await deps.fileSystem.exists(docsDir);
-    if (!exists) return null;
-    const files = await deps.fileSystem.listFiles(docsDir);
-    const mdFiles = files.filter(f => f.endsWith(".md")).length;
-    if (mdFiles > MAX_DOC_FILES) {
-      return (
-        `docs/ has ${mdFiles} .md files (threshold: ${MAX_DOC_FILES}). ` +
-        `Indexing all of them will take a long time.\n\n` +
-        `- Call index_repository with skipDocs: true to skip documentation\n` +
-        `- Call index_repository with skipDocs: false (or omit it) to index docs anyway`
-      );
-    }
-  } catch { /* can't access docs — ignore */ }
-  return null;
 }
 
 // ============================================================
@@ -868,32 +776,6 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     return { content: [{ type: "text", text: JSON.stringify(repos, null, 2) }] };
   });
 
-  handlers.set("index_repository", async (args) => {
-    const repoPath = args.path as string;
-    if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
-
-    // Reject dangerous paths that would scan the entire filesystem
-    const dangerous = ["/", "/root", "/etc", "/dev", "/proc", "/sys", "/var", "/usr", "/home", "/tmp"];
-    const isWindowsRoot = /^[A-Z]:\?$/i.test(repoPath);
-    if (dangerous.includes(repoPath) || isWindowsRoot || repoPath === "/" || !repoPath.includes("/") || repoPath.length < 3) {
-      return {
-        content: [{ type: "text", text: `Refusing to index "${repoPath}" — this would scan the entire filesystem. Please provide a specific project path like /home/user/my-project or C:\\Users\\user\\project.` }],
-        isError: true,
-      };
-    }
-
-    const skipDocs = args.skipDocs === true;
-    const repoName = repoPath.split("/").pop() || repoPath;
-    const skipDocsFlag = skipDocs ? " --skip-docs" : "";
-
-    return {
-      content: [{
-        type: "text",
-        text: `Tell the user:\n\n"I'm going to index ${repoPath}. This will analyze your code, generate embeddings, and store the knowledge graph. It may take a few minutes depending on the repo size."\n\nTell the user to run:\n\n  yats index ${repoPath}${skipDocsFlag}\n\nAfter the command finishes, poll with:\n\n  repository_summary(repository: "${repoName}")\n\nWait until 'relationships' stops increasing between two consecutive checks. Then show the user the final summary.\n\nOnce indexing is complete, suggest keeping the index live:\n\n  "I can watch this repo for changes and keep the index up to date while we work. Run: yats watch ${repoPath}"\n\nThis starts a file watcher that automatically re-indexes modified files and removes deleted ones. The agent should offer this — if the user says yes, run the command. If the user is in autonomous mode (AGENTS.md/SKILL.md says the agent can execute commands directly), just run it.\n\nIf the user doesn't want to wait, tell them they can ask for the status anytime with 'repository_summary'.`,
-      }],
-    };
-  });
-
   handlers.set("delete_repository", async (args) => {
     const repoName = (args.repository as string) || undefined;
     const repoPath = (args.path as string) || undefined;
@@ -953,31 +835,6 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
 
   // === Repository reindex & single-file index ===
 
-  handlers.set("reindex", async (args) => {
-    const repoPath = args.path as string;
-    if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
-
-    const { status, result } = await deps.indexer.ensureIndexed(repoPath);
-
-    if (status === "fresh") {
-      return { content: [{ type: "text", text: `Repository at "${repoPath}" is already up to date. No reindex needed.` }] };
-    }
-
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          status,
-          summary: result ? {
-            symbolsFound: result.symbolsFound,
-            relationshipsFound: result.relationshipsFound,
-            duration: `${(result.duration / 1000).toFixed(1)}s`,
-          } : null,
-        }, null, 2),
-      }],
-    };
-  });
-
   handlers.set("rebuild_vectors", async () => {
     return {
       content: [{
@@ -1000,47 +857,6 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
         ].join("\n"),
       }],
     };
-  });
-
-  handlers.set("index_file", async (args) => {
-    const filePath = args.path as string;
-    const repoName = args.repository as string;
-    if (!filePath) return { content: [{ type: "text", text: "Error: 'path' (absolute file path) is required" }], isError: true };
-    if (!repoName) return { content: [{ type: "text", text: "Error: 'repository' is required" }], isError: true };
-
-    try {
-      await deps.indexer.indexFile(repoName, filePath);
-      return {
-        content: [{ type: "text", text: `✅ File "${filePath}" re-indexed successfully in repository "${repoName}".` }],
-      };
-    } catch (err: any) {
-      return {
-        content: [{ type: "text", text: `❌ Failed to index file "${filePath}": ${err.message}` }],
-        isError: true,
-      };
-    }
-  });
-
-  handlers.set("remove_file", async (args) => {
-    const filePath = args.path as string;
-    const repoName = args.repository as string;
-    if (!filePath) return { content: [{ type: "text", text: "Error: 'path' (absolute file path) is required" }], isError: true };
-    if (!repoName) return { content: [{ type: "text", text: "Error: 'repository' is required" }], isError: true };
-
-    try {
-      const result = await deps.indexer.removeFile(repoName, filePath);
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Removed ${result.removed} symbols from index for deleted file "${filePath}" in repository "${repoName}".`,
-        }],
-      };
-    } catch (err: any) {
-      return {
-        content: [{ type: "text", text: `❌ Failed to remove file "${filePath}" from index: ${err.message}` }],
-        isError: true,
-      };
-    }
   });
 
   logger.info(`Registered ${handlers.size} tool handlers`);

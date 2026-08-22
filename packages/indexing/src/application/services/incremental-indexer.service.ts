@@ -5,6 +5,7 @@ import { SymbolDiffer } from "./symbol-differ.service.js";
 import { detectLanguage } from "../../infrastructure/language-detector.js";
 import { hashContent } from "@yats/shared";
 import type { Symbol, Relationship } from "@yats/shared";
+import type { PendingRelationshipStore } from "./pending-relationships.js";
 
 // ============================================================
 // Incremental Indexer — indexes only changed files
@@ -17,6 +18,8 @@ export interface IncrementalIndexerDeps {
   fileSystem: FileSystem;
   gitAdapter: GitAdapter;
   analyzerFactory: AnalyzerFactory;
+  /** Shared buffer for deferred cross-file relationship resolution (optional). */
+  pendingRelationships?: PendingRelationshipStore;
 }
 
 export class IncrementalIndexerService {
@@ -158,7 +161,13 @@ export class IncrementalIndexerService {
 
     // Store
     await this.deps.graphRepository.upsertSymbols(result.symbols);
-    await this.deps.graphRepository.upsertRelationships(result.relationships);
+    // Defer relationship storage so cross-file targets can be resolved against
+    // the full symbol table (see PendingRelationshipStore).
+    if (this.deps.pendingRelationships) {
+      this.deps.pendingRelationships.add(repoName, result.relationships);
+    } else {
+      await this.deps.graphRepository.upsertRelationships(result.relationships);
+    }
     await this.deps.vectorRepository.upsertVectors(
       result.symbols.map((symbol, i) => ({
         id: symbol.id,

@@ -90,7 +90,7 @@ switch (cmd) {
     import("../src/benchmark.js").then(m => m.runBenchmark());
     break;
   case "watch":
-    import("../src/watch.js");
+    import("../src/watch.js").then(m => m.default(args));
     break;
   case "connect":
     import("../src/connect.js").then(m => m.default(args));

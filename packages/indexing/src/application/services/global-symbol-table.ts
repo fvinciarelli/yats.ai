@@ -116,6 +116,18 @@ export class GlobalSymbolTable {
       return externalCandidates[0]!;
     }
 
+    if (externalCandidates.length === 0 && candidates.size === 1) {
+      // No external candidate, but exactly one symbol with this name in the
+      // whole repo — likely a same-file method call whose raw target lacks the
+      // class qualifier (e.g. `_jql` emitted for `self._jql()`). The single
+      // match is unambiguous, so rewrite to it.
+      const only = [...candidates][0]!;
+      if (only !== targetId) {
+        return only;
+      }
+      return targetId;
+    }
+
     if (externalCandidates.length > 1) {
       // Multiple external candidates — try to disambiguate by namespace match
       // (e.g. if caller imported from "db", prefer candidate in "db" namespace)

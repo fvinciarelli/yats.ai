@@ -56,7 +56,7 @@ yats index ~/work/frontend
 ```
 "index /home/user/my-project"
 ```
-The agent will use the `index_repository` MCP tool, which tells it to run `yats index` and then polls until complete.
+The agent runs `yats index` on your machine (the only way to index — the server never walks your filesystem) and then polls `repository_summary` until complete.
 
 ## MCP Configuration
 
@@ -89,7 +89,7 @@ Add this to your AI agent's MCP config:
 | Inheritance | `find_implementations`, `find_inheritors` |
 | Graph | `expand_graph`, `related_symbols` |
 | Discovery | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
-| Repository | `list_repositories`, `index_repository`, `delete_repository` |
+| Repository | `list_repositories`, `delete_repository` |
 | Analysis | `repository_summary`, `architecture_summary` |
 
 ## Commands

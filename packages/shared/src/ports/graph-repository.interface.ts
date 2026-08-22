@@ -25,6 +25,14 @@ export interface RepositoryInfo {
   rootPath: string;
 }
 
+/** Lightweight symbol row for cross-file resolution (no source snippet/vectors). */
+export interface SymbolLite {
+  id: string;
+  name: string;
+  namespace: string;
+  relativePath: string;
+}
+
 export interface GraphRepository {
   upsertSymbol(symbol: Symbol): Promise<void>;
   upsertSymbols(symbols: Symbol[]): Promise<void>;
@@ -48,6 +56,8 @@ export interface GraphRepository {
   relatedSymbols(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
   repositorySummary(repository: string): Promise<RepositorySummary>;
   listSymbols(repository: string, kind?: SymbolKind, limit?: number, offset?: number): Promise<GraphSymbol[]>;
+  /** All symbols of a repository as lightweight entries (id/name/namespace/relativePath). */
+  listAllSymbols(repository: string): Promise<SymbolLite[]>;
   upsertRepositoryMetadata(name: string, rootPath: string): Promise<void>;
   listRepositories(): Promise<RepositoryInfo[]>;
   findRepositoryByPath(rootPath: string): Promise<RepositoryInfo | null>;

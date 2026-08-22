@@ -1,5 +1,5 @@
 {
   "mcpServers": {
-    "yats": { "url": "http://localhost:5555/mcp" }
+    "yats": { "type": "http", "url": "http://localhost:5555/mcp" }
   }
 }

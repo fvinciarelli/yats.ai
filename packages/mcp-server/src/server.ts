@@ -326,6 +326,11 @@ export class McpServer {
         this.handleIndexFile(req, res);
         return;
       }
+      // Finalize endpoint — flush pending relationships (cross-file resolution)
+      if (req.method === "POST" && url.pathname === "/index/complete") {
+        this.handleIndexComplete(req, res);
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/index/remove") {
         this.handleIndexRemove(req, res);
         return;
@@ -480,9 +485,13 @@ export class McpServer {
         res.end(JSON.stringify({ error: "path is required" }));
         return;
       }
-      const result = await this.indexer.ensureIndexed(repoPath);
+      // The CLI walks the host filesystem and streams files via /index/file —
+      // the server only registers the repo metadata here (it may run in a
+      // container without access to host paths).
+      const repoName = repoPath.split("/").pop() || repoPath;
+      await this.indexer.registerRepository(repoName, repoPath);
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(result));
+      res.end(JSON.stringify({ ok: true, repository: repoName, path: repoPath, registered: true }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));
@@ -507,6 +516,28 @@ export class McpServer {
       await this.indexer.indexFileContent(repoName, filePath, content);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, file: filePath }));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleIndexComplete(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = await this.readBody(req);
+    try {
+      const params = JSON.parse(body);
+      const repoName = params.repository || params.repoName;
+      if (!repoName) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "repository is required" }));
+        return;
+      }
+      const result = await this.indexer.finalizeRepository(repoName);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, repository: repoName, ...result }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));

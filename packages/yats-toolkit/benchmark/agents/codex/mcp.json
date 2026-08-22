@@ -1,5 +1,9 @@
 {
   "mcpServers": {
-    "yats": { "url": "http://localhost:5555/mcp" }
+    "yats": {
+      "type": "stdio",
+      "command": "yats",
+      "args": ["bridge"]
+    }
   }
 }

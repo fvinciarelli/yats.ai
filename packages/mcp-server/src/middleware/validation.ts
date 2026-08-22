@@ -144,32 +144,13 @@ export const schemas = {
 
   list_repositories: z.object({}),
 
-  index_repository: z.object({
-    path: safePath,
-    skipDocs: z.boolean().optional(),
-  }),
-
   delete_repository: z.object({
     repository: safeRepoName.optional(),
     path: safePath.optional(),
     confirm: z.boolean().optional(),
   }),
 
-  reindex: z.object({
-    path: safePath,
-  }),
-
   rebuild_vectors: z.object({}),
-
-  index_file: z.object({
-    path: safePath,
-    repository: safeRepoName,
-  }),
-
-  remove_file: z.object({
-    path: safePath,
-    repository: safeRepoName,
-  }),
 } satisfies Record<string, z.ZodType<any>>;
 
 export type ToolName = keyof typeof schemas;
@@ -215,11 +196,6 @@ What to do:
 
 Path traversal ("..") is not allowed for security reasons.
 Use an absolute path like "/home/user/my-project" instead.`;
-    } else if (toolName === "index_file" && pathArg !== undefined) {
-      guidance = `
-
-Make sure the path is an absolute file path like "/home/user/project/src/file.ts".
-The repository name must match an already-indexed repo (use list_repositories to check).`;
     }
 
     return {
