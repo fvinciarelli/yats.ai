@@ -16,6 +16,12 @@ import { getAllToolDefinitions } from "../tools/all-tools.js";
 // Mock dependencies
 // ============================================================
 
+/** Mutable indexing status used by the indexer mock — tests flip this. */
+let mockIndexing: { indexing: boolean; pendingRelationships: number } = {
+  indexing: false,
+  pendingRelationships: 0,
+};
+
 function makeMockDeps(): McpDependencies {
   return {
     retriever: {
@@ -87,6 +93,7 @@ function makeMockDeps(): McpDependencies {
       removeFile: async () => ({ removed: 3 }),
       finalizeRepository: async () => ({ stored: 0, filtered: 0, rewritten: 0 }),
       rebuildVectors: async () => ({ repositories: 1, symbols: 10, errors: 0 }),
+      getIndexingStatus: async () => ({ ...mockIndexing }),
     },
     repositoriesRoot: "/tmp/repos",
   };
@@ -212,6 +219,60 @@ describe("MCP Server — protocol", () => {
     const content = (response as any).result.content;
     const parsed = JSON.parse(content[0].text);
     assert.equal(parsed.totalSymbols, 42);
+    assert.equal(parsed.indexing, undefined, "no indexing notice when idle");
+  });
+
+  it("repository_summary returns indexing notice while indexing", async () => {
+    mockIndexing = { indexing: true, pendingRelationships: 137 };
+    try {
+      const response = await server.handleRequest({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "repository_summary",
+          arguments: { repository: "test-repo" },
+        },
+      });
+      const parsed = JSON.parse((response as any).result.content[0].text);
+      assert.equal(parsed.indexing, true);
+      assert.equal(parsed.pendingRelationships, 137);
+      assert.ok(
+        parsed.notice.includes("currently being indexed"),
+        "notice should explain indexing is in progress",
+      );
+      assert.ok(
+        parsed.notice.includes("repository_summary"),
+        "notice should tell the agent to re-query",
+      );
+    } finally {
+      mockIndexing = { indexing: false, pendingRelationships: 0 };
+    }
+  });
+
+  it("graph tools prepend indexing notice while indexing", async () => {
+    mockIndexing = { indexing: true, pendingRelationships: 5 };
+    try {
+      const response = await server.handleRequest({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "find_callers",
+          arguments: {
+            symbolId: "test-repo::src/a.py::a.foo",
+          },
+        },
+      });
+      const text = (response as any).result.content[0].text as string;
+      assert.ok(text.startsWith("⏳"), "notice should be prepended");
+      assert.ok(text.includes("currently being indexed"), "notice text present");
+      // The actual JSON result must still be present and parseable after the notice
+      const jsonPart = text.slice(text.indexOf("\n\n") + 2);
+      assert.ok(Array.isArray(JSON.parse(jsonPart)), "JSON result should remain parseable");
+    } finally {
+      mockIndexing = { indexing: false, pendingRelationships: 0 };
+    }
   });
 
   it("returns error for unknown tool", async () => {

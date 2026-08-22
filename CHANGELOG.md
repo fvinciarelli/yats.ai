@@ -5,6 +5,20 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-08-22
+
+### Added
+- **Indexing-in-progress notice (P3).** The server now tracks per-repository indexing state
+  (pending relationship buffer + recent file activity). While a repo is mid-index, graph
+  tools tell the agent instead of showing confusing partial data:
+  - `repository_summary` returns `indexing: true`, `pendingRelationships`, and a `notice`
+    explaining that the relationship graph is only complete once indexing finishes.
+  - `find_callers`, `find_callees`, `find_references`, `find_implementations`,
+    `find_inheritors`, `find_tests`, `expand_graph`, `related_symbols` prepend the notice
+    to their results (the JSON payload stays intact and parseable).
+  - The state clears ~15s after the last file activity, so the notice disappears once
+    indexing settles. Semantic search is unaffected (partial symbols are still useful).
+
 ## [0.4.1] - 2026-08-22
 
 ### Fixed

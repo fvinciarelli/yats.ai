@@ -496,6 +496,44 @@ function notIndexed(hint?: string): ToolResult {
 }
 
 // ============================================================
+// Indexing-in-progress notice
+// ============================================================
+
+/** Human/agent-readable notice shown while a repository is mid-indexing. */
+function indexingNoticeText(repository: string, pending: number): string {
+  return (
+    `⏳ Repository "${repository}" is currently being indexed ` +
+    `(${pending} relationships pending resolution). ` +
+    `The relationship graph is only complete once indexing finishes. ` +
+    `Wait a few seconds, then query repository_summary again.`
+  );
+}
+
+/**
+ * Prepend the indexing notice to a tool result when the repository is
+ * mid-indexing. Never throws — status errors must not block queries.
+ */
+async function withIndexingNotice(
+  repository: string,
+  deps: McpDependencies,
+  text: string,
+): Promise<string> {
+  if (!repository) return text;
+  try {
+    const status = await deps.indexer.getIndexingStatus(repository);
+    if (!status.indexing) return text;
+    return `${indexingNoticeText(repository, status.pendingRelationships)}\n\n${text}`;
+  } catch {
+    return text;
+  }
+}
+
+/** Extract the repository name from a symbol ID ({repo}::{path}::{symbolPath}). */
+function repoFromSymbolId(symbolId: string): string {
+  return symbolId.split("::")[0] ?? "";
+}
+
+// ============================================================
 // Resolve symbol ID from name
 // ============================================================
 
@@ -612,42 +650,42 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const refs = await deps.graphRepository.findReferences(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(refs), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(refs), null, 2)) }] };
   });
 
   handlers.set("find_callers", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const callers = await deps.graphRepository.findCallers(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(callers), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(callers), null, 2)) }] };
   });
 
   handlers.set("find_callees", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const callees = await deps.graphRepository.findCallees(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(callees), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(callees), null, 2)) }] };
   });
 
   handlers.set("find_implementations", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const impls = await deps.graphRepository.findImplementations(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(impls), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(impls), null, 2)) }] };
   });
 
   handlers.set("find_inheritors", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const inheritors = await deps.graphRepository.findInheritors(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(inheritors), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(inheritors), null, 2)) }] };
   });
 
   handlers.set("find_tests", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const tests = await deps.graphRepository.findTests(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(tests), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(tests), null, 2)) }] };
   });
 
   handlers.set("find_routes", async (args) => {
@@ -675,17 +713,25 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
       (args.hops as number) ?? 1,
       (args.relationshipTypes as RelationshipKind[]) ?? [],
     );
+    const resultText = JSON.stringify({
+      nodeCount: subgraph.nodes.length,
+      relationshipCount: subgraph.relationships.length,
+      nodes: formatSymbols(subgraph.nodes),
+      relationships: subgraph.relationships.map((rel) => ({
+        sourceId: rel.sourceSymbolId,
+        targetId: rel.targetSymbolId,
+        kind: rel.kind,
+      })),
+    }, null, 2);
     return {
-      content: [{ type: "text", text: JSON.stringify({
-        nodeCount: subgraph.nodes.length,
-        relationshipCount: subgraph.relationships.length,
-        nodes: formatSymbols(subgraph.nodes),
-        relationships: subgraph.relationships.map((rel) => ({
-          sourceId: rel.sourceSymbolId,
-          targetId: rel.targetSymbolId,
-          kind: rel.kind,
-        })),
-      }, null, 2) }],
+      content: [{
+        type: "text",
+        text: await withIndexingNotice(
+          repoFromSymbolId((args.symbolIds as string[])[0] ?? ""),
+          deps,
+          resultText,
+        ),
+      }],
     };
   });
 
@@ -693,7 +739,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const related = await deps.graphRepository.relatedSymbols(sid, (args.limit as number) ?? 30);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(related), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(related), null, 2)) }] };
   });
 
   handlers.set("list_symbols", async (args) => {
@@ -713,7 +759,15 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
-    const summary = await deps.graphRepository.repositorySummary(resolved.name);
+    const summary: any = await deps.graphRepository.repositorySummary(resolved.name);
+    try {
+      const status = await deps.indexer.getIndexingStatus(resolved.name);
+      if (status.indexing) {
+        summary.indexing = true;
+        summary.pendingRelationships = status.pendingRelationships;
+        summary.notice = indexingNoticeText(resolved.name, status.pendingRelationships);
+      }
+    } catch { /* never block queries on status errors */ }
     return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
   });
 

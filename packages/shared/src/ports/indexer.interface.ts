@@ -28,6 +28,14 @@ export interface Indexer {
   indexFileContent(repositoryName: string, filePath: string, content: string): Promise<void>;
   removeFile(repositoryName: string, filePath: string): Promise<{ removed: number }>;
   /**
+   * Whether a repository is currently mid-indexing (relationships incomplete).
+   * Graph tools use this to tell agents to wait instead of showing partial data.
+   */
+  getIndexingStatus(repositoryName: string): Promise<{
+    indexing: boolean;
+    pendingRelationships: number;
+  }>;
+  /**
    * Flush pending per-file relationships for a repository: resolve cross-file
    * references against the full symbol table and store them in the graph.
    * Called automatically after a quiet period, or explicitly via POST /index/complete.

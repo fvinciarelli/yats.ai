@@ -104,7 +104,16 @@ export class IndexerService implements Indexer {
    */
   async registerRepository(repositoryName: string, rootPath: string): Promise<void> {
     await this.deps.graphRepository.upsertRepositoryMetadata(repositoryName, rootPath);
+    this.pendingRelationships.touch(repositoryName);
     this.logger.info(`Registered repository "${repositoryName}" at ${rootPath} (files arrive via CLI)`);
+  }
+
+  /**
+   * Whether a repository is currently mid-indexing (relationships incomplete).
+   * Graph tools use this to tell agents to wait instead of showing partial data.
+   */
+  async getIndexingStatus(repositoryName: string): Promise<{ indexing: boolean; pendingRelationships: number }> {
+    return this.pendingRelationships.status(repositoryName);
   }
 
   /**
@@ -706,6 +715,7 @@ export class IndexerService implements Indexer {
       // Relationships are buffered and flushed once the indexing session goes
       // quiet (or on /index/complete), so cross-file targets can be resolved
       // against the complete symbol table instead of being silently dropped.
+      this.pendingRelationships.touch(repositoryName);
       this.pendingRelationships.add(repositoryName, result.relationships);
 
       await this.deps.vectorRepository.upsertVectors(

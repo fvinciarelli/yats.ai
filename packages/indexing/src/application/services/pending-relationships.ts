@@ -18,16 +18,25 @@ import { GlobalSymbolTable, resolveRelationships, type SymbolTableEntry } from "
 
 const FLUSH_DEBOUNCE_MS = parseInt(process.env.YATS_REL_DEBOUNCE_MS ?? "3000", 10);
 
+/** How long after the last file activity a repo is still considered "indexing". */
+const IDLE_THRESHOLD_MS = 15_000;
+
 export interface RelationshipFlushResult {
   stored: number;
   filtered: number;
   rewritten: number;
 }
 
+export interface IndexingStatus {
+  indexing: boolean;
+  pendingRelationships: number;
+}
+
 export class PendingRelationshipStore {
   private readonly logger: Logger;
   private readonly pending = new Map<string, Relationship[]>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  private readonly lastActivityAt = new Map<string, number>();
 
   constructor(private readonly graphRepository: GraphRepository) {
     this.logger = createLogger("indexer:pending-rels");
@@ -36,9 +45,31 @@ export class PendingRelationshipStore {
   /** Buffer relationships for a repository and schedule a debounced flush. */
   add(repository: string, relationships: Relationship[]): void {
     if (relationships.length === 0) return;
+    this.touch(repository);
     const existing = this.pending.get(repository) ?? [];
     this.pending.set(repository, existing.concat(relationships));
     this.scheduleFlush(repository);
+  }
+
+  /** Record that files for this repository are still arriving (indexing in progress). */
+  touch(repository: string): void {
+    this.lastActivityAt.set(repository, Date.now());
+  }
+
+  /**
+   * Whether the repository is mid-indexing (relationships incomplete).
+   * True while relationships are buffered, a flush timer is pending, or files
+   * arrived within the idle threshold.
+   */
+  status(repository: string): IndexingStatus {
+    const pendingRelationships = this.pending.get(repository)?.length ?? 0;
+    const timerActive = this.timers.has(repository);
+    const lastActivity = this.lastActivityAt.get(repository) ?? 0;
+    const recentlyActive = Date.now() - lastActivity < IDLE_THRESHOLD_MS;
+    return {
+      indexing: pendingRelationships > 0 || timerActive || recentlyActive,
+      pendingRelationships,
+    };
   }
 
   /** Flush now (used by /index/complete and by the debounce timer). */

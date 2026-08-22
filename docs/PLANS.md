@@ -100,4 +100,6 @@ polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 
 - P1: approved as plan by user (2026-08-22). Not started.
 - P2: approved as plan by user (2026-08-22). Not started.
-- P3: added to plan (2026-08-22). Not started.
+- P3: **implemented in v0.4.2** (indexing-state flag + notice in graph tools;
+  `repository_summary` returns `indexing`/`pendingRelationships`/`notice`;
+  graph tools prepend the notice; state clears ~15s after last activity).
