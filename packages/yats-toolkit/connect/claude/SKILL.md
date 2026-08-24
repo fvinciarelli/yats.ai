@@ -25,4 +25,4 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
 - Never guess symbol names — always start with `search_code`.
 - Prefer `expand_graph` over multiple individual `find_symbol` calls.
 - If YATS returns empty, try a different query before falling back to file reads.
-- Repository name is usually the directory name. Check `list_repositories` if unsure.
+- Use `path="__REPO_PATH__"` for every call — YATS identifies repos by their full path.

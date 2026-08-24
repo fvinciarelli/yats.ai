@@ -3,7 +3,7 @@
  * Reads each file from the host and POSTs it via HTTP.
  */
 import { readFileSync, statSync, readdirSync } from "node:fs";
-import { join, relative, basename } from "node:path";
+import { join, relative } from "node:path";
 
 const YATS_URL = process.env.YATS_URL || "http://localhost:5555";
 
@@ -35,7 +35,9 @@ export default async function indexRepo(args, options = {}) {
     process.exit(1);
   }
 
-  const repoName = basename(repoPath);
+  // The repository identity is its full path (two clones of the same repo are
+  // two distinct indexes) — never the basename.
+  const repoName = repoPath;
   const stat = statSync(repoPath);
   if (!stat.isDirectory()) {
     console.error(`Not a directory: ${repoPath}`);
@@ -108,10 +110,34 @@ export default async function indexRepo(args, options = {}) {
     });
     const data = await res.json();
     if (res.ok) {
-      console.log(`  ✓ Graph finalized: ${data.stored} relationships (${data.rewritten} cross-file resolved)`);
+      console.log(`  ✓ Graph finalized (${data.stored} relationships in final flush)`);
     }
   } catch {
     // Non-fatal — the server flushes on its own debounce timer.
+  }
+
+  // Report the real totals from the graph. The server flushes incrementally
+  // while files stream in, so the final flush above may report 0 even though
+  // thousands of relationships are already stored.
+  try {
+    const res = await fetch(`${YATS_URL}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "repository_summary", arguments: { path: repoName } },
+      }),
+    });
+    const data = await res.json();
+    const text = data?.result?.content?.[0]?.text;
+    if (text) {
+      const summary = JSON.parse(text);
+      console.log(`  ✓ Indexed ${summary.totalSymbols} symbols, ${summary.totalRelationships} relationships`);
+    }
+  } catch {
+    // Non-fatal — summary is informational.
   }
   console.log(``);
 }

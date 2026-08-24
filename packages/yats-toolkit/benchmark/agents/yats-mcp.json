@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "yats": {
-      "command": "yats",
-      "args": ["bridge"],
-      "trust": true
-    }
-  }
-}

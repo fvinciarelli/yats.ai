@@ -1,23 +1,19 @@
-# Copilot CLI — YATS Setup
+# GitHub Copilot — YATS Setup
 
-Two files to place:
+Install from your repo root:
 
----
+```bash
+yats connect --install copilot
+```
 
-## 1. `instructions.md` — Agent behavior
+This creates/updates:
 
-**Copy to:** `.github/copilot-instructions.md` (in your repo root)
+| File | Purpose |
+|------|---------|
+| `.github/copilot-instructions.md` | Teaches Copilot to use YATS tools before reading files |
+| `.copilot/mcp.json` | Connects Copilot to the YATS MCP server (your existing entries are preserved) |
 
-Copilot reads this when working in a repo. It tells Copilot to use YATS MCP tools first.
+Existing files are never overwritten: `instructions.md` gets an appended YATS
+block after confirmation, and `.copilot/mcp.json` entries are merged.
 
----
-
-## 2. `mcp.json` — Connection config
-
-**Copy to:** `.copilot/mcp-config.json` (in your repo root, or `~/.copilot/` for global)
-
-Connects Copilot to the YATS bridge via stdio.
-
-> **Global install:** Put `mcp.json` in `~/.copilot/mcp-config.json` for all repos.
-
-Done.
+See the full docs at https://github.com/fvinciarelli/yats.ai/tree/main/connect/copilot

@@ -1,9 +1,5 @@
-# Codex MCP stdio bridge config
+# YATS MCP stdio bridge — added by `yats connect codex`
 # Place in .codex/config.toml (repo root) or ~/.codex/config.toml (global)
-
-model = "gpt-4.1-mini"
-sandbox_mode = "danger-full-access"
-approval_policy = "never"
 
 [features]
 multi_agent = false              # REQUIRED: force direct MCP tool usage

@@ -297,7 +297,7 @@ let workDir = path.join(process.cwd(), "repos");
 // ============================================================
 
 const BENCH_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "benchmark");
-const CONNECT_DIR = path.join(BENCH_DIR, "..", "..", "..", "connect");
+const CONNECT_DIR = path.join(BENCH_DIR, "..", "connect");
 let BENCH_HOME = null;
 
 function benchHome() {
@@ -315,127 +315,16 @@ function readConnect(agentDir, file) {
   }
 }
 
-// Inline per-agent instruction files (option A: aggressive "YATS first, max 3
-// calls"). Kept inline so the benchmark is self-contained and reproducible when
-// run from npm — no dependency on the repo's connect/ directory.
-const CLAUDE_SKILL_MD = `---
-name: yats
-description: YATS has this codebase indexed in a knowledge graph. Use when asked about the code — how something works, architecture, call chains, where something is defined. Use YATS tools first before reading files.
----
-
-# YATS Code Intelligence
-
-This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relationship is in a knowledge graph.
-
-## Golden rule
-
-**YATS first, Read second.** MCP tools return results in milliseconds for ~100 tokens. Reading files costs thousands of tokens and takes seconds.
-
-## Efficient workflow
-
-1. \`search_code\` — natural language query about the code (ALWAYS start here)
-2. \`find_symbol\` on top 2-3 hits to get exact locations
-3. \`find_callers\` / \`find_callees\` on 1-2 key symbols to trace the flow
-4. \`expand_graph\` on seeds to get the full subgraph in one call
-5. Only then \`Read\` files at the exact lines YATS gave you
-
-## Rules
-
-- Max 3-5 YATS tool calls per task. Synthesize what you have.
-- Never guess symbol names — always start with \`search_code\`.
-- Prefer \`expand_graph\` over multiple individual \`find_symbol\` calls.
-- If YATS returns empty, try a different query before falling back to file reads.
-- Repository name is usually the directory name. Check \`list_repositories\` if unsure.
-`;
-
-const CODEX_AGENTS_MD = `# YATS Code Intelligence
-
-This repository is indexed by YATS MCP. You have these tools:
-\`search_code\`, \`find_symbol\`, \`find_callers\`, \`find_callees\`, \`expand_graph\`,
-\`find_references\`, \`find_implementations\`, \`find_inheritors\`, \`find_routes\`,
-\`repository_summary\`, \`architecture_summary\`, \`list_repositories\`.
-
-## ⚠️ ABSOLUTE HARD LIMIT: 3 TOOL CALLS TOTAL
-
-You are allowed **AT MOST 3 YATS tool calls** for this entire task. This is a hard budget, not a suggestion.
-
-- After your 3rd call, you MUST write your final answer immediately.
-- Do NOT call \`find_symbol\` separately for every symbol. \`expand_graph\` returns callers + callees + neighbors in ONE call.
-- Do NOT re-run \`search_code\` with slightly different wording.
-- Do NOT verify each result with another call. Trust the graph.
-- Do NOT read source files with shell commands (\`head\`, \`cat\`, \`sed\`, \`rg\`, \`grep\`). YATS already has the symbols and relationships — use the YATS tools instead.
-- Every extra call wastes tokens and fails this task.
-
-## Workflow (exactly 3 calls, in this order)
-
-1. \`search_code("<your question>", repository="__REPO_NAME__")\` — call 1
-2. \`expand_graph([top 2 symbol ids], repository="__REPO_NAME__")\` — call 2 (full subgraph)
-3. \`find_callers("<key symbol>", repository="__REPO_NAME__")\` — call 3 (only if you still need it)
-4. STOP. Write the answer.
-
-## Repository
-
-Use \`repository="__REPO_NAME__"\` for every call. Do NOT call \`list_repositories\` — the repo name is already given.
-`;
-
-const COPILOT_INSTRUCTIONS_MD = `# YATS Code Intelligence
-
-This repo is indexed by YATS MCP. You have tools: search_code, find_symbol, find_callers, find_callees, expand_graph, find_references, find_implementations, find_inheritors, find_routes, repository_summary, list_repositories.
-
-## Rules
-- YATS first, file reads second. YATS is ~100 tokens and instant.
-- Max 3 YATS calls per task. After call 3, answer with what you have.
-- Start with search_code, then find_symbol on top hits, then expand_graph.
-- Do NOT invent answers — verify with YATS or read files.
-`;
-
-const CURSOR_RULES_MDC = `# YATS Code Intelligence
-
-This repo is indexed by YATS. Use these MCP tools for code questions:
-\`search_code\`, \`find_symbol\`, \`find_callers\`, \`find_callees\`, \`expand_graph\`,
-\`find_references\`, \`find_implementations\`, \`find_inheritors\`, \`find_routes\`.
-
-## Rules
-
-- Start with \`search_code\` for any codebase question.
-- Max 3 YATS calls per task. Synthesize, don't keep searching.
-- YATS returns results in ms. File reads cost thousands of tokens.
-- If unsure about repo name, call \`list_repositories\` first.
-
-## Workflow
-
-1. \`search_code("your question", repository="<name>")\`
-2. \`find_symbol\` on top hits
-3. \`expand_graph\` or \`find_callers\`/\`find_callees\` to trace flow
-4. Read files only at exact lines from YATS results
-`;
-
-const GEMINI_MD = `# YATS Code Intelligence
-
-This repository is indexed by YATS MCP. You have access to a knowledge graph.
-
-## Tools available
-\`search_code\`, \`find_symbol\`, \`find_callers\`, \`find_callees\`, \`expand_graph\`,
-\`find_references\`, \`find_implementations\`, \`find_inheritors\`, \`find_routes\`,
-\`repository_summary\`, \`architecture_summary\`, \`list_repositories\`.
-
-## GOLDEN RULE: YATS first, files second
-- YATS queries cost ~100 tokens, return in milliseconds.
-- Reading files costs THOUSANDS of tokens.
-- Always try \`search_code()\` BEFORE reading any file.
-
-## Workflow (3 steps max)
-1. \`search_code("your question", repository="<name>")\` — ALWAYS start here
-2. \`find_symbol(name, repository="<name>")\` on top 2-3 hits
-3. \`expand_graph([top1, top2], repository="<name>")\` — callers+callees in one call
-4. Only then read files at exact lines from YATS
-
-## Rules
-- Max 3 YATS calls per task. Synthesize and answer.
-- NEVER guess symbol names — always start with search_code.
-- Prefer expand_graph over multiple find_symbol calls.
-- Repository name is usually the directory name. Check list_repositories if unsure.
-`;
+// Templates ship inside the package (connect/ dir) — single source of truth
+// shared with `yats connect --install`. The benchmark always uses exactly
+// the same instruction files the user gets on their daily workflow.
+function requireConnect(agentDir, file) {
+  const content = readConnect(agentDir, file);
+  if (content === null) {
+    throw new Error(`Missing template: connect/${agentDir}/${file} — reinstall yats-toolkit`);
+  }
+  return content;
+}
 
 // Private/unknown repos (the LLM has never seen them) — the real proof.
 const UNKNOWN_REPOS = [
@@ -829,7 +718,7 @@ function writeSkill(repoPath, withYats) {
   const skillDir = path.join(repoPath, ".claude", "skills", "yats");
   if (withYats) {
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), CLAUDE_SKILL_MD);
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), requireConnect("claude", "SKILL.md").replaceAll("__REPO_PATH__", path.resolve(repoPath)));
   } else {
     fs.rmSync(skillDir, { recursive: true, force: true });
   }
@@ -844,8 +733,7 @@ function setupAgent(agent, repoPath, withYats) {
       process.env.CLAUDE_CONFIG_DIR = home;
       if (agent.needsSkill) writeSkill(repoPath, withYats);
       if (withYats) {
-        const mcp = readConnect("claude", "mcp.json")
-          ?? JSON.stringify({ mcpServers: { yats: { command: "yats", args: ["bridge"] } } });
+        const mcp = requireConnect("claude", "mcp.json");
         fs.writeFileSync("/tmp/yats-bench-mcp.json", mcp);
       }
       break;
@@ -858,9 +746,10 @@ function setupAgent(agent, repoPath, withYats) {
       }
       fs.rmSync(path.join(repoPath, ".codex", "config.toml"), { force: true });
       const model = selectedModel ?? agent.defaultModel;
-      const base = readConnect("codex", "config.toml")
-        ?? `model = "gpt-4.1-mini"\nsandbox_mode = "danger-full-access"\napproval_policy = "never"\n\n[features]\nmulti_agent = false\n`;
-      let config = base.replace(/^model\s*=.*$/m, `model = "${model}"`);
+      const base = requireConnect("codex", "config.toml");
+      let config = /^model\s*=.*$/m.test(base)
+        ? base.replace(/^model\s*=.*$/m, `model = "${model}"`)
+        : `model = "${model}"\n` + base;
       if (withYats) {
         if (!/\[mcp_servers\.yats\]/.test(config)) {
           config += `\n[mcp_servers.yats]\ncommand = "yats"\nargs = ["bridge"]\n`;
@@ -870,7 +759,7 @@ function setupAgent(agent, repoPath, withYats) {
       }
       fs.writeFileSync(path.join(home, "config.toml"), config);
       if (withYats) {
-        const content = CODEX_AGENTS_MD.replaceAll("__REPO_NAME__", path.basename(repoPath));
+        const content = requireConnect("codex", "AGENTS.md").replaceAll("__REPO_PATH__", path.resolve(repoPath));
         fs.writeFileSync(path.join(repoPath, "AGENTS.md"), content);
       } else {
         fs.rmSync(path.join(repoPath, "AGENTS.md"), { force: true });
@@ -895,7 +784,7 @@ function setupAgent(agent, repoPath, withYats) {
         fs.writeFileSync("/tmp/copilot-mcp.json", mcp);
         const ghDir = path.join(repoPath, ".github");
         fs.mkdirSync(ghDir, { recursive: true });
-        fs.writeFileSync(path.join(ghDir, "copilot-instructions.md"), COPILOT_INSTRUCTIONS_MD);
+        fs.writeFileSync(path.join(ghDir, "copilot-instructions.md"), requireConnect("copilot", "instructions.md").replaceAll("__REPO_PATH__", path.resolve(repoPath)));
       } else {
         fs.rmSync(path.join(repoPath, ".github", "copilot-instructions.md"), { force: true });
       }
@@ -904,13 +793,12 @@ function setupAgent(agent, repoPath, withYats) {
 
     case "cursor-config": { // Cursor
       if (withYats) {
-        const mcp = readConnect("cursor", "mcp.json")
-          ?? JSON.stringify({ mcpServers: { yats: { url: "http://localhost:5555/mcp" } } });
+        const mcp = requireConnect("cursor", "mcp.json");
         fs.writeFileSync("/tmp/cursor-mcp.json", mcp);
         process.env.CURSOR_MCP_CONFIG = "/tmp/cursor-mcp.json";
         const rulesDir = path.join(repoPath, ".cursor", "rules");
         fs.mkdirSync(rulesDir, { recursive: true });
-        fs.writeFileSync(path.join(rulesDir, "yats.mdc"), CURSOR_RULES_MDC);
+        fs.writeFileSync(path.join(rulesDir, "yats.mdc"), requireConnect("cursor", "rules.mdc").replaceAll("__REPO_PATH__", path.resolve(repoPath)));
       } else {
         delete process.env.CURSOR_MCP_CONFIG;
         fs.rmSync(path.join(repoPath, ".cursor", "rules", "yats.mdc"), { force: true });
@@ -923,12 +811,11 @@ function setupAgent(agent, repoPath, withYats) {
       process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
       fs.rmSync(path.join(repoPath, ".gemini", "settings.json"), { force: true });
       if (withYats) {
-        const mcp = readConnect("gemini", "mcp.json")
-          ?? JSON.stringify({ mcpServers: { yats: { command: "yats", args: ["bridge"], trust: true } } });
+        const mcp = requireConnect("gemini", "mcp.json");
         const settingsDir = path.join(home, ".gemini");
         fs.mkdirSync(settingsDir, { recursive: true });
         fs.writeFileSync(path.join(settingsDir, "settings.json"), mcp);
-        fs.writeFileSync(path.join(repoPath, "GEMINI.md"), GEMINI_MD);
+        fs.writeFileSync(path.join(repoPath, "GEMINI.md"), requireConnect("gemini", "GEMINI.md").replaceAll("__REPO_PATH__", path.resolve(repoPath)));
       } else {
         fs.rmSync(path.join(home, ".gemini", "settings.json"), { force: true });
         fs.rmSync(path.join(repoPath, "GEMINI.md"), { force: true });

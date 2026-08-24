@@ -69,9 +69,9 @@ The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/
 | | Claude Code | Gemini CLI | Copilot CLI | Codex CLI | Cursor |
 |---|---|---|---|---|---|
 | Transport | stdio bridge | stdio bridge | stdio bridge | stdio bridge | HTTP |
-| Setup | copy 2 files | copy 2 files | copy 2 files | copy 2 files | copy 2 files |
+| Setup | `yats connect --install` | `yats connect --install` | `yats connect --install` | `yats connect --install` | `yats connect --install` |
 
-👉 **[`connect/`](./connect/)** — pick your agent, copy two files into your repo, done. Each agent gets custom instructions that teach it to call `search_code` before `grep`, and to expand the graph instead of guessing relationships.
+👉 Run **`yats connect`** from your repo — it installs your agent's config in one command without overwriting existing files (see [`connect/`](./connect/) for details). Each agent gets custom instructions that teach it to call `search_code` before `grep`, and to expand the graph instead of guessing relationships.
 
 ---
 

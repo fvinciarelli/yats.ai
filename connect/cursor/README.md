@@ -1,23 +1,19 @@
 # Cursor — YATS Setup
 
-Two files to place:
+Install from your repo root:
 
----
+```bash
+yats connect --install cursor
+```
 
-## 1. `rules.mdc` — Agent behavior
+This creates/updates:
 
-**Copy to:** `.cursor/rules/yats.mdc` (repo root)
+| File | Purpose |
+|------|---------|
+| `.cursor/rules/rules.mdc` | Teaches Cursor to use YATS tools before reading files |
+| `.cursor/mcp.json` | Connects Cursor to the YATS MCP server (your existing entries are preserved) |
 
-Cursor auto-applies these rules to every session. It tells Cursor to use YATS MCP tools first.
+Existing files are never overwritten: `rules.mdc` gets an appended YATS block
+after confirmation, and `.cursor/mcp.json` entries are merged.
 
----
-
-## 2. `mcp.json` — Connection config
-
-**Copy to:** `.cursor/mcp.json` (repo root)
-
-Connects Cursor to YATS via HTTP. Cursor talks to the YATS server directly — no bridge needed.
-
-> Cursor uses HTTP transport because it always has access to `localhost`. Make sure YATS is running (`yats status`).
-
-Done.
+See the full docs at https://github.com/fvinciarelli/yats.ai/tree/main/connect/cursor

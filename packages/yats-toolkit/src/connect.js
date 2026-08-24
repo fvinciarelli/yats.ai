@@ -6,6 +6,12 @@
  *   yats connect <agent>      Show config for specific agent
  *   yats connect --install    Place files in current directory
  *   yats connect --link       Show GitHub links
+ *
+ * Install behavior (never breaks the user's files):
+ *   - File does not exist  → create it
+ *   - JSON files           → merge `mcpServers` (existing entries preserved)
+ *   - TOML/Codex config    → append only the `[mcp_servers.yats]` section
+ *   - Text/Skill files     → warn, show what will be added, ask, then append
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -28,8 +34,8 @@ const AGENTS = {
     name: "Claude Code",
     transport: "stdio bridge",
     files: [
-      { src: "connect/claude/yats/SKILL.md", dest: ".claude/skills/yats/SKILL.md", type: "skill" },
-      { src: "connect/claude/.mcp.json", dest: ".mcp.json", type: "json" },
+      { src: "connect/claude/SKILL.md", dest: ".claude/skills/yats/SKILL.md", type: "skill" },
+      { src: "connect/claude/mcp.json", dest: ".mcp.json", type: "json" },
     ],
     url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/claude",
   },
@@ -46,7 +52,7 @@ const AGENTS = {
     name: "GitHub Copilot",
     transport: "stdio bridge",
     files: [
-      { src: "connect/copilot/instructions.md", dest: ".github/instructions.md", type: "text" },
+      { src: "connect/copilot/instructions.md", dest: ".github/copilot-instructions.md", type: "text" },
       { src: "connect/copilot/mcp.json", dest: ".copilot/mcp.json", type: "json" },
     ],
     url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/copilot",
@@ -79,6 +85,51 @@ function getYatsMcpConfig() {
   }
 }
 
+function getFileContent(srcPath) {
+  // Templates ship inside the package (connect/ dir) — resolves from src/ → ../connect/
+  try {
+    const pkgDir = dirname(new URL(import.meta.url).pathname);
+    const installedPath = join(pkgDir, "..", srcPath);
+    if (existsSync(installedPath)) {
+      return readFileSync(installedPath, "utf-8");
+    }
+  } catch { /* not installed as npm package */ }
+  return null;
+}
+
+// ============================================================
+// Render / template helpers
+// ============================================================
+
+function renderContent(srcPath) {
+  const content = getFileContent(srcPath);
+  if (content === null) {
+    console.log(`  ${RED}✗${R} Missing template ${srcPath} — reinstall yats-toolkit`);
+    return null;
+  }
+  // YATS identifies repos by their full rootPath — instruct the full path,
+  // not the basename, so the server matches by path and never by name.
+  return content.replaceAll("__REPO_PATH__", process.cwd());
+}
+
+// Split YAML frontmatter from the body (only meaningful at the top of a file)
+function splitFrontmatter(content) {
+  if (content.startsWith("---")) {
+    const end = content.indexOf("\n---", 3);
+    if (end !== -1) {
+      return {
+        frontmatter: content.slice(0, end + 4),
+        body: content.slice(end + 5),
+      };
+    }
+  }
+  return { frontmatter: "", body: content };
+}
+
+function appendMarker(agentKey) {
+  return `\n---\n\n<!-- Added by \`yats connect ${agentKey}\` — YATS code intelligence. Remove this block if you don't need it. -->\n\n`;
+}
+
 // ============================================================
 // Install helpers
 // ============================================================
@@ -93,6 +144,59 @@ function safeMergeJson(existingPath, newEntry) {
   return JSON.stringify(obj, null, 2) + "\n";
 }
 
+// Single shared readline so piped stdin keeps working across multiple prompts
+// Prompt helper that works both interactively (TTY) and with piped stdin
+// (e.g. `printf 'y\n' | yats connect --install codex`). readline.question()
+// hangs on a finished pipe stream, so piped input is collected upfront.
+// Always call close() when done — an open readline keeps the process alive.
+function makePrompter() {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  if (process.stdin.isTTY) {
+    return {
+      ask: (question) => new Promise((resolve) => rl.question(question, resolve)),
+      close: () => rl.close(),
+    };
+  }
+  const all = (async () => {
+    const lines = [];
+    for await (const line of rl) lines.push(line);
+    return lines;
+  })();
+  let idx = 0;
+  return {
+    ask: async (question) => {
+      process.stdout.write(question);
+      const lines = await all;
+      return idx < lines.length ? lines[idx++] : "";
+    },
+    close: () => rl.close(),
+  };
+}
+
+function previewBlock(label, content) {
+  console.log(`  ${D}${label}:${R}`);
+  for (const line of content.trimEnd().split("\n")) {
+    console.log(`  ${D}  │ ${line}${R}`);
+  }
+  console.log("");
+}
+
+function tomlHasMcpYats(content) {
+  return /\[mcp_servers\.yats\]/.test(content);
+}
+
+// Append the [mcp_servers.yats] section (+ multi_agent=false if [features] exists without it)
+function tomlAppendYats(content) {
+  let out = content.trimEnd();
+  if (!/^\[features\]/m.test(out)) {
+    out += `\n\n[features]\nmulti_agent = false  # REQUIRED: force direct MCP tool usage\n`;
+  } else if (!/^multi_agent\s*=/m.test(out)) {
+    out = out.replace(/^\[features\]/m, "[features]\nmulti_agent = false  # REQUIRED: force direct MCP tool usage");
+  }
+  out += `\n\n# Added by \`yats connect codex\` — YATS MCP stdio bridge\n[mcp_servers.yats]\ncommand = "yats"\nargs = ["bridge"]\n`;
+  return out;
+}
+
 async function installFiles(agentKey) {
   const agent = AGENTS[agentKey];
   if (!agent) {
@@ -101,17 +205,14 @@ async function installFiles(agentKey) {
   }
 
   console.log("");
-  console.log(`  ${Y}${B}⚠️  Before installing, back up your existing config files.${R}`);
-  console.log(`  ${D}This will modify or create files in your current directory.${R}`);
+  console.log(`  ${Y}${B}⚠️  This will add YATS config files to your current directory.${R}`);
+  console.log(`  ${D}Existing files are never overwritten — YATS content is merged or appended.${R}`);
   console.log("");
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise((resolve) => {
-    rl.question(`  ${B}Proceed with install for ${agent.name}? [y/N]${R} `, resolve);
-  });
-  rl.close();
-
-  if (answer.toLowerCase() !== "y") {
+  const prompter = makePrompter();
+  const proceed = (await prompter.ask(`  ${B}Proceed with install for ${agent.name}? [y/N]${R} `)).toLowerCase() === "y";
+  if (!proceed) {
+    prompter.close();
     console.log("");
     console.log("  Cancelled.");
     console.log("");
@@ -127,45 +228,69 @@ async function installFiles(agentKey) {
     const mcpConfig = getYatsMcpConfig();
 
     if (file.type === "json") {
-      const merged = safeMergeJson(destPath, mcpConfig);
       const exists = existsSync(destPath);
+      const merged = safeMergeJson(destPath, mcpConfig);
       mkdirSync(dirname(destPath), { recursive: true });
       writeFileSync(destPath, merged);
       if (exists) {
         console.log(`  ${Y}↻${R} Merged YATS into existing ${destPath}`);
+        const entry = mcpConfig.mcpServers.yats;
+        console.log(`  ${D}  Added: mcpServers.yats → ${JSON.stringify(entry)}${R}`);
+        console.log(`  ${D}  Your existing entries are preserved.${R}`);
       } else {
         console.log(`  ${G}✓${R} Created ${destPath}`);
       }
       installed++;
-    } else if (file.type === "text" || file.type === "skill") {
-      if (existsSync(destPath)) {
-        console.log(`  ${Y}⚠${R}  ${destPath} already exists — skipped (backup and remove to replace)`);
-        skipped++;
+    } else if (file.type === "toml") {
+      const exists = existsSync(destPath);
+      mkdirSync(dirname(destPath), { recursive: true });
+      if (!exists) {
+        const content = renderContent(file.src);
+        if (content === null) { skipped++; continue; }
+        writeFileSync(destPath, content);
+        console.log(`  ${G}✓${R} Created ${destPath}`);
+        installed++;
       } else {
-        const content = getFileContent(file.src);
-        if (content) {
-          mkdirSync(dirname(destPath), { recursive: true });
-          writeFileSync(destPath, content);
-          console.log(`  ${G}✓${R} Created ${destPath}`);
-          installed++;
-        } else {
-          console.log(`  ${RED}✗${R} Could not read ${file.src} — download from GitHub`);
+        const existing = readFileSync(destPath, "utf-8");
+        if (tomlHasMcpYats(existing)) {
+          console.log(`  ${Y}✓${R} ${destPath} already has [mcp_servers.yats] — nothing to add.`);
           skipped++;
+        } else {
+          console.log(`  ${Y}⚠${R} ${destPath} exists without YATS config.`);
+          const addition = tomlAppendYats(existing);
+          previewBlock("Will append", addition.replace(existing, "").trimStart());
+          if ((await prompter.ask(`  ${B}Append YATS section to ${destPath}? [y/N]${R} `)).toLowerCase() === "y") {
+            writeFileSync(destPath, addition);
+            console.log(`  ${G}✓${R} Appended YATS section to ${destPath}`);
+            installed++;
+          } else {
+            console.log(`  ${Y}—${R} Skipped ${destPath}`);
+            skipped++;
+          }
         }
       }
-    } else if (file.type === "toml") {
-      if (existsSync(destPath)) {
-        console.log(`  ${Y}⚠${R}  ${destPath} already exists — skipped (backup and remove to replace)`);
-        skipped++;
+    } else { // text / skill
+      const destExists = existsSync(destPath);
+      mkdirSync(dirname(destPath), { recursive: true });
+      if (!destExists) {
+        const content = renderContent(file.src);
+        if (content === null) { skipped++; continue; }
+        writeFileSync(destPath, content);
+        console.log(`  ${G}✓${R} Created ${destPath}`);
+        installed++;
       } else {
-        const content = getFileContent(file.src);
-        if (content) {
-          mkdirSync(dirname(destPath), { recursive: true });
-          writeFileSync(destPath, content);
-          console.log(`  ${G}✓${R} Created ${destPath}`);
+        console.log(`  ${Y}⚠${R} ${destPath} already exists — your content is preserved.`);
+        const content = renderContent(file.src);
+        if (content === null) { skipped++; continue; }
+        // Skills have YAML frontmatter that only makes sense at the top → append the body only
+        const block = file.type === "skill" ? splitFrontmatter(content).body : content;
+        previewBlock("Will append", appendMarker(agentKey) + "\n" + block.trimStart());
+        if ((await prompter.ask(`  ${B}Append YATS block to ${destPath}? [y/N]${R} `)).toLowerCase() === "y") {
+          writeFileSync(destPath, readFileSync(destPath, "utf-8").trimEnd() + "\n" + appendMarker(agentKey) + block.trimStart() + "\n");
+          console.log(`  ${G}✓${R} Appended YATS block to ${destPath}`);
           installed++;
         } else {
-          console.log(`  ${RED}✗${R} Could not read ${file.src} — download from GitHub`);
+          console.log(`  ${Y}—${R} Skipped ${destPath}`);
           skipped++;
         }
       }
@@ -176,18 +301,7 @@ async function installFiles(agentKey) {
   console.log(`  Done: ${installed} installed, ${skipped} skipped.`);
   console.log(`  Full instructions: ${C}${agent.url}${R}`);
   console.log("");
-}
-
-function getFileContent(srcPath) {
-  // Try from node_modules first (when installed via npm)
-  try {
-    const pkgDir = dirname(new URL(import.meta.url).pathname);
-    const installedPath = join(pkgDir, "..", srcPath);
-    if (existsSync(installedPath)) {
-      return readFileSync(installedPath, "utf-8");
-    }
-  } catch { /* not installed as npm package */ }
-  return null;
+  prompter.close();
 }
 
 // ============================================================
@@ -214,12 +328,12 @@ function showConfig(agentKey) {
     if (file.type === "json") {
       console.log(`  ${D}${safeMergeJson("", mcpConfig).replace(/\n/g, "\n  ")}${R}`);
     } else {
-      const content = getFileContent(file.src);
+      const content = renderContent(file.src);
       if (content) {
         const preview = content.split("\n").slice(0, 8).join("\n");
         console.log(`  ${D}${preview}${D}...${R}`);
       } else {
-        console.log(`  ${D}(download from GitHub)${R}`);
+        console.log(`  ${RED}(missing template)${R}`);
       }
     }
     console.log("");
@@ -243,9 +357,9 @@ function showLink(agentKey) {
 }
 
 async function ask(question) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise((resolve) => rl.question(question, resolve));
-  rl.close();
+  const prompter = makePrompter();
+  const answer = await prompter.ask(question);
+  prompter.close();
   return answer;
 }
 

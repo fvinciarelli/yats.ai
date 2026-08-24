@@ -1,24 +1,19 @@
 # Claude Code — YATS Setup
 
-Two files to place:
+Install from your repo root:
 
----
+```bash
+yats connect --install claude
+```
 
-## 1. `SKILL.md` — Agent behavior
+This creates/updates:
 
-**Copy to:** `.claude/skills/yats/SKILL.md` (in each repo you want YATS in)
+| File | Purpose |
+|------|---------|
+| `.claude/skills/yats/SKILL.md` | Teaches Claude the YATS golden rule and efficient workflow (search_code → expand_graph → read) |
+| `.mcp.json` | Connects Claude to the YATS MCP server (your existing entries are preserved) |
 
-Teaches Claude to use YATS MCP tools first, before reading files. The skill auto-loads when you ask code questions.
+Existing files are never overwritten: the skill is appended without its
+frontmatter (after confirmation), and `.mcp.json` entries are merged.
 
----
-
-## 2. `mcp.json` — Connection config
-
-**Copy to:** `.mcp.json` (repo root) or `~/.claude.json` (global, all repos)
-
-Connects Claude to the YATS bridge via stdio. The bridge forwards MCP calls to the YATS server.
-
-> **Global install:** `~/.claude.json` makes YATS available in ALL your repos.
-> **Per-repo:** `.mcp.json` only in repos you choose.
-
-Done.
+See the full docs at https://github.com/fvinciarelli/yats.ai/tree/main/connect/claude
