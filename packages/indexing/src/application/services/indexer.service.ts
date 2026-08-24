@@ -46,7 +46,11 @@ export class IndexerService implements Indexer {
     private readonly deps: IndexerDependencies,
   ) {
     this.logger = createLogger("indexer:service");
-    this.pendingRelationships = new PendingRelationshipStore(deps.graphRepository);
+    this.pendingRelationships = new PendingRelationshipStore(
+      deps.graphRepository,
+      deps.embeddingGenerator,
+      deps.vectorRepository,
+    );
 
     // Resolve config with provider-aware defaults.
     // Env vars override; without them, defaults adapt to the embedding provider.
@@ -122,7 +126,9 @@ export class IndexerService implements Indexer {
    * timer after indexing quiets down, or explicitly via POST /index/complete.
    */
   async finalizeRepository(repositoryName: string): Promise<{ stored: number; filtered: number; rewritten: number }> {
-    return this.pendingRelationships.flush(repositoryName);
+    // Final flush: the symbol table is complete by now — resolve everything
+    // held back and drop whatever is still unresolvable (imports, builtins).
+    return this.pendingRelationships.flush(repositoryName, { final: true });
   }
 
   // ============================================================
@@ -151,7 +157,7 @@ export class IndexerService implements Indexer {
         `Repository path not accessible from the YATS server: "${repositoryPath}". ` +
         `The server cannot walk host files. Index from the host machine instead:\n\n` +
         `  yats index ${repositoryPath}\n\n` +
-        `Then poll with repository_summary(repository: "${repoName}").`,
+        `Then poll with repository_summary(path: "${repositoryPath}").`,
       );
     }
 
@@ -307,7 +313,7 @@ export class IndexerService implements Indexer {
             try {
               const batchResults = await analyzer.analyzeBatch(
                 subGroup.map((g) => ({ filePath: g.file.relativePath, content: g.content })),
-                repoName,
+                repositoryPath,
               );
               for (const result of batchResults) {
                 results.push({
@@ -323,7 +329,7 @@ export class IndexerService implements Indexer {
               this.logger.warn(`Batch analysis failed for ${analyzer.language}: ${err.message}, falling back to per-file`);
               for (const g of subGroup) {
                 try {
-                  const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
+                  const result = await analyzer.analyze(g.file.relativePath, g.content, repositoryPath);
                   results.push({
                     status: "fulfilled",
                     value: {
@@ -341,7 +347,7 @@ export class IndexerService implements Indexer {
         } else {
           const perFileResults = await Promise.allSettled(
             group.map(async (g) => {
-              const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
+              const result = await analyzer.analyze(g.file.relativePath, g.content, repositoryPath);
               return {
                 errors: result.errors.length,
                 symbols: result.symbols,
@@ -457,7 +463,7 @@ export class IndexerService implements Indexer {
 
     // Save last indexed commit
     if (currentCommit) {
-      await this.deps.graphRepository.setLastIndexedCommit(repoName, currentCommit);
+      await this.deps.graphRepository.setLastIndexedCommit(repositoryPath, currentCommit);
     }
 
     const totalMs = Date.now() - totalStart;
@@ -797,7 +803,7 @@ export class IndexerService implements Indexer {
     });
 
     const repoName = this.getRepoName(repositoryPath);
-    return incrementalIndexer.indexSince(repositoryPath, repoName, sinceCommit);
+    return incrementalIndexer.indexSince(repositoryPath, repositoryPath, sinceCommit);
   }
 
   // ============================================================
@@ -835,7 +841,7 @@ export class IndexerService implements Indexer {
       }
     } catch { /* docs/ doesn't exist or not accessible */ }
 
-    const repoName = this.getRepoName(repositoryPath);
+    const repoName = repositoryPath; // identity is the full path
     let count = 0;
 
     for (const pattern of docPatterns) {
@@ -869,10 +875,10 @@ export class IndexerService implements Indexer {
 
   private async indexDocFile(
     filePath: string,
-    repoName: string,
+    repositoryPath: string,
   ): Promise<number> {
     const content = await this.deps.fileSystem.readFile(filePath);
-    return this.indexDocFileContent(filePath, repoName, content);
+    return this.indexDocFileContent(filePath, repositoryPath, content);
   }
 
   /**
@@ -881,7 +887,7 @@ export class IndexerService implements Indexer {
    */
   private async indexDocFileContent(
     filePath: string,
-    repoName: string,
+    repositoryPath: string,
     content: string,
   ): Promise<number> {
     const sections = this.parseMarkdownSections(content, filePath);
@@ -893,12 +899,12 @@ export class IndexerService implements Indexer {
 
     await this.deps.vectorRepository.upsertVectors(
       sections.map((section, i) => ({
-        id: `${repoName}::${filePath}#${section.heading}`,
+        id: `${repositoryPath}::${filePath}#${section.heading}`,
         vector: vectors[i] ?? [],
         payload: {
-          docSectionId: `${repoName}::${filePath}#${section.heading}`,
+          docSectionId: `${repositoryPath}::${filePath}#${section.heading}`,
           language: "markdown" as any,
-          repository: repoName,
+          repository: repositoryPath,
           relativePath: filePath,
           namespace: "",
           className: null,

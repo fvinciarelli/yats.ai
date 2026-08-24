@@ -7,22 +7,27 @@ const logger = createLogger("mcp:validation");
 // Zod schemas for MCP tool inputs
 // ============================================================
 
+function isSafePath(v: string): boolean {
+  // Block system roots and dangerous paths
+  const dangerous = ["/", "/root", "/etc", "/dev", "/proc", "/sys", "/var", "/usr", "/home", "/tmp"];
+  if (dangerous.includes(v)) return false;
+  if (/^[A-Z]:\\?$/i.test(v)) return false; // Windows roots like C:\
+  if (!v.includes("/") && !v.includes("\\")) return false; // must have at least one separator
+  if (v.includes("..")) return false;
+  return true;
+}
+
 const safePath = z.string().min(1).max(4096).refine(
-  (v) => {
-    // Block system roots and dangerous paths
-    const dangerous = ["/", "/root", "/etc", "/dev", "/proc", "/sys", "/var", "/usr", "/home", "/tmp"];
-    if (dangerous.includes(v)) return false;
-    if (/^[A-Z]:\\?$/i.test(v)) return false; // Windows roots like C:\
-    if (!v.includes("/") && !v.includes("\\")) return false; // must have at least one separator
-    if (v.includes("..")) return false;
-    return true;
-  },
+  isSafePath,
   { message: "Path traversal or system path not allowed — use a specific project directory" },
 );
 
-const safeRepoName = z.string().min(1).max(256).regex(
-  /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/,
-  { message: "Invalid repository name format" },
+// Accepts either a short repo name ("lab_hub") or a full path
+// ("/home/user/lab_hub") — YATS identifies repos by rootPath, and agents
+// often pass the path in `repository` instead of `path`.
+const safeRepoName = z.string().min(1).max(4096).refine(
+  (v) => (v.includes("/") || v.includes("\\")) ? isSafePath(v) : /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(v),
+  { message: "Invalid repository name format — use a repo name (e.g. \"lab_hub\") or a full path" },
 );
 
 export const schemas = {
@@ -45,6 +50,7 @@ export const schemas = {
 
   find_symbol: z.object({
     name: z.string().min(1).max(500),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     kind: z.string().optional(),
     exact: z.boolean().optional(),
@@ -54,6 +60,7 @@ export const schemas = {
   find_references: z.object({
     symbolId: z.string().max(1024).optional(),
     name: z.string().max(500).optional(),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }),
@@ -61,6 +68,7 @@ export const schemas = {
   find_callers: z.object({
     symbolId: z.string().max(1024).optional(),
     name: z.string().max(500).optional(),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }),
@@ -68,6 +76,7 @@ export const schemas = {
   find_callees: z.object({
     symbolId: z.string().max(1024).optional(),
     name: z.string().max(500).optional(),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }),
@@ -75,6 +84,7 @@ export const schemas = {
   find_implementations: z.object({
     symbolId: z.string().max(1024).optional(),
     name: z.string().max(500).optional(),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }),
@@ -82,6 +92,7 @@ export const schemas = {
   find_inheritors: z.object({
     symbolId: z.string().max(1024).optional(),
     name: z.string().max(500).optional(),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }),
@@ -89,6 +100,7 @@ export const schemas = {
   find_tests: z.object({
     symbolId: z.string().max(1024).optional(),
     name: z.string().max(500).optional(),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }),
@@ -101,6 +113,7 @@ export const schemas = {
   }),
 
   find_configuration: z.object({
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     key: z.string().max(200).optional(),
     limit: z.number().int().min(1).max(50).optional(),
@@ -108,6 +121,7 @@ export const schemas = {
 
   expand_graph: z.object({
     symbolIds: z.array(z.string().max(1024)).min(1).max(50),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     hops: z.number().int().min(1).max(3).optional(),
     relationshipTypes: z.array(z.string()).max(20).optional(),
@@ -117,11 +131,13 @@ export const schemas = {
   related_symbols: z.object({
     symbolId: z.string().max(1024).optional(),
     name: z.string().max(500).optional(),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(100).optional(),
   }),
 
   list_symbols: z.object({
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     kind: z.string().optional(),
     limit: z.number().int().min(1).max(200).optional(),
@@ -129,15 +145,18 @@ export const schemas = {
   }),
 
   repository_summary: z.object({
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
   }),
 
   architecture_summary: z.object({
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
   }),
 
   search_similar: z.object({
     symbolId: z.string().max(1024),
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }),

@@ -446,6 +446,12 @@ async function resolveRepo(
     return null;
   }
   if (fallbackRepo) {
+    // `repository` may carry either a short name or a full path (agents often
+    // pass the path there) — try rootPath first when it looks like a path.
+    if (fallbackRepo.includes("/") || fallbackRepo.includes("\\")) {
+      const repo = await graphRepo.findRepositoryByPath(fallbackRepo);
+      if (repo) return { name: repo.name, rootPath: repo.rootPath };
+    }
     // Look up rootPath from stored repos
     const repos = await graphRepo.listRepositories();
     const found = repos.find(r => r.name === fallbackRepo);
@@ -490,7 +496,7 @@ function notIndexed(hint?: string): ToolResult {
   return {
     content: [{
       type: "text",
-      text: `Repository "${name}" is not indexed yet.\n\nRun this command in a terminal on the host machine (I can run it for you):\n\n  ${cmd}\n\nThen poll with:\n\n  repository_summary(repository: "${name.split("/").pop() ?? name}")\n\nuntil 'relationships' stops increasing between two consecutive checks.`, 
+      text: `Repository "${name}" is not indexed yet.\n\nRun this command in a terminal on the host machine (I can run it for you):\n\n  ${cmd}\n\nThen poll with:\n\n  repository_summary(path: ${repoArg})\n\nuntil 'relationships' stops increasing between two consecutive checks.`,
     }],
   };
 }
@@ -603,7 +609,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
 
     const query: RetrievalQuery = {
       query: args.query as string,
-      repository: resolved.name,
+      repository: resolved.rootPath,
       options: {
         maxVectorHits: 20,
         maxTotalResults: (args.limit as number) ?? 10,
@@ -628,7 +634,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
       limit: (args.limit as number) ?? 10,
     });
     return {
-      content: [{ type: "text", text: JSON.stringify(hits.filter(h => h.payload.repository === resolved.name), null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(hits.filter(h => h.payload.repository === resolved.rootPath), null, 2) }],
     };
   });
 
@@ -637,7 +643,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const symbols = await deps.graphRepository.findSymbolByName(
-      resolved.name,
+      resolved.rootPath,
       args.name as string,
       args.kind as SymbolKind | undefined,
     );
@@ -692,7 +698,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
-    const routes = await deps.graphRepository.findRoutes(resolved.name);
+    const routes = await deps.graphRepository.findRoutes(resolved.rootPath);
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(routes), null, 2) }] };
   });
 
@@ -701,7 +707,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const configs = await deps.graphRepository.findConfiguration(
-      resolved.name,
+      resolved.rootPath,
       args.key as string | undefined,
     );
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(configs), null, 2) }] };
@@ -747,7 +753,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const symbols = await deps.graphRepository.listSymbols(
-      resolved.name,
+      resolved.rootPath,
       args.kind as SymbolKind | undefined,
       (args.limit as number) ?? 50,
       (args.offset as number) ?? 0,
@@ -759,13 +765,13 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
-    const summary: any = await deps.graphRepository.repositorySummary(resolved.name);
+    const summary: any = await deps.graphRepository.repositorySummary(resolved.rootPath);
     try {
-      const status = await deps.indexer.getIndexingStatus(resolved.name);
+      const status = await deps.indexer.getIndexingStatus(resolved.rootPath);
       if (status.indexing) {
         summary.indexing = true;
         summary.pendingRelationships = status.pendingRelationships;
-        summary.notice = indexingNoticeText(resolved.name, status.pendingRelationships);
+        summary.notice = indexingNoticeText(resolved.rootPath, status.pendingRelationships);
       }
     } catch { /* never block queries on status errors */ }
     return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
@@ -776,15 +782,15 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const controllers = await deps.graphRepository.listSymbols(
-      resolved.name, SymbolKind.CONTROLLER, 20, 0,
+      resolved.rootPath, SymbolKind.CONTROLLER, 20, 0,
     );
     const services = await deps.graphRepository.listSymbols(
-      resolved.name, SymbolKind.SERVICE, 20, 0,
+      resolved.rootPath, SymbolKind.SERVICE, 20, 0,
     );
     const entities = await deps.graphRepository.listSymbols(
-      resolved.name, SymbolKind.ENTITY, 20, 0,
+      resolved.rootPath, SymbolKind.ENTITY, 20, 0,
     );
-    const routes = await deps.graphRepository.findRoutes(resolved.name);
+    const routes = await deps.graphRepository.findRoutes(resolved.rootPath);
 
     return {
       content: [{

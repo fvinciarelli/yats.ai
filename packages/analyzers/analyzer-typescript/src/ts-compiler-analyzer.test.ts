@@ -131,7 +131,7 @@ class UserServiceTestHelper {
     assert.ok(tests.length >= 1, `Expected TEST symbols, got ${tests.length}`);
   });
 
-  it("extracts imports", async () => {
+  it("does not emit import relationships (ids never exist in the symbol table)", async () => {
     const code = `
 import { PaymentService } from "./PaymentService";
 import type { User } from "./types";
@@ -146,7 +146,7 @@ export class OrderService {
     const imports = result.relationships.filter(
       (r) => r.kind === RelationshipKind.IMPORTS,
     );
-    assert.ok(imports.length >= 1, `Expected IMPORTS, got ${imports.length}`);
+    assert.ok(imports.length === 0, `Expected no IMPORTS, got ${imports.length}`);
   });
 
   it("extracts enums and type aliases", async () => {

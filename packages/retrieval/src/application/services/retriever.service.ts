@@ -1,4 +1,4 @@
-import type { Symbol, RetrievalDebug } from "@yats/shared";
+import type { Symbol, RetrievalDebug, VectorFilters } from "@yats/shared";
 import type {
   RankedContextItem,
   RetrievalQuery,
@@ -70,19 +70,23 @@ export class RetrieverService implements Retriever {
       // 1. Generate query embedding
       const queryVector = await this.embeddings.embed(query.query);
 
-      // 2. Vector search in code collection
-      const codeHits = await this.vectorRepo.search(
+      // 2. Vector search in code collection — scoped to the repository
+      // (payload.repository carries the index identity: the full rootPath).
+      const repoFilter: VectorFilters = query.repository ? { repository: query.repository } : {};
+      const codeHits = await this.vectorRepo.searchWithFilters(
         CollectionName.CODE,
         queryVector,
+        repoFilter,
         { limit: options.maxVectorHits },
       );
 
       // 3. Vector search in documentation (if enabled)
       let docHits: Awaited<ReturnType<typeof this.vectorRepo.search>> = [];
       if (options.includeDocs) {
-        docHits = await this.vectorRepo.search(
+        docHits = await this.vectorRepo.searchWithFilters(
           CollectionName.DOCUMENTATION,
           queryVector,
+          repoFilter,
           { limit: 5 },
         );
       }

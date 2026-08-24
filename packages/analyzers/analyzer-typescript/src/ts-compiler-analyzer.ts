@@ -14,6 +14,11 @@ const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 export class TypeScriptAnalyzer extends AbstractAnalyzer {
   readonly language = Language.TYPESCRIPT;
 
+  /** alias → module specifier, collected per analyze() call */
+  private imports = new Map<string, string>();
+  /** top-level variable names declared in the current file */
+  private localVars = new Set<string>();
+
   canAnalyze(filePath: string, _content: string): boolean {
     const ext = filePath.split(".").pop()?.toLowerCase();
     return ext ? TS_EXTENSIONS.has(`.${ext}`) : false;
@@ -38,6 +43,32 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         /* setParentNodes */ true,
         ts.ScriptKind.TSX,
       );
+
+      // Scope tracking: what is local to this file vs. external (library/global).
+      // Used to classify call targets — local vars stay synthetic (the
+      // post-index resolver rewrites them), imports of libraries and globals
+      // become `external::` ids so "where do I use X?" is answerable.
+      this.imports = new Map();
+      this.localVars = new Set();
+      const collectScope = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          const mod = node.moduleSpecifier.text;
+          const clause = node.importClause;
+          if (clause?.name) this.imports.set(clause.name.text, mod);
+          if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+            for (const el of clause.namedBindings.elements) {
+              this.imports.set(el.name.text, mod);
+              if (el.propertyName) this.imports.set(el.propertyName.text, mod);
+            }
+          } else if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+            this.imports.set(clause.namedBindings.name.text, mod);
+          }
+        } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+          this.localVars.add(node.name.text);
+        }
+        ts.forEachChild(node, collectScope);
+      };
+      collectScope(sourceFile);
 
       // Extract symbols by walking the AST
       this.extractSymbols(
@@ -300,23 +331,16 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
       }));
     }
 
-    // Import/Export declarations
+    // Import/Export declarations — no relationships are emitted for them:
+    // the source id (bare imported name) and target id (module specifier as
+    // path) never exist in the symbol table, so every one of these edges is
+    // dropped as dangling by the final flush. Pure noise.
     else if (ts.isImportDeclaration(node)) {
-      const moduleSpecifier = (node.moduleSpecifier as ts.StringLiteral)?.text;
-      if (moduleSpecifier) {
-        this.extractImport(node, sourceFile, filePath, repository, moduleSpecifier, id, relationships);
-        // Don't recurse into imports — they refer to other files
-        return;
-      }
+      // Don't recurse into imports — they refer to other files
+      return;
     }
     else if (ts.isExportDeclaration(node)) {
-      const moduleSpecifier = node.moduleSpecifier
-        ? (node.moduleSpecifier as ts.StringLiteral)?.text
-        : null;
-      if (moduleSpecifier) {
-        this.extractExport(node, filePath, repository, moduleSpecifier, id, relationships);
-        return;
-      }
+      return;
     }
 
     // Recurse into child nodes
@@ -566,9 +590,25 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
           const methodName = parts[parts.length - 1]!;
           const objectPath = parts.slice(0, -1).join(".");
 
-          const calleeId = objectPath
-            ? createSymbolId(repository, filePath, `${namespace}.${objectPath}.${methodName}`)
-            : createSymbolId(repository, filePath, `${namespace}.${methodName}`);
+          let calleeId: string;
+          if (!objectPath) {
+            calleeId = createSymbolId(repository, filePath, `${namespace}.${methodName}`);
+          } else {
+            const base = parts[0]!;
+            if (!this.localVars.has(base) && this.imports.has(base)) {
+              // Call on an imported library instance: `i18n.changeLanguage()`
+              // where i18n comes from "i18next" → external::i18next::changeLanguage
+              const member = objectPath.slice(base.length).replace(/^\./, "");
+              calleeId = `external::${this.imports.get(base)}::${member ? `${member}.${methodName}` : methodName}`;
+            } else if (!this.localVars.has(base)) {
+              // Global (window, document, console…) → external::window.matchMedia
+              calleeId = `external::${objectPath}.${methodName}`;
+            } else {
+              // Local variable — synthetic id, the post-index resolver rewrites
+              // it against the full symbol table (e.g. apiClient.startEmulator).
+              calleeId = createSymbolId(repository, filePath, `${namespace}.${objectPath}.${methodName}`);
+            }
+          }
 
           relationships.push(
             this.createRelationship(callerId, calleeId, RelationshipKind.CALLS),

@@ -30,6 +30,9 @@ export enum SymbolKind {
   VARIABLE = "variable",
   PARAMETER = "parameter",
 
+  // ——— External (library/browser APIs, not symbols of this repo) ———
+  EXTERNAL = "external",
+
   // ——— Decorators / Metadata ———
   ANNOTATION = "annotation",
   ATTRIBUTE = "attribute",

@@ -36,6 +36,8 @@ export interface SymbolLite {
 export interface GraphRepository {
   upsertSymbol(symbol: Symbol): Promise<void>;
   upsertSymbols(symbols: Symbol[]): Promise<void>;
+  /** Create (or update) a node for an external API (library/browser global). */
+  upsertExternalSymbol(id: string, name: string): Promise<void>;
   upsertRelationship(rel: Relationship): Promise<void>;
   upsertRelationships(rels: Relationship[]): Promise<void>;
   deleteSymbol(symbolId: string): Promise<void>;

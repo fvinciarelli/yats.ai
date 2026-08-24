@@ -19,6 +19,16 @@ export class Neo4jGraphRepository implements GraphRepository {
   // Symbol CRUD
   // ============================================================
 
+  async upsertExternalSymbol(id: string, name: string): Promise<void> {
+    await this.connection.write(
+      `
+      MERGE (s:Symbol {id: $id})
+      SET s:External, s.name = $name, s.kind = 'external', s.namespace = 'external', s.repository = '', s.relativePath = ''
+      `,
+      { id, name },
+    );
+  }
+
   async upsertSymbol(symbol: Symbol): Promise<void> {
     const labels = this.buildLabels(symbol.kind);
 
@@ -84,6 +94,7 @@ export class Neo4jGraphRepository implements GraphRepository {
   }
 
   async clearRepository(repository: string): Promise<void> {
+    // Accept a rootPath or the display name (legacy) — identity is the path.
     await this.connection.write(
       `
       MATCH (s:Symbol {repository: $repository})
@@ -94,7 +105,8 @@ export class Neo4jGraphRepository implements GraphRepository {
 
     await this.connection.write(
       `
-      MATCH (r:Repository {name: $repository})
+      MATCH (r:Repository)
+      WHERE r.rootPath = $repository OR r.name = $repository
       DELETE r
       `,
       { repository },
@@ -570,10 +582,12 @@ export class Neo4jGraphRepository implements GraphRepository {
   // ============================================================
 
   async upsertRepositoryMetadata(name: string, rootPath: string): Promise<void> {
+    // The repository identity is its rootPath — the name is display metadata
+    // (two clones of the same repo are two distinct indexes).
     await this.connection.write(
       `
-      MERGE (r:Repository {name: $name})
-      SET r.rootPath = $rootPath, r.updatedAt = $updatedAt
+      MERGE (r:Repository {rootPath: $rootPath})
+      SET r.name = $name, r.updatedAt = $updatedAt
       `,
       { name, rootPath, updatedAt: new Date().toISOString() },
     );
@@ -594,18 +608,18 @@ export class Neo4jGraphRepository implements GraphRepository {
     return results.length > 0 ? { name: (results[0] as any).name, rootPath: (results[0] as any).rootPath } : null;
   }
 
-  async getLastIndexedCommit(name: string): Promise<string | null> {
+  async getLastIndexedCommit(rootPath: string): Promise<string | null> {
     const results = await this.connection.read<{commit: string | null}>(
-      `MATCH (r:Repository {name: $name}) RETURN r.lastIndexedCommit AS commit`,
-      { name },
+      `MATCH (r:Repository {rootPath: $rootPath}) RETURN r.lastIndexedCommit AS commit`,
+      { rootPath },
     );
     return (results[0] as any)?.commit ?? null;
   }
 
-  async setLastIndexedCommit(name: string, commit: string): Promise<void> {
+  async setLastIndexedCommit(rootPath: string, commit: string): Promise<void> {
     await this.connection.write(
-      `MATCH (r:Repository {name: $name}) SET r.lastIndexedCommit = $commit, r.updatedAt = $updatedAt`,
-      { name, commit, updatedAt: new Date().toISOString() },
+      `MATCH (r:Repository {rootPath: $rootPath}) SET r.lastIndexedCommit = $commit, r.updatedAt = $updatedAt`,
+      { rootPath, commit, updatedAt: new Date().toISOString() },
     );
   }
 
