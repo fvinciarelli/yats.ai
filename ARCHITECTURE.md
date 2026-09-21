@@ -19,7 +19,7 @@ YATS indexes software repositories into a **symbolic knowledge graph** (Neo4j) a
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                     MCP Server                            │
-│  (Exposes 23 tools to AI agents via MCP protocol)         │
+│  (Exposes 20 tools to AI agents via MCP protocol)         │
 └──────────────┬───────────────────────────────┬───────────┘
                │                               │
        ┌───────▼────────┐             ┌────────▼──────────┐
@@ -105,6 +105,9 @@ Symbol {
 }
 ```
 
+Route symbols (kind `route`) additionally carry `httpMethod` (GET, POST, …)
+and `routePath` — both indexed and queryable through `find_routes`.
+
 ### 5.2 Relationship
 
 ```
@@ -125,7 +128,7 @@ Analyzers detect architectural patterns by naming conventions:
 | Service | Class ending in `Service` |
 | Repository | Class ending in `Repository` |
 | Entity | Class with `@Entity` decorator/attribute |
-| Route | HTTP method decorator/attribute present |
+| Route | HTTP method decorator/attribute or router registration (`HandleFunc`, `GET("/...")`, `app.get(...)`, `@app.route(...)`) — captured with `httpMethod` + `routePath` |
 | Test | File in `tests/` or `*.test.*` / `*_test.*` |
 
 ---
@@ -151,6 +154,9 @@ Key relationship types:
 - **OOP:** `INHERITS`, `IMPLEMENTS`, `OVERRIDES`
 - **Dependencies:** `IMPORTS`, `CALLS`, `REFERENCES`, `INSTANTIATES`
 - **Architectural:** `ROUTES_TO`, `HANDLES`, `TESTS`
+
+Route nodes store `httpMethod` and `routePath` as indexed properties;
+`find_routes` filters on them (plus `repository` and `limit`).
 
 ---
 
@@ -193,8 +199,23 @@ Language Detector          AnalysisResult
 ```
 
 - **Full index:** Walk → analyze → resolve → store. Used for first index and `reindex`.
-- **Incremental index:** Git diff detection, only process changed files.
-- **Live sync:** `yats watch` uses `fs.watch` + HTTP POST to index on save.
+- **Commit-based sync (P1):** `yats index` records the current commit;
+  `yats watch` polls `git rev-parse HEAD` (~2s) and, when HEAD moves (new
+  commit or checkout), streams `git diff --name-status <lastIndexed>..HEAD`
+  through the HTTP API (`/index/file` for added/modified, `/index/remove` for
+  deleted/renamed), then `/index/complete` + `POST /index/commit`. Saves
+  without committing don't touch the index. `--live` adds save-based
+  indexing (`fs.watch`) on top — the only mode for non-git directories.
+- **In-place sync (P2):** re-indexing a file updates its symbols in place —
+  incoming edges from other files are preserved (the server re-resolves
+  cross-file references and only deletes relationships that no longer match).
+- **Client-side filtering (P4/P6):** the CLI decides what to send. Built-ins
+  skip `node_modules`, `dist`, dotfiles, …; `~/.yats/.env` provides the
+  machine defaults (`DOC_EXTENSIONS`, `SKIP_EXTENSIONS`, `IGNORED_DIRS`); the
+  repo's `.yats/config.json` can only narrow them further (`ignoredDirs` /
+  `skipExtensions` union, `docExtensions` replace, `docPatterns` doc
+  whitelist, `indexDocs: false`). A malformed repo config stops the run
+  before reading any file. `--no-config` bypasses the repo config.
 
 ---
 
@@ -227,7 +248,7 @@ User query ("how does auth work?")
 
 ---
 
-## 10. MCP Tools (23)
+## 10. MCP Tools (20)
 
 | Category | Tools |
 |----------|-------|
@@ -236,11 +257,20 @@ User query ("how does auth work?")
 | **Inheritance** | `find_implementations`, `find_inheritors` |
 | **Graph** | `expand_graph`, `related_symbols` |
 | **Discovery** | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
-| **Repository** | `list_repositories`, `index_repository`, `delete_repository`, `reindex` |
-| **File ops** | `index_file`, `remove_file` |
+| **Repository** | `list_repositories`, `delete_repository` |
 | **Analysis** | `repository_summary`, `architecture_summary` |
+| **Maintenance** | `rebuild_vectors` |
 
 Tools communicate via MCP JSON-RPC over stdio, HTTP+SSE, or Streamable HTTP (`/mcp`).
+
+Indexing operations are **HTTP endpoints**, not MCP tools: `POST /index`,
+`POST /index/file`, `POST /index/remove`, `POST /index/complete`,
+`POST /index/commit`, `POST /reindex`. The CLI (`yats index` / `yats watch`)
+is their main client.
+
+The file-op tools (`read_file`, `write_file`, `update_file`, `create_file`,
+`delete_file`) are advertised in `tools/list` but not yet wired to handlers —
+they return `Unknown tool` if called.
 
 ---
 
@@ -258,3 +288,9 @@ docker compose -f docker/docker-compose.yml up -d
 ```
 
 The MCP server Docker image includes all language bridges (Go, C#, PHP, Python) compiled in. Published at `ghcr.io/fvinciarelli/yats.ai`.
+
+The `yats` service interpolates these environment variables (defaults shown,
+settable in `~/.yats/.env`): `INDEX_DOCS=true`, `DOC_MAX_FILES=300`,
+`DOC_EXTENSIONS=.md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme`,
+`SKIP_EXTENSIONS=`, `IGNORED_DIRS=`, `EMBEDDING_BATCH_SIZE=200`. `yats setup`
+writes that file; the wizard's answers seed the defaults.

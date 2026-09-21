@@ -46,7 +46,7 @@ We parse your entire codebase into a **knowledge graph**: every function, class,
 
 ![YATS demo](docs/images/demo.gif)
 
-**The best part: you don't index manually.** When your agent connects to YATS and starts working in a directory, it checks if that project is indexed. If not, it indexes it *automatically*. No extra step. No remembering a command.
+**The best part: you don't index manually.** When your agent searches a directory that isn't indexed yet, YATS hands it the exact `yats index` command — the agent runs it once (one tool call), and from then on every query hits the graph. If `yats watch` is running, even re-indexing takes care of itself.
 
 > You *can* index manually via `yats index ~/my-project`. But your agent handles it.
 
@@ -174,12 +174,12 @@ Instead of reading 15 files, your agent calls:
 |---|---|
 | "How does auth work?" | `search_code("authentication flow")` |
 | "Who calls this?" | `find_callers("PaymentService.process")` |
-| "Show me the API" | `find_routes` |
+| "Show me the API" | `find_routes(repo, { method: "GET" })` — filters: method, path prefix, limit |
 | "Architecture overview?" | `architecture_summary` |
 | "Where are the tests?" | `find_tests("UserService")` |
 | "What's connected?" | `expand_graph(symbolId)` |
 
-### All 22 tools
+### All 20 tools
 
 | Category | Tools |
 |---|---|
@@ -190,6 +190,7 @@ Instead of reading 15 files, your agent calls:
 | **Discovery** | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
 | **Repository** | `list_repositories`, `delete_repository` |
 | **Analysis** | `repository_summary`, `architecture_summary` |
+| **Maintenance** | `rebuild_vectors` |
 
 ---
 
@@ -199,9 +200,9 @@ YATS doesn't index once and go stale. When you or your agent edits a file, the i
 
 | | |
 |---|---|
-| 🔄 **Auto-reindex on query** | Every search checks if your repo changed since the last index. New commits? YATS incrementally re-indexes only what changed — before answering. |
-| 📝 **Index a single file** | Call `index_file` and only that file gets re-analyzed, embedded, and stored. Under a second. |
-| 🗑 **Remove on delete** | Call `remove_file` and its symbols disappear from the graph instantly. No dead references. |
+| 🔄 **Incremental, commit-driven** | `yats index` records the current commit; `yats watch` polls HEAD and re-indexes exactly what changed per commit — before your agent's next query. |
+| 📝 **Index a single file** | Any `yats index` / `yats watch` pass re-analyzes just the changed file (in-place: incoming edges from other files are preserved). |
+| 🗑 **Remove on delete** | Deleted files are removed from the graph on the next watch sync. No dead references. |
 | 👀 **Commit-based watcher** | `yats watch ~/my-project` — every commit re-indexes only what changed (saves without committing don't touch the index). Add `--live` to also index on every save. |
 
 ---
@@ -213,7 +214,7 @@ flowchart LR
     A[Your repository] --> B[YATS indexer<br/>parse · analyze · embed]
     B --> C[(Neo4j<br/>knowledge graph)]
     B --> D[(Qdrant<br/>vector store)]
-    C --> E[MCP server<br/>22 tools]
+    C --> E[MCP server<br/>20 tools]
     D --> E
     E --> F[AI agent<br/>Claude · Cursor · Copilot · Codex · Gemini]
 ```
@@ -289,8 +290,7 @@ yats connect [agent]              # Show agent setup config
 yats connect --install <agent>    # Auto-place config files
 yats bridge                       # MCP stdio ↔ HTTP proxy (for CLI-only agents)
 yats benchmark                    # AI agent token comparison
-yats watch <path>                 # Sync index with git commits
-                                  # (--live: also re-index on every save)
+yats watch <path> [--live] [--no-config]  # Sync index with git commits
 ```
 
 ---

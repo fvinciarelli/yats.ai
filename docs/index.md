@@ -20,12 +20,13 @@ Zero understanding of relationships
 
 We index your entire codebase into a **knowledge graph**: every function, class, interface, and relationship across TypeScript, C#, Python, PHP, and Go. When your agent needs answers, it queries the graph — not the raw files.
 
-**The best part: you don't index manually.** When your agent connects to YATS and starts working in a directory, the first thing it does is check if that project is indexed. If not, it indexes it automatically. No extra step. No remembering to run a command.
+**The best part: you don't index manually.** When your agent searches a directory that isn't indexed yet, YATS hands it the exact `yats index` command — the agent runs it once, and from then on every query hits the graph. With `yats watch` running, even re-indexing takes care of itself.
 
 ```
-Agent enters your project
+Agent searches your project
   → "Is this indexed?" → No
-  → Indexes it automatically (analyzers parse every file, build the graph)
+  → YATS returns: yats index /path/to/project
+  → Agent runs it (analyzers parse every file, build the graph)
   → Done. Now every query hits the graph.
 
 3,000 tokens. Two tool calls. Exactly right.
@@ -100,7 +101,7 @@ Instead of reading 15 files, your agent calls:
 | "Where are the tests?" | `find_tests("UserService")` |
 | "What's connected to this?" | `expand_graph(symbolId)` |
 
-[All 22 tools →](https://github.com/fvinciarelli/yats.ai#mcp-tools-20)
+[All 20 tools →](https://github.com/fvinciarelli/yats.ai#all-20-tools)
 
 ---
 
