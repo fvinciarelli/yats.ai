@@ -96,6 +96,61 @@ polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 - Make `/index/complete` idempotent + run it even when the CLI is interrupted
   (e.g. `yats index` trap on SIGINT/SIGTERM).
 
+## P4 — Respect doc-indexing config on the per-file path (`yats index`)
+
+**Problem:** the `yats index` CLI (per-file path via `/index/file`) ignores the
+`.env` doc settings and the docs option is invisible to agents:
+
+- `INDEX_DOCS=false` in `.env` is **not respected**: `indexFileContent` routes
+  files to the doc pipeline purely by extension (`isDocumentationFile`), and
+  `indexDocFileContent` never checks `INDEX_DOCS`. Only the full `indexRepository`
+  pipeline honors it (`process.env.INDEX_DOCS !== "false"`). Docs are always
+  indexed when the extension is in `DOC_EXTENSIONS`.
+- The CLI has a `--skip-docs` flag (`bin/setup.js`) but it is **undocumented**:
+  the help output and usage header only show `yats index <path>`, so agents
+  never know it exists and never ask.
+- `--skip-docs` only skips `.md` files — narrower than `DOC_EXTENSIONS`
+  (`.md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme`).
+- The CLI reads no `.env` at all (only `YATS_URL`); its ignored-dirs list is
+  hardcoded and does not include `IGNORED_DIRS` from `.env`.
+
+**Design:**
+- Make `indexDocFileContent` (and the doc route in `indexFileContent`) respect
+  `INDEX_DOCS=false` server-side, so per-file ingestion matches the full
+  pipeline.
+- Document `--skip-docs` in the CLI help + usage header; optionally broaden it
+  to skip any file matching `DOC_EXTENSIONS` instead of only `.md`.
+- Optional: have the CLI read `DOC_EXTENSIONS`/`SKIP_EXTENSIONS`/`IGNORED_DIRS`
+  from `~/.yats/.env` so `yats index` filters files consistently with the server.
+
+## P5 — `find_routes` (and route detection coverage)
+
+**Problem:** the tool exists but is of limited use:
+
+- **Coverage gap:** route symbols are only produced by the C# (ASP.NET
+  attributes), Python (Flask) and TypeScript (NestJS decorators) analyzers.
+  The **Go analyzer detects no routes** and TS without NestJS (Express, plain
+  fetch) is not covered. On `lab_hub` (Go backend + non-NestJS TS frontend)
+  `find_routes` returns **0 routes** despite dozens of real endpoints — agents
+  must fall back to `search_code` on handlers.
+- **Dead filter args:** the schema declares `method` and `path` (partial match)
+  but the handler ignores both — it calls `findRoutes(rootPath)` with no
+  filters.
+- **Hardcoded LIMIT 100** in the Neo4j query; the schema's `limit` arg is unused.
+- **Schema inconsistency:** `required: ["repository"]` while sibling tools
+  accept `path` (the handler resolves both via `ensureRepoIndexed`, but
+  schema-driven clients will pass `repository`).
+
+**Design:**
+- Add route detection to the Go analyzer (mux/gin/chi registrations, e.g.
+  `HandleFunc`, `GET("/...")` patterns).
+- Broaden the TS analyzer beyond NestJS (Express `app.get/post/...`, router
+  patterns).
+- Implement `method`/`path` filters + `limit` in the handler and the Neo4j
+  query (with parameterized filters); drop the hardcoded 100.
+- Relax the schema: `path` as an alternative to `repository`, consistent with
+  the other repo tools.
+
 ## Status
 
 - P1: approved as plan by user (2026-08-22). Not started.
@@ -103,3 +158,5 @@ polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 - P3: **implemented in v0.4.2** (indexing-state flag + notice in graph tools;
   `repository_summary` returns `indexing`/`pendingRelationships`/`notice`;
   graph tools prepend the notice; state clears ~15s after last activity).
+- P4: added as plan (2026-08-25). Not started.
+- P5: added as plan (2026-08-25). Not started.
