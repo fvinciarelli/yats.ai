@@ -62,7 +62,7 @@ export function getAllToolDefinitions(): ToolDefinition[] {
 
 const SEARCH_CODE: ToolDefinition = {
   name: "search_code",
-  description: "Search indexed code using natural language. Finds relevant symbols, functions, and classes. If the repo isn't indexed yet, you'll get the exact command to index it from the host (yats index).",
+  description: "Search indexed code using natural language. Finds relevant symbols, functions, and classes. To verify your repo is indexed: call list_repositories (or run 'yats list' on the host). If your repo is missing, run 'yats index <full-path-of-repo>' on the host and wait for it to finish, then retry this tool.",
   inputSchema: {
     type: "object",
     properties: {
@@ -397,7 +397,7 @@ const CREATE_FILE: ToolDefinition = {
 
 const LIST_REPOSITORIES: ToolDefinition = {
   name: "list_repositories",
-  description: "List all indexed repositories with their root paths. Call this when you start working in a directory to discover which repos are available for code search.",
+  description: "List all indexed repositories with their root paths. Call this at the start of your session to verify your repo is indexed. If your working directory is missing from the list, index it by running 'yats index <full-path-of-repo>' on the host (wait for it to finish), then retry.",
   inputSchema: {
     type: "object",
     properties: {},
@@ -488,15 +488,18 @@ async function ensureRepoIndexed(
   return notIndexed(repoName as string);
 }
 
-/** Return a helpful "not indexed" message with the exact command to run on the host */
+/** Return a helpful "not indexed" message with the correct usage instructions */
 function notIndexed(hint?: string): ToolResult {
   const name = hint || "this repository";
-  const repoArg = name.startsWith("/") ? name : `"${name}"`;
-  const cmd = `yats index ${repoArg}`;
+  const base = hint ? hint.split(/[\\/]/).pop() : "repo";
   return {
     content: [{
       type: "text",
-      text: `Repository "${name}" is not indexed yet.\n\nRun this command in a terminal on the host machine (I can run it for you):\n\n  ${cmd}\n\nThen poll with:\n\n  repository_summary(path: ${repoArg})\n\nuntil 'relationships' stops increasing between two consecutive checks.`,
+      text: `Repository "${name}" is not indexed yet.\n\n` +
+        `YATS identifies repositories by their full path — not by name. ` +
+        `Pass the full path of your working directory when calling YATS tools.\n\n` +
+        `Run this command in a terminal on the host machine and wait for it to finish:\n\n` +
+        `  yats index /full/path/to/${base}`,
     }],
   };
 }

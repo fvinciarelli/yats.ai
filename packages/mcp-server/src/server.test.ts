@@ -346,7 +346,8 @@ describe("MCP Server — input validation", () => {
     const content = (response as any).result?.content;
     assert.ok(content, "should have content");
     const text = content[0].text as string;
-    assert.ok(text.includes("yats index /home/user/my-project"), "should suggest yats index command");
-    assert.ok(text.includes("repository_summary"), "should mention polling with repository_summary");
+    assert.ok(text.includes("yats index /full/path/to/my-project"), "should suggest yats index command");
+    assert.ok(text.includes("full path"), "should instruct to use the full path");
+    assert.ok(!text.includes("I can run it for you"), "should not claim the server can run commands");
   });
 });
