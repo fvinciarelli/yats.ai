@@ -38,7 +38,13 @@ export default async function indexRepo(args, options = {}) {
   // The repository identity is its full path (two clones of the same repo are
   // two distinct indexes) — never the basename.
   const repoName = repoPath;
-  const stat = statSync(repoPath);
+  let stat;
+  try {
+    stat = statSync(repoPath);
+  } catch {
+    console.error(`Path not found: ${repoPath}`);
+    process.exit(1);
+  }
   if (!stat.isDirectory()) {
     console.error(`Not a directory: ${repoPath}`);
     process.exit(1);
