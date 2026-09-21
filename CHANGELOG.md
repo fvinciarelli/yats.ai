@@ -5,6 +5,23 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **In-place symbol updates on re-index (P2).** Re-indexing a file used to delete all of
+  its symbols with `DETACH DELETE`, which also destroyed *incoming* edges — re-indexing
+  `base.py` killed `JiraStrategy -> TicketSource` because `jira.py` was not re-indexed at
+  that moment, degrading the graph with every incremental run. Now surviving symbols
+  (same deterministic ID) keep their node and incoming edges; only their outgoing edges
+  are regenerated from the new analysis. Symbols that disappeared are deleted, and stale
+  buffered relationships for the file are dropped so the pending flush cannot resurrect
+  dead edges. Applies to the per-file path (`/index/file`) and the git-based incremental
+  path. Renames still lose incoming edges (documented limitation).
+  - `GraphRepository.deleteRelationships` now takes a batch of IDs and deletes **outgoing**
+    edges only (was a single-ID undirected delete); added `listSymbolIdsByFile`.
+  - Fixed the incremental path's 1000-symbol pagination cap when removing a deleted file's
+    symbols (could miss the file on larger repos).
+
 ## [0.4.2] - 2026-08-22
 
 ### Added

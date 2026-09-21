@@ -18,7 +18,7 @@ import { SimpleGitAdapter } from "@yats/infra";
 import { IncrementalIndexerService } from "./incremental-indexer.service.js";
 import { FileWalker } from "../../infrastructure/file-walker.js";
 import type { Symbol, Relationship } from "@yats/shared";
-import { SymbolKind } from "@yats/shared";
+import { SymbolKind, Language } from "@yats/shared";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURES_DIR = join(__dirname, "..", "..", "..", "..", "..", "test", "fixtures");
@@ -41,19 +41,46 @@ function makeMockDeps(repoPath: string) {
   const storedSymbols: Symbol[] = [];
   const storedVectors: any[] = [];
   const storedRels: Relationship[] = [];
+  const deletedSymbolIds: string[] = [];
+  const clearedOutgoingIds: string[] = [];
 
   return {
     storedSymbols,
     storedVectors,
     storedRels,
+    deletedSymbolIds,
+    clearedOutgoingIds,
     graphRepository: {
       upsertSymbols: async (syms: Symbol[]) => { storedSymbols.push(...syms); },
       upsertRelationships: async (rels: Relationship[]) => { storedRels.push(...rels); },
-      deleteSymbols: async (_ids: string[]) => {},
+      deleteSymbols: async (ids: string[]) => {
+        deletedSymbolIds.push(...ids);
+        for (const id of ids) {
+          const idx = storedSymbols.findIndex((s) => s.id === id);
+          if (idx >= 0) storedSymbols.splice(idx, 1);
+        }
+      },
+      // Outgoing only — mirrors the Neo4j implementation (P2)
+      deleteRelationships: async (ids: string[]) => {
+        clearedOutgoingIds.push(...ids);
+        for (let i = storedRels.length - 1; i >= 0; i--) {
+          if (ids.includes(storedRels[i]!.sourceSymbolId)) storedRels.splice(i, 1);
+        }
+      },
+      listSymbolIdsByFile: async (_repo: string, filePath: string) =>
+        storedSymbols
+          .filter((s) => s.location.relativePath === filePath || s.id.includes(filePath))
+          .map((s) => s.id),
       listSymbols: async () => storedSymbols.map((s) => ({
         ...s,
         nodeId: 0,
         labels: [],
+      })),
+      listAllSymbols: async () => storedSymbols.map((s) => ({
+        id: s.id,
+        name: s.name,
+        namespace: s.namespace,
+        relativePath: s.location.relativePath,
       })),
       upsertRepositoryMetadata: async () => {},
       setLastIndexedCommit: async () => {},
@@ -223,5 +250,93 @@ describe("IncrementalIndexer — git integration", () => {
       s.location.relativePath.includes("user.controller.ts"),
     );
     assert.ok(controllerSyms.length > 0, "modified controller should be re-indexed");
+  });
+
+  it("preserves incoming edges of surviving symbols (P2)", async () => {
+    // v1 of base.ts: TicketSource (survives) + GoneClass (will disappear)
+    const basePath = join(workDir, "src", "base.ts");
+    const v1 = `export class TicketSource {\n  fetch(): void {}\n}\nexport class GoneClass {\n  helper(): void {}\n}\n`;
+    writeFileSync(basePath, v1);
+    git(workDir, "add -A");
+    git(workDir, "commit -m 'base v1'");
+    const v1Commit = git(workDir, "rev-parse HEAD");
+
+    const analyzer = factory.getAnalyzer(Language.TYPESCRIPT)!;
+    const v1Result = await analyzer.analyze("src/base.ts", v1, "test-fixtures");
+    const ticketSource = v1Result.symbols.find((s) => s.name === "TicketSource")!;
+    const goneClass = v1Result.symbols.find((s) => s.name === "GoneClass")!;
+    const fetchMethod = v1Result.symbols.find((s) => s.name === "fetch")!;
+    assert.ok(ticketSource && goneClass && fetchMethod, "v1 analysis should find all three symbols");
+
+    // Simulate a previously indexed repo: base.ts symbols plus jira.ts with an
+    // INHERITS edge into TicketSource (the incoming edge that must survive).
+    const deps = makeMockDeps(workDir);
+    const jiraId = "test-fixtures::src/jira.ts::JiraStrategy";
+    deps.storedSymbols.push(...v1Result.symbols);
+    deps.storedSymbols.push({
+      id: jiraId,
+      name: "JiraStrategy",
+      kind: SymbolKind.CLASS,
+      location: { relativePath: "src/jira.ts", startLine: 1, endLine: 1, startColumn: 1, endColumn: 1 },
+      language: Language.TYPESCRIPT,
+      namespace: "",
+      parentClass: null,
+      signature: null,
+      docComment: null,
+      sourceSnippet: "",
+      contentHash: "",
+      metadata: {},
+    } as Symbol);
+    deps.storedRels.push(
+      { id: "incoming", sourceSymbolId: jiraId, targetSymbolId: ticketSource.id, kind: "INHERITS", metadata: {} } as Relationship,
+      { id: "outgoing-stale", sourceSymbolId: ticketSource.id, targetSymbolId: fetchMethod.id, kind: "CONTAINS", metadata: {} } as Relationship,
+    );
+
+    // v2: GoneClass removed, TicketSource gains a method
+    const v2 = `export class TicketSource {\n  fetch(): void {}\n  fetchAll(): void {}\n}\n`;
+    writeFileSync(basePath, v2);
+    git(workDir, "add -A");
+    git(workDir, "commit -m 'base v2'");
+
+    const indexer = new IncrementalIndexerService({
+      ...deps,
+      analyzerFactory: factory,
+      gitAdapter,
+    } as any);
+
+    await indexer.indexSince(workDir, "test-fixtures", v1Commit);
+
+    // Surviving symbol keeps its node...
+    assert.ok(
+      deps.storedSymbols.some((s) => s.id === ticketSource.id),
+      "surviving symbol stays in the graph",
+    );
+    assert.ok(
+      !deps.deletedSymbolIds.includes(ticketSource.id),
+      "surviving symbol must not be deleted",
+    );
+    // ...and its incoming edge from another file survives.
+    assert.ok(
+      deps.storedRels.some((r) => r.id === "incoming"),
+      "incoming edge from another file survives the re-index",
+    );
+    // Outgoing edges of the survivor were cleared before regeneration.
+    assert.ok(
+      deps.clearedOutgoingIds.includes(ticketSource.id),
+      "survivor's outgoing edges are cleared",
+    );
+    assert.ok(
+      !deps.storedRels.some((r) => r.id === "outgoing-stale"),
+      "stale outgoing edge is removed",
+    );
+    // Disappeared symbol is deleted (node + vectors).
+    assert.ok(
+      deps.deletedSymbolIds.includes(goneClass.id),
+      "disappeared symbol is deleted",
+    );
+    assert.ok(
+      !deps.storedSymbols.some((s) => s.id === goneClass.id),
+      "disappeared symbol is removed from the graph",
+    );
   });
 });

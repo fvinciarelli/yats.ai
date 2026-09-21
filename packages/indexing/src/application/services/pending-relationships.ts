@@ -65,6 +65,28 @@ export class PendingRelationshipStore {
   }
 
   /**
+   * Drop buffered (not yet flushed) relationships whose source symbol lives in
+   * the given file. Called when a file is re-indexed in place (P2): the buffer
+   * may still hold relationships from the previous analysis, and their source
+   * symbol now survives the re-index — without this purge the flush would
+   * re-create outgoing edges that no longer exist in the new analysis.
+   */
+  dropFile(repository: string, filePath: string): void {
+    const needle = `::${filePath}::`;
+    for (const map of [this.pending, this.retry]) {
+      const rels = map.get(repository);
+      if (!rels || rels.length === 0) continue;
+      const filtered = rels.filter((rel) => !rel.sourceSymbolId.includes(needle));
+      if (filtered.length !== rels.length) {
+        map.set(repository, filtered);
+        this.logger.debug(
+          `Dropped ${rels.length - filtered.length} stale buffered relationships for ${filePath}`,
+        );
+      }
+    }
+  }
+
+  /**
    * Whether the repository is mid-indexing (relationships incomplete).
    * True while relationships are buffered, a flush timer is pending, or files
    * arrived within the idle threshold.

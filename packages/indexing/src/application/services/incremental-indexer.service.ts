@@ -6,6 +6,7 @@ import { detectLanguage } from "../../infrastructure/language-detector.js";
 import { hashContent } from "@yats/shared";
 import type { Symbol, Relationship } from "@yats/shared";
 import type { PendingRelationshipStore } from "./pending-relationships.js";
+import { synchronizeFileSymbols } from "./file-symbol-sync.js";
 
 // ============================================================
 // Incremental Indexer — indexes only changed files
@@ -71,12 +72,14 @@ export class IncrementalIndexerService {
           }
           case "deleted": {
             await this.removeFileSymbols(repoName, change.path);
+            this.deps.pendingRelationships?.dropFile(repoName, change.path);
             break;
           }
           case "renamed": {
             // Remove old path, index new path
             if (change.previousPath) {
               await this.removeFileSymbols(repoName, change.previousPath);
+              this.deps.pendingRelationships?.dropFile(repoName, change.previousPath);
             }
             const result = await this.reindexFile(
               repositoryPath, repoName, change.path,
@@ -136,11 +139,23 @@ export class IncrementalIndexerService {
     const analyzer = this.deps.analyzerFactory.getAnalyzer(language);
     if (!analyzer) return { symbols: 0, relationships: 0, errors: 0 };
 
-    // Remove old symbols for this file
-    await this.removeFileSymbols(repoName, filePath);
-
     // Analyze
     const result = await analyzer.analyze(filePath, content, repoName);
+
+    // P2 — update in place instead of DETACH DELETE of the whole file:
+    // symbols that survive keep node + incoming edges; disappeared symbols
+    // are deleted; stale buffered relationships for this file are dropped.
+    await synchronizeFileSymbols(
+      {
+        graphRepository: this.deps.graphRepository,
+        vectorRepository: this.deps.vectorRepository,
+        pendingRelationships: this.deps.pendingRelationships,
+      },
+      repoName,
+      filePath,
+      result.symbols.map((s) => s.id),
+      this.logger,
+    );
 
     if (result.symbols.length === 0) {
       return { symbols: 0, relationships: 0, errors: result.errors.length };
@@ -202,10 +217,11 @@ export class IncrementalIndexerService {
     repoName: string,
     filePath: string,
   ): Promise<void> {
-    // Query Neo4j for symbols with this file path, then delete them
-    const symbols = await this.deps.graphRepository.listSymbols(repoName, undefined, 1000, 0);
+    // List ALL symbols of the repo (no LIMIT — a capped page could miss the
+    // file on large repositories) and delete the ones belonging to this file.
+    const symbols = await this.deps.graphRepository.listAllSymbols(repoName);
     const toDelete = symbols.filter(
-      (s) => s.location.relativePath === filePath,
+      (s) => s.relativePath === filePath,
     );
 
     if (toDelete.length > 0) {

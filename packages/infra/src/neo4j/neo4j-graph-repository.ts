@@ -161,13 +161,18 @@ export class Neo4jGraphRepository implements GraphRepository {
     }
   }
 
-  async deleteRelationships(symbolId: string): Promise<void> {
+  async deleteRelationships(symbolIds: string[]): Promise<void> {
+    if (symbolIds.length === 0) return;
+
+    // Outgoing only — incoming edges from other files must survive a re-index
+    // of their target file (P2: in-place symbol updates).
     await this.connection.write(
       `
-      MATCH (s:Symbol {id: $id})-[r]-()
+      UNWIND $ids AS id
+      MATCH (s:Symbol {id: id})-[r]->()
       DELETE r
       `,
-      { id: symbolId },
+      { ids: symbolIds },
     );
   }
 
@@ -233,6 +238,18 @@ export class Neo4jGraphRepository implements GraphRepository {
       namespace: r.namespace ?? "",
       relativePath: r.relativePath ?? "",
     }));
+  }
+
+  async listSymbolIdsByFile(repository: string, relativePath: string): Promise<string[]> {
+    const rows = await this.connection.read<any>(
+      `
+      MATCH (s:Symbol {repository: $repository})
+      WHERE s.relativePath = $relativePath OR s.id CONTAINS $relativePath
+      RETURN s.id AS id
+      `,
+      { repository, relativePath },
+    );
+    return rows.map((r) => r.id as string);
   }
 
   async listSymbols(

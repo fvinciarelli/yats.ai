@@ -20,6 +20,7 @@ import { hashContent, type RelationshipKind } from "@yats/shared";
 import { GlobalSymbolTable, resolveRelationships, type SymbolTableEntry } from "./global-symbol-table.js";
 import { IncrementalIndexerService } from "./incremental-indexer.service.js";
 import { PendingRelationshipStore } from "./pending-relationships.js";
+import { synchronizeFileSymbols } from "./file-symbol-sync.js";
 
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline
@@ -704,9 +705,22 @@ export class IndexerService implements Indexer {
 
     const result = await analyzer.analyze(filePath, content, repositoryName);
 
-    // Remove old symbols for this file
-    // (implemented via Neo4j query)
-    await this.removeFileSymbols(repositoryName, filePath);
+    // P2 — update the file's symbols in place instead of DETACH DELETE of the
+    // whole file: symbols that survive the re-analysis keep their node and
+    // their incoming edges (only outgoing edges are regenerated); symbols that
+    // disappeared are deleted. Stale buffered relationships from a previous
+    // analysis are dropped so the pending flush cannot resurrect dead edges.
+    await synchronizeFileSymbols(
+      {
+        graphRepository: this.deps.graphRepository,
+        vectorRepository: this.deps.vectorRepository,
+        pendingRelationships: this.pendingRelationships,
+      },
+      repositoryName,
+      filePath,
+      result.symbols.map((s) => s.id),
+      this.logger,
+    );
 
     // Store new symbols
     if (result.symbols.length > 0) {

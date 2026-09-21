@@ -42,7 +42,12 @@ export interface GraphRepository {
   upsertRelationships(rels: Relationship[]): Promise<void>;
   deleteSymbol(symbolId: string): Promise<void>;
   deleteSymbols(symbolIds: string[]): Promise<void>;
-  deleteRelationships(symbolId: string): Promise<void>;
+  /**
+   * Delete only the *outgoing* relationships of the given symbols.
+   * Incoming edges are preserved, so callers in other files keep pointing
+   * at surviving symbols across re-indexes (P2).
+   */
+  deleteRelationships(symbolIds: string[]): Promise<void>;
   clearRepository(repository: string): Promise<void>;
   findSymbol(symbolId: string): Promise<GraphSymbol | null>;
   findSymbolByName(repository: string, name: string, kind?: SymbolKind): Promise<GraphSymbol[]>;
@@ -60,6 +65,8 @@ export interface GraphRepository {
   listSymbols(repository: string, kind?: SymbolKind, limit?: number, offset?: number): Promise<GraphSymbol[]>;
   /** All symbols of a repository as lightweight entries (id/name/namespace/relativePath). */
   listAllSymbols(repository: string): Promise<SymbolLite[]>;
+  /** Symbol ids belonging to one file, matched by relative path (legacy id-substring fallback). */
+  listSymbolIdsByFile(repository: string, relativePath: string): Promise<string[]>;
   upsertRepositoryMetadata(name: string, rootPath: string): Promise<void>;
   listRepositories(): Promise<RepositoryInfo[]>;
   findRepositoryByPath(rootPath: string): Promise<RepositoryInfo | null>;

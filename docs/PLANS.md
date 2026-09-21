@@ -154,7 +154,14 @@ polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 ## Status
 
 - P1: approved as plan by user (2026-08-22). Not started.
-- P2: approved as plan by user (2026-08-22). Not started.
+- P2: approved as plan by user (2026-08-22). **Implemented (2026-09-21):** in-place
+  symbol updates on re-index — surviving symbols keep their node and incoming
+  edges (only outgoing edges are regenerated); disappeared symbols are deleted;
+  stale buffered relationships for the file are dropped so the pending flush
+  cannot resurrect dead edges. Applies to both the per-file path
+  (`IndexerService.indexFileContent`) and the git-based incremental path
+  (`IncrementalIndexerService.reindexFile`). Renames still lose incoming edges
+  (documented limitation).
 - P3: **implemented in v0.4.2** (indexing-state flag + notice in graph tools;
   `repository_summary` returns `indexing`/`pendingRelationships`/`notice`;
   graph tools prepend the notice; state clears ~15s after last activity).
