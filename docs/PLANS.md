@@ -153,8 +153,16 @@ polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 
 ## Status
 
-## Status
-
+- P6: **Implemented (2026-09-21):** per-repo config via `.yats/config.json`
+  (design in `docs/SPIKE-per-repo-config.md`). A malformed config **stops the
+  run** (never index with broken filters): TTY asks to open `$EDITOR` and
+  retries in a loop; non-TTY (an AI agent running `yats index`) exits 1 with
+  a message written for the agent — what is wrong, why it stopped, and the
+  three ways out (fix + re-run, delete the file, `--no-config`). `yats watch`
+  applies the same config and stops the same way. Also fixed the hardcoded
+  env vars: `INDEX_DOCS`, `DOC_MAX_FILES` and `EMBEDDING_BATCH_SIZE` are now
+  `${VAR:-default}` interpolations in the setup template, the repo's dev
+  compose, and the deployed compose.
 - P1: approved as plan by user (2026-08-22). **Implemented (2026-09-21):**
   `yats watch` is now commit-based — it polls `git rev-parse HEAD` every ~2s
   (`YATS_WATCH_POLL_MS`) on the host and, when HEAD changes (new commit or

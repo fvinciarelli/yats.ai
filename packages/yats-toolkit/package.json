@@ -49,7 +49,7 @@
   ],
   "scripts": {
     "start": "node bin/setup.js",
-    "test": "node --test src/*.test.js"
+    "test": "node --test --test-concurrency=1 src/*.test.js"
   },
   "dependencies": {},
   "engines": {

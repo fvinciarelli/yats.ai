@@ -105,6 +105,11 @@ services:
       - YATS_PORT=5555
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - INDEXER_CONCURRENCY=${INDEXER_CONCURRENCY:-4}
+      - INDEX_DOCS=${INDEX_DOCS:-true}
+      - DOC_MAX_FILES=${DOC_MAX_FILES:-300}
+      - DOC_EXTENSIONS=${DOC_EXTENSIONS:-.md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme}
+      - SKIP_EXTENSIONS=${SKIP_EXTENSIONS:-.exe,.dll,.so,.o,.a,.bin,.zip,.tar,.gz,.bz2,.xz,.7z,.rar,.png,.jpg,.jpeg,.gif,.ico,.webp,.bmp,.svg,.woff,.woff2,.ttf,.eot,.otf,.mp3,.mp4,.avi,.mov,.mkv,.flv,.wmv,.webm,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.lock,.log,.map,.min.js,.min.css}
+      - IGNORED_DIRS=${IGNORED_DIRS:-node_modules,.git,dist,build,.next,__pycache__,vendor,target,bin,obj,.venv,venv,.yarn,.pnpm}
     volumes:
       - ${REPOS_PATH:-~/.yats/repos}:/repos:ro
     depends_on:

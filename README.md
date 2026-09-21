@@ -254,10 +254,27 @@ Annual subscription with auto-renewal. Cancel anytime. · [Full license terms](L
 
 ## CLI reference
 
+**Per-repo config** — drop a `.yats/config.json` in the repo root (all keys optional):
+
+```json
+{
+  "indexDocs": false,
+  "docExtensions": [".md"],
+  "docPatterns": ["docs/", "README.md"],
+  "ignoredDirs": ["sandbox"],
+  "skipExtensions": [".snap"]
+}
+```
+
+`ignoredDirs`/`skipExtensions` add to the machine's config, `docExtensions`
+replaces it, `docPatterns` whitelists which doc files are sent (prefix match),
+and `indexDocs: false` skips all docs for the repo. A malformed config stops
+the run with instructions to fix it (or `--no-config` to bypass).
+
 ```bash
 yats setup                        # One-time setup wizard
 yats setup --provider openai --api-key sk-... --yes  # Non-interactive
-yats index <path> [--skip-docs]  # Index a repository
+yats index <path> [--skip-docs]  # Index a repository (--no-config: ignore .yats/config.json)
 yats search <query>               # Search indexed code
 yats list                         # List indexed repositories
 yats summary <repo>               # Show symbol/relationship counts

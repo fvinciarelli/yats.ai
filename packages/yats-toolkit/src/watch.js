@@ -27,7 +27,13 @@
 import { watch as fsWatch, statSync, readFileSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import { execSync } from "node:child_process";
-import indexRepo, { IGNORED } from "./indexer.js";
+import indexRepo, {
+  IGNORED,
+  loadYatsEnv,
+  mergeRepoConfig,
+  resolveRepoConfig,
+  shouldSkipFile,
+} from "./indexer.js";
 
 // ============================================================
 // Config
@@ -132,14 +138,31 @@ async function getRecordedCommit(baseUrl, repoName) {
   }
 }
 
-function shouldSkipPath(relPath) {
+function shouldSkipPath(relPath, extraIgnoredDirs = []) {
   if (!relPath || relPath.startsWith(".")) return true;
   const segments = relPath.split("/");
-  return segments.some((seg) => IGNORED.has(seg)) || SKIP_PATTERNS.some((p) => p.test(relPath));
+  return (
+    segments.some((seg) => IGNORED.has(seg) || extraIgnoredDirs.includes(seg)) ||
+    SKIP_PATTERNS.some((p) => p.test(relPath))
+  );
 }
 
-async function indexFile(baseUrl, repoPath, repoName, relPath) {
-  if (shouldSkipPath(relPath)) return;
+/**
+ * Build the per-file filter from the effective config (machine + repo).
+ * Doc/code filtering is delegated to indexer.shouldSkipFile (P4/P6) so
+ * `yats watch` and `yats index` behave identically.
+ */
+function makeFileFilter(effective) {
+  return (relPath) =>
+    shouldSkipPath(relPath, effective.ignoredDirs ?? []) ||
+    shouldSkipFile(relPath, {
+      ...effective,
+      skipDocs: effective.indexDocs === false,
+    });
+}
+
+async function indexFile(baseUrl, repoPath, repoName, relPath, skipFn) {
+  if (skipFn(relPath)) return;
   const fullPath = resolve(repoPath, relPath);
   let content;
   try {
@@ -163,8 +186,8 @@ async function indexFile(baseUrl, repoPath, repoName, relPath) {
   }
 }
 
-async function removeFile(baseUrl, repoName, relPath) {
-  if (shouldSkipPath(relPath)) return;
+async function removeFile(baseUrl, repoName, relPath, skipFn) {
+  if (skipFn(relPath)) return;
   console.log(`  ↻ Removing from index: ${relPath}`);
   try {
     const res = await post(baseUrl, "/index/remove", {
@@ -184,9 +207,9 @@ async function removeFile(baseUrl, repoName, relPath) {
 
 /**
  * Bring the index from `from` to `to` by streaming only the changed files.
- * Exported for tests (baseUrl is injectable).
+ * Exported for tests (baseUrl and the effective config are injectable).
  */
-export async function applyDiff(repoPath, repoName, from, to, baseUrl = DEFAULT_URL) {
+export async function applyDiff(repoPath, repoName, from, to, baseUrl = DEFAULT_URL, effective = {}) {
   let output;
   try {
     output = git(repoPath, `diff --name-status ${from}..${to}`);
@@ -198,6 +221,7 @@ export async function applyDiff(repoPath, repoName, from, to, baseUrl = DEFAULT_
     return;
   }
 
+  const skipFn = makeFileFilter(effective);
   const changes = parseNameStatus(output);
   const total =
     changes.added.length + changes.modified.length +
@@ -208,13 +232,13 @@ export async function applyDiff(repoPath, repoName, from, to, baseUrl = DEFAULT_
     `⟲${changes.renamed.length}`,
   );
 
-  for (const p of changes.deleted) await removeFile(baseUrl, repoName, p);
-  for (const r of changes.renamed) await removeFile(baseUrl, repoName, r.from);
+  for (const p of changes.deleted) await removeFile(baseUrl, repoName, p, skipFn);
+  for (const r of changes.renamed) await removeFile(baseUrl, repoName, r.from, skipFn);
   for (const p of [...changes.added, ...changes.modified]) {
-    await indexFile(baseUrl, repoPath, repoName, p);
+    await indexFile(baseUrl, repoPath, repoName, p, skipFn);
   }
   for (const r of changes.renamed) {
-    await indexFile(baseUrl, repoPath, repoName, r.to);
+    await indexFile(baseUrl, repoPath, repoName, r.to, skipFn);
   }
 
   // Flush cross-file relationships and record the new commit. Both are
@@ -237,8 +261,9 @@ export async function applyDiff(repoPath, repoName, from, to, baseUrl = DEFAULT_
 // Live mode — save-based indexing (fs.watch + debounce)
 // ============================================================
 
-function startLiveWatch(repoPath, repoName, baseUrl) {
+function startLiveWatch(repoPath, repoName, baseUrl, effective) {
   const pending = new Map();
+  const skipFn = makeFileFilter(effective);
 
   fsWatch(repoPath, { recursive: true }, (_eventType, filename) => {
     if (!filename || SKIP_PATTERNS.some((p) => p.test(filename))) return;
@@ -257,9 +282,9 @@ function startLiveWatch(repoPath, repoName, baseUrl) {
         pending.delete(fullPath);
         try {
           statSync(fullPath);
-          await indexFile(baseUrl, repoPath, repoName, relPath);
+          await indexFile(baseUrl, repoPath, repoName, relPath, skipFn);
         } catch {
-          await removeFile(baseUrl, repoName, relPath);
+          await removeFile(baseUrl, repoName, relPath, skipFn);
         }
       }, DEBOUNCE_MS),
     );
@@ -274,19 +299,21 @@ function startLiveWatch(repoPath, repoName, baseUrl) {
 
 export default async function watchRepo(args = []) {
   const live = args.includes("--live");
+  const noConfig = args.includes("--no-config");
   const baseUrl = process.env.YATS_URL ?? DEFAULT_URL;
-  const cleanArgs = args.filter((a) => a !== "--live" && a !== "--repo");
+  const cleanArgs = args.filter((a) => a !== "--live" && a !== "--repo" && a !== "--no-config");
 
   const repoPath = resolve(cleanArgs[0] ?? process.cwd());
 
   if (!cleanArgs[0] || cleanArgs[0] === "--help" || cleanArgs[0] === "-h") {
-    console.log("Usage: yats watch <path> [--live]");
+    console.log("Usage: yats watch <path> [--live] [--no-config]");
     console.log("");
     console.log("Keeps the YATS index in sync with the repository's commits.");
     console.log("Saving files without committing does NOT touch the index —");
     console.log("the graph always reflects the last commit.");
     console.log("");
-    console.log("  --live  also re-index on every file save (uncommitted code)");
+    console.log("  --live        also re-index on every file save (uncommitted code)");
+    console.log("  --no-config   ignore the repo's .yats/config.json");
     console.log("");
     console.log("  yats watch ~/my-project");
     console.log("  yats watch ~/my-project --live");
@@ -303,6 +330,11 @@ export default async function watchRepo(args = []) {
     process.exit(1);
   }
 
+  // P6 — same config resolution as `yats index`: a malformed
+  // .yats/config.json stops the run instead of watching with wrong filters.
+  const repoConfig = resolveRepoConfig(repoPath, noConfig);
+  const effective = mergeRepoConfig(loadYatsEnv(), repoConfig);
+
   console.log(`👀 Watching: ${repoPath}`);
   console.log(`   Repo: ${repoName}`);
   console.log(`   Server: ${baseUrl}`);
@@ -318,7 +350,7 @@ export default async function watchRepo(args = []) {
     } catch {
       /* non-fatal */
     }
-    startLiveWatch(repoPath, repoName, baseUrl);
+    startLiveWatch(repoPath, repoName, baseUrl, effective);
   }
 
   if (!gitOk) {
@@ -358,7 +390,7 @@ export default async function watchRepo(args = []) {
     console.log(
       `   Indexed commit ${recorded.slice(0, 8)} ≠ HEAD ${head.slice(0, 8)} — syncing...`,
     );
-    await applyDiff(repoPath, repoName, recorded, head, baseUrl);
+    await applyDiff(repoPath, repoName, recorded, head, baseUrl, effective);
     recorded = head;
   }
 
@@ -375,7 +407,7 @@ export default async function watchRepo(args = []) {
 
     console.log(`\n  ⬆ HEAD moved ${recorded ? recorded.slice(0, 8) + " → " : ""}${head.slice(0, 8)}`);
     if (recorded) {
-      await applyDiff(repoPath, repoName, recorded, head, baseUrl);
+      await applyDiff(repoPath, repoName, recorded, head, baseUrl, effective);
     } else {
       // First commit after an unborn HEAD — nothing to diff from: full index.
       await indexRepo([repoPath]);

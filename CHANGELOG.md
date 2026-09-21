@@ -5,6 +5,29 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Per-repo config — `.yats/config.json` (P6).** Each repository can now control
+  its own indexing: `indexDocs` (false = skip all docs for this repo),
+  `docExtensions` (replaces the machine's list), `docPatterns` (whitelist of doc
+  files to send, prefix match), `ignoredDirs` and `skipExtensions` (added to the
+  machine's lists). Rule: a repo can only narrow, never widen, the machine config.
+  A **malformed config stops the run** before reading any file — with a message
+  written for the AI agent running `yats index`: what is wrong, why indexing
+  stopped, and the three ways out (fix the file and re-run, delete it to use
+  machine defaults, or `--no-config`). In a TTY it asks to open `$EDITOR` and
+  retries in a loop. `yats watch` applies the same config. Design: see
+  `docs/SPIKE-per-repo-config.md`.
+
+### Fixed
+- **Hardcoded env vars in the compose templates.** `INDEX_DOCS`, `DOC_MAX_FILES`
+  and `EMBEDDING_BATCH_SIZE` are now `${VAR:-default}` interpolations (setup
+  template, repo dev compose, deployed compose), so `~/.yats/.env` can override
+  them without re-running `yats setup`. The repo's dev compose now also passes
+  the doc env block (`INDEX_DOCS`, `DOC_MAX_FILES`, `DOC_EXTENSIONS`,
+  `SKIP_EXTENSIONS`, `IGNORED_DIRS`) for parity with deployed setups.
+
 ## [0.5.0] - 2026-09-21
 
 ### Added

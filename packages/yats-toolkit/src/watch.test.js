@@ -15,6 +15,7 @@ import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
 import { parseNameStatus, applyDiff } from "./watch.js";
+import { mergeRepoConfig } from "./indexer.js";
 
 function git(cwd, cmd) {
   return execSync(`git ${cmd}`, { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
@@ -149,5 +150,48 @@ describe("applyDiff — commit-based sync (P1)", () => {
     assert.equal(requests.filter((r) => r.url === "/index/file").length, 0);
     // The commit is still recorded (idempotent sync)
     assert.equal(requests.filter((r) => r.url === "/index/commit").length, 1);
+  });
+
+  it("applies the repo config: docs skipped when indexDocs=false (P6)", async () => {
+    // New commit adding a doc file and a code file
+    writeFileSync(join(workDir, "guide.md"), "# Guide\n");
+    writeFileSync(join(workDir, "extra.txt"), "plain text\n");
+    git(workDir, "add -A");
+    git(workDir, "commit -m 'v3: add docs + code'");
+    const v3 = git(workDir, "rev-parse HEAD");
+
+    requests = [];
+    const effective = mergeRepoConfig({}, { indexDocs: false, docExtensions: [".md"] });
+    await applyDiff(workDir, repoName, v2, v3, baseUrl, effective);
+
+    const sentPaths = requests
+      .filter((r) => r.url === "/index/file")
+      .map((r) => r.body.filePath)
+      .sort();
+    assert.deepEqual(
+      sentPaths,
+      ["extra.txt"],
+      "doc files (.md) are skipped, code/plain files are sent",
+    );
+  });
+
+  it("applies docPatterns: only whitelisted docs are sent (P6)", async () => {
+    const v3 = git(workDir, "rev-parse HEAD");
+    mkdirSync(join(workDir, "docs"), { recursive: true });
+    writeFileSync(join(workDir, "docs", "api.md"), "# API\n");
+    writeFileSync(join(workDir, "notes.md"), "# Notes\n");
+    git(workDir, "add -A");
+    git(workDir, "commit -m 'v4: more docs'");
+    const v4 = git(workDir, "rev-parse HEAD");
+
+    requests = [];
+    const effective = mergeRepoConfig({}, { docExtensions: [".md"], docPatterns: ["docs/"] });
+    await applyDiff(workDir, repoName, v3, v4, baseUrl, effective);
+
+    const sentPaths = requests
+      .filter((r) => r.url === "/index/file")
+      .map((r) => r.body.filePath)
+      .sort();
+    assert.deepEqual(sentPaths, ["docs/api.md"], "only docs matching the whitelist are sent");
   });
 });

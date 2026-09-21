@@ -4,7 +4,7 @@
  *
  * Usage:
  *   yats setup              # One-time setup wizard
- *   yats index <path>       # Index a repository (--skip-docs: skip docs)
+ *   yats index <path>       # Index a repo (--skip-docs, --no-config)
  *   yats search <query>     # Search indexed code
  *   yats list               # List indexed repositories
  *   yats summary <repo>     # Show repository summary
@@ -47,8 +47,9 @@ switch (cmd) {
   case "index":
   case "add": {
     const skipDocs = args.includes("--skip-docs");
-    const cleanArgs = args.filter(a => a !== "--skip-docs");
-    import("../src/indexer.js").then(m => m.default(cleanArgs, { skipDocs }));
+    const noConfig = args.includes("--no-config");
+    const cleanArgs = args.filter((a) => a !== "--skip-docs" && a !== "--no-config");
+    import("../src/indexer.js").then(m => m.default(cleanArgs, { skipDocs, noConfig }));
     break;
   }
   case "reindex":
@@ -110,7 +111,7 @@ switch (cmd) {
     console.log(`YATS Toolkit — Code intelligence for AI agents`);
     console.log(``);
     console.log(`  yats setup              Setup wizard`);
-    console.log(`  yats index <path>       Index a repository (--skip-docs: skip docs)`);
+    console.log(`  yats index <path>       Index a repo (--skip-docs, --no-config)`);
     console.log(`  yats search <query>     Search indexed code`);
     console.log(`  yats list               List indexed repositories`);
     console.log(`  yats summary <repo>     Show repository summary`);
@@ -123,7 +124,7 @@ switch (cmd) {
     console.log(`  yats update-base        Update Docker images`);
     console.log(`  yats bridge             Stdio proxy for Copilot/Claude`);
     console.log(`  yats benchmark          AI agent token comparison`);
-    console.log(`  yats watch <path>       Sync index with git commits (--live: on save)`);
+    console.log(`  yats watch <path>       Sync index with git commits (--live, --no-config)`);
     console.log(`  yats connect [agent]    Show agent setup config`);
     break;
 }
