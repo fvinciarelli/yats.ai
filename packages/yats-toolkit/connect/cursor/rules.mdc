@@ -17,3 +17,11 @@ This repo is indexed by YATS. Use these MCP tools for code questions:
 2. `find_symbol` on top hits
 3. `expand_graph` or `find_callers`/`find_callees` to trace flow
 4. Read files only at exact lines from YATS results
+
+## At startup
+
+Run `yats list` and check if `__REPO_PATH__` is indexed. If it's not, run:
+
+  yats index __REPO_PATH__
+
+and wait for it to finish.

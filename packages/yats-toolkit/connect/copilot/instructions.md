@@ -8,3 +8,11 @@ This repo is indexed by YATS MCP. You have tools: search_code, find_symbol, find
 - Start with search_code, then find_symbol on top hits, then expand_graph.
 - Pass `path="__REPO_PATH__"` on every call — YATS identifies repos by their full path.
 - Do NOT invent answers — verify with YATS or read files.
+
+## At startup
+
+Run `yats list` and check if `__REPO_PATH__` is indexed. If it's not, run:
+
+  yats index __REPO_PATH__
+
+and wait for it to finish.

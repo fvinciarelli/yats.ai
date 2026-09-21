@@ -17,6 +17,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
 
 const B = "\x1b[1m";
 const D = "\x1b[2m";
@@ -197,7 +198,7 @@ function tomlAppendYats(content) {
   return out;
 }
 
-async function installFiles(agentKey) {
+async function installFiles(agentKey, prompter) {
   const agent = AGENTS[agentKey];
   if (!agent) {
     console.error(`Unknown agent: ${agentKey}`);
@@ -209,7 +210,6 @@ async function installFiles(agentKey) {
   console.log(`  ${D}Existing files are never overwritten — YATS content is merged or appended.${R}`);
   console.log("");
 
-  const prompter = makePrompter();
   const proceed = (await prompter.ask(`  ${B}Proceed with install for ${agent.name}? [y/N]${R} `)).toLowerCase() === "y";
   if (!proceed) {
     prompter.close();
@@ -301,7 +301,55 @@ async function installFiles(agentKey) {
   console.log(`  Done: ${installed} installed, ${skipped} skipped.`);
   console.log(`  Full instructions: ${C}${agent.url}${R}`);
   console.log("");
-  prompter.close();
+}
+
+// ============================================================
+// Claude Code MCP activation
+// ============================================================
+
+/**
+ * After installing Claude config files, ask how to activate the YATS MCP
+ * server. Claude Code doesn't load project-scoped servers (.mcp.json)
+ * without explicit approval, so offer the two no-approval scopes (local /
+ * user) or leaving activation to the user (/mcp or session restart).
+ */
+async function claudeMcpActivation(prompter) {
+  const mcpConfig = getYatsMcpConfig();
+  const yatsUrl = mcpConfig?.mcpServers?.yats?.url;
+  if (!yatsUrl) return;
+
+  console.log("");
+  console.log(`  ${Y}${B}⚠️  Claude Code doesn't load project MCP servers without approval.${R}`);
+  console.log(`  ${D}Activate the YATS MCP server now (local/user scopes need no approval):${R}`);
+  console.log("");
+  console.log(`    ${B}1${R}. This project only  (--scope local)`);
+  console.log(`    ${B}2${R}. All your projects  (--scope user)`);
+  console.log(`    ${B}3${R}. Do nothing (activate later with /mcp or by restarting the session)`);
+  console.log("");
+  const choice = await prompter.ask(`  ${B}Pick [1-3]:${R} `);
+
+  const scope = choice === "1" ? "local" : choice === "2" ? "user" : null;
+  if (!scope) {
+    console.log("");
+    console.log(`  ${Y}—${R} Skipped. Remember: restart the Claude session and approve yats (${D}/mcp${R}) to load YATS tools.`);
+    return;
+  }
+
+  const args = ["mcp", "add", "--scope", scope, "--transport", "sse", "yats", yatsUrl];
+  console.log(`  ${D}Running: claude ${args.join(" ")}${R}`);
+  console.log("");
+  const res = spawnSync("claude", args, { stdio: "inherit" });
+  if (res.error) {
+    console.error(`  ${RED}✗${R} Could not run 'claude' (${res.error.message}).`);
+  } else if (res.status !== 0) {
+    console.error(`  ${RED}✗${R} 'claude mcp add' failed (exit ${res.status}).`);
+  } else {
+    console.log(`  ${G}✓${R} YATS MCP activated with scope '${scope}'. Restart the Claude session to load it.`);
+  }
+  if (res.error || res.status !== 0) {
+    console.error(`  ${RED}  Run it manually: claude mcp add --scope ${scope} --transport sse yats ${yatsUrl}${R}`);
+  }
+  console.log("");
 }
 
 // ============================================================
@@ -398,7 +446,12 @@ export default async function connect(args) {
       console.error(`  Agents: ${Object.keys(AGENTS).join(", ")}`);
       process.exit(1);
     }
-    await installFiles(agentKey);
+    const prompter = makePrompter();
+    await installFiles(agentKey, prompter);
+    if (agentKey === "claude") {
+      await claudeMcpActivation(prompter);
+    }
+    prompter.close();
     return;
   }
 

@@ -27,3 +27,11 @@ This repository is indexed by YATS MCP. You have these tools:
 ## Repository
 
 Use `path="__REPO_PATH__"` for every call — YATS identifies repos by their full path.
+
+## At startup
+
+Run `yats list` and check if `__REPO_PATH__` is indexed. If it's not, run:
+
+  yats index __REPO_PATH__
+
+and wait for it to finish.

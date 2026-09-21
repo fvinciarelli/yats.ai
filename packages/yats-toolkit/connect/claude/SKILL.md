@@ -26,3 +26,11 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
 - Prefer `expand_graph` over multiple individual `find_symbol` calls.
 - If YATS returns empty, try a different query before falling back to file reads.
 - Use `path="__REPO_PATH__"` for every call — YATS identifies repos by their full path.
+
+## At startup
+
+Run `yats list` and check if `__REPO_PATH__` is indexed. If it's not, run:
+
+  yats index __REPO_PATH__
+
+and wait for it to finish.
