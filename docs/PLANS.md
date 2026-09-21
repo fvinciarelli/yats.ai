@@ -153,7 +153,20 @@ polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 
 ## Status
 
-- P1: approved as plan by user (2026-08-22). Not started.
+## Status
+
+- P1: approved as plan by user (2026-08-22). **Implemented (2026-09-21):**
+  `yats watch` is now commit-based — it polls `git rev-parse HEAD` every ~2s
+  (`YATS_WATCH_POLL_MS`) on the host and, when HEAD changes (new commit or
+  branch checkout), streams only `git diff --name-status <lastIndexed>..HEAD`
+  (added/modified via `/index/file`, deleted/renamed via `/index/remove`),
+  then finalizes (`/index/complete`) and records the new commit
+  (`POST /index/commit`). Saves without committing do not touch the index.
+  `yats index` also records its commit now, so watch starts diffing from
+  there; on startup without a recorded commit it runs a full index first.
+  `--live` restores save-based indexing on top of the commit loop (the only
+  mode available for non-git directories). Renames still lose incoming edges
+  (documented limitation, see P2).
 - P2: approved as plan by user (2026-08-22). **Implemented (2026-09-21):** in-place
   symbol updates on re-index — surviving symbols keep their node and incoming
   edges (only outgoing edges are regenerated); disappeared symbols are deleted;

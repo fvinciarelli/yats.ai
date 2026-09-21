@@ -48,7 +48,8 @@
     "README.md"
   ],
   "scripts": {
-    "start": "node bin/setup.js"
+    "start": "node bin/setup.js",
+    "test": "node --test src/*.test.js"
   },
   "dependencies": {},
   "engines": {

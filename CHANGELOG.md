@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Commit-based `yats watch` (P1).** The watcher no longer tracks the working tree
+  — it polls `git rev-parse HEAD` every ~2s on the host and, when HEAD changes
+  (new commit or branch checkout), streams only `git diff --name-status
+  <lastIndexed>..HEAD`: added/modified files via `/index/file`, deleted/renamed via
+  `/index/remove`, then finalizes cross-file relationships (`/index/complete`) and
+  records the new commit. Saving files without committing does not touch the index,
+  so the graph always reflects the last commit — `git checkout main` after dirty
+  experiments leaves the index describing main. `yats index` also records its
+  indexed commit now, so `watch` starts diffing from there; on startup without a
+  recorded commit it runs a full index first. `--live` restores save-based
+  indexing on top of the commit loop (the only mode for non-git directories).
+  - New endpoints: `GET /index/commit?repository=<path>` and `POST /index/commit
+    {repository, commit}` (records the commit on the Repository node, which
+    already existed via `getLastIndexedCommit`/`setLastIndexedCommit`).
+  - `YATS_WATCH_POLL_MS` tunes the poll interval (default 2000ms).
+
 ### Fixed
-- **In-place symbol updates on re-index (P2).** Re-indexing a file used to delete all of
+- **`ensureIndexed` read the last indexed commit by basename** while it was stored by
+  full root path, so server-side incremental detection never triggered. Now reads
+  by the repository path, consistent with the commit-tracking key used by
+  `yats index` / `yats watch`.
+- In-place symbol updates on re-index (P2). Re-indexing a file used to delete all of
   its symbols with `DETACH DELETE`, which also destroyed *incoming* edges — re-indexing
   `base.py` killed `JiraStrategy -> TicketSource` because `jira.py` was not re-indexed at
   that moment, degrading the graph with every incremental run. Now surviving symbols

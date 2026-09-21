@@ -1,134 +1,253 @@
 #!/usr/bin/env node
 /**
- * yats watch — file watcher that keeps the YATS index in sync with live edits.
+ * yats watch <path> [--live] — keeps the YATS index in sync with the
+ * repository's *commits*, not the working tree (P1).
  *
  * Usage:
- *   yats watch <path> [--repo <name>]
+ *   yats watch <path>          # commit-based (default)
+ *   yats watch <path> --live   # also index on every file save
  *
- * Zero dependencies — uses Node.js built-in fs.watch and http.
+ * Commit-based mode:
+ *   - Polls `git rev-parse HEAD` every YATS_WATCH_POLL_MS (default 2000ms).
+ *   - When HEAD changes (new commit OR branch checkout), diffs
+ *     <lastIndexedCommit>..HEAD and streams only the changed files.
+ *   - Saving files WITHOUT committing does NOT touch the index — the graph
+ *     always reflects the last commit.
+ *   - On startup, if the repo has no recorded indexed commit, it runs a full
+ *     `yats index` first so it never starts from a half-indexed state.
+ *
+ * --live mode restores save-based indexing (fs.watch + debounce) on top of
+ * the commit loop, for agents working on uncommitted code. Without a git
+ * repository, --live is the only mode available.
+ *
+ * Zero dependencies — Node built-ins only. git runs on the host (the server
+ * may live in a container without git).
  */
 
-import { watch, statSync, readFileSync } from "node:fs";
-import { resolve, basename, relative } from "node:path";
-import { request } from "node:http";
+import { watch as fsWatch, statSync, readFileSync } from "node:fs";
+import { resolve, relative } from "node:path";
+import { execSync } from "node:child_process";
+import indexRepo, { IGNORED } from "./indexer.js";
+
+// ============================================================
+// Config
+// ============================================================
+
+const DEFAULT_URL = "http://localhost:5555";
+const POLL_MS = parseInt(process.env.YATS_WATCH_POLL_MS ?? "2000", 10);
+const DEBOUNCE_MS = parseInt(process.env.YATS_WATCH_DEBOUNCE_MS ?? "500", 10);
+const SKIP_PATTERNS = [
+  /node_modules/,
+  /\.git\//,
+  /vendor\//,
+  /__pycache__/,
+  /\.next\//,
+  /dist\//,
+  /\.yarn\//,
+];
+
+// ============================================================
+// git helpers (host side — the server container has no git)
+// ============================================================
+
+function git(cwd, cmd) {
+  return execSync(`git ${cmd}`, { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
+}
+
+function isGitRepo(repoPath) {
+  try {
+    git(repoPath, "rev-parse --git-dir");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Current HEAD, or null for an unborn branch (no commits yet). */
+function headCommit(repoPath) {
+  try {
+    return git(repoPath, "rev-parse HEAD");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse `git diff --name-status` output.
+ * Handles the rename format (`R100\told\tnew`) and quoted paths.
+ */
+export function parseNameStatus(output) {
+  const changes = { added: [], modified: [], deleted: [], renamed: [] };
+
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const [status, ...rest] = line.split("\t");
+    if (!status) continue;
+
+    const unquote = (p) =>
+      p && p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p;
+
+    if (status.startsWith("R") && rest.length >= 2) {
+      changes.renamed.push({ from: unquote(rest[0]), to: unquote(rest[1]) });
+    } else if (status.startsWith("A")) {
+      changes.added.push(unquote(rest[0]));
+    } else if (status.startsWith("M")) {
+      changes.modified.push(unquote(rest[0]));
+    } else if (status.startsWith("D")) {
+      changes.deleted.push(unquote(rest[0]));
+    }
+  }
+
+  return changes;
+}
 
 // ============================================================
 // HTTP helpers
 // ============================================================
 
 function post(baseUrl, path, body) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify(body);
-    const url = new URL(path, baseUrl);
-    const req = request(
-      {
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(data),
-        },
-      },
-      (res) => {
-        let body = "";
-        res.on("data", (chunk) => (body += chunk));
-        res.on("end", () => {
-          if (res.statusCode === 200) {
-            resolve(body);
-          } else {
-            reject(new Error(`HTTP ${res.statusCode}: ${body}`));
-          }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(data);
-    req.end();
+  return fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 }
 
-export default async function watchRepo(args = []) {
-  // ============================================================
-  // Config
-  // ============================================================
+/** The repository identity is its full path — never the basename. */
+function repoNameFor(repoPath) {
+  return repoPath;
+}
 
-  const YATS_URL = process.env.YATS_URL ?? "http://localhost:5555";
-  const DEBOUNCE_MS = parseInt(process.env.YATS_WATCH_DEBOUNCE ?? "500", 10);
+async function getRecordedCommit(baseUrl, repoName) {
+  const res = await fetch(
+    `${baseUrl}/index/commit?repository=${encodeURIComponent(repoName)}`,
+  );
+  if (!res.ok) return null;
+  try {
+    const data = await res.json();
+    return data.commit ?? null;
+  } catch {
+    return null;
+  }
+}
 
-  const repoPath = resolve(args[0] ?? process.cwd());
-  const repoArgIdx = args.indexOf("--repo");
-  const repoName = repoArgIdx >= 0 ? args[repoArgIdx + 1] : basename(repoPath);
+function shouldSkipPath(relPath) {
+  if (!relPath || relPath.startsWith(".")) return true;
+  const segments = relPath.split("/");
+  return segments.some((seg) => IGNORED.has(seg)) || SKIP_PATTERNS.some((p) => p.test(relPath));
+}
 
-  if (!args[0] || args[0] === "--help" || args[0] === "-h") {
-    console.log("Usage: yats watch <path> [--repo <name>]");
-    console.log("");
-    console.log("Watches a directory and keeps the YATS index in sync.");
-    console.log("When files change, it tells the YATS server to re-index them.");
-    console.log("");
-    console.log("  yats watch ~/my-project");
-    console.log("  yats watch ~/my-project --repo my-api");
-    process.exit(1);
+async function indexFile(baseUrl, repoPath, repoName, relPath) {
+  if (shouldSkipPath(relPath)) return;
+  const fullPath = resolve(repoPath, relPath);
+  let content;
+  try {
+    content = readFileSync(fullPath, "utf-8");
+  } catch {
+    return; // deleted between diff and read — next commit will catch it
+  }
+  if (content.includes("\0") || content.length > 1_000_000) return; // binary/huge
+
+  console.log(`  ↻ Indexing: ${relPath}`);
+  try {
+    const res = await post(baseUrl, "/index/file", {
+      repoName,
+      filePath: relPath,
+      content,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    console.log(`  ✓ Done: ${relPath}`);
+  } catch (err) {
+    console.error(`  ✗ Failed: ${relPath} — ${err.message}`);
+  }
+}
+
+async function removeFile(baseUrl, repoName, relPath) {
+  if (shouldSkipPath(relPath)) return;
+  console.log(`  ↻ Removing from index: ${relPath}`);
+  try {
+    const res = await post(baseUrl, "/index/remove", {
+      repository: repoName,
+      path: relPath,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    console.log(`  ✓ Removed: ${relPath}`);
+  } catch (err) {
+    console.error(`  ✗ Failed: ${relPath} — ${err.message}`);
+  }
+}
+
+// ============================================================
+// Commit diff application
+// ============================================================
+
+/**
+ * Bring the index from `from` to `to` by streaming only the changed files.
+ * Exported for tests (baseUrl is injectable).
+ */
+export async function applyDiff(repoPath, repoName, from, to, baseUrl = DEFAULT_URL) {
+  let output;
+  try {
+    output = git(repoPath, `diff --name-status ${from}..${to}`);
+  } catch (err) {
+    // E.g. the recorded commit was garbage-collected — full re-index is the
+    // only safe path.
+    console.log(`  ⚠ Cannot diff ${from.slice(0, 8)}..${to.slice(0, 8)} — full re-index...`);
+    await indexRepo([repoPath]);
+    return;
   }
 
-  async function indexFile(filePath) {
-    const rel = relative(repoPath, filePath);
-    console.log(`  ↻ Indexing: ${rel}`);
-    try {
-      const content = readFileSync(filePath, "utf-8");
-      // Send the RELATIVE path — symbol IDs must match the ones from `yats index`
-      // (the server scopes symbol IDs to the repository-relative path).
-      await post(YATS_URL, "/index/file", { filePath: rel, content, repository: repoName });
-      console.log(`  ✓ Done: ${rel}`);
-    } catch (err) {
-      console.error(`  ✗ Failed: ${rel} — ${err.message}`);
-    }
+  const changes = parseNameStatus(output);
+  const total =
+    changes.added.length + changes.modified.length +
+    changes.deleted.length + changes.renamed.length;
+  console.log(
+    `  ${total} changed file(s): +${changes.added.length} ` +
+    `~${changes.modified.length} -${changes.deleted.length} ` +
+    `⟲${changes.renamed.length}`,
+  );
+
+  for (const p of changes.deleted) await removeFile(baseUrl, repoName, p);
+  for (const r of changes.renamed) await removeFile(baseUrl, repoName, r.from);
+  for (const p of [...changes.added, ...changes.modified]) {
+    await indexFile(baseUrl, repoPath, repoName, p);
+  }
+  for (const r of changes.renamed) {
+    await indexFile(baseUrl, repoPath, repoName, r.to);
   }
 
-  async function removeFile(filePath) {
-    const rel = relative(repoPath, filePath);
-    console.log(`  ↻ Removing from index: ${rel}`);
-    try {
-      await post(YATS_URL, "/index/remove", { path: rel, repository: repoName });
-      console.log(`  ✓ Removed: ${rel}`);
-    } catch (err) {
-      console.error(`  ✗ Failed: ${rel} — ${err.message}`);
-    }
+  // Flush cross-file relationships and record the new commit. Both are
+  // non-fatal: the server also flushes on its debounce timer, and watch
+  // re-syncs on the next poll if the commit was not recorded.
+  try {
+    await post(baseUrl, "/index/complete", { repository: repoName });
+  } catch {
+    /* non-fatal */
   }
+  try {
+    await post(baseUrl, "/index/commit", { repository: repoName, commit: to });
+  } catch {
+    /* non-fatal */
+  }
+  console.log(`  ✓ Index synced to commit ${to.slice(0, 8)}`);
+}
 
-  // ============================================================
-  // Debounced watcher
-  // ============================================================
+// ============================================================
+// Live mode — save-based indexing (fs.watch + debounce)
+// ============================================================
 
+function startLiveWatch(repoPath, repoName, baseUrl) {
   const pending = new Map();
-  const SKIP_PATTERNS = [
-    /node_modules/,
-    /\.git\//,
-    /vendor\//,
-    /__pycache__/,
-    /\.next\//,
-    /dist\//,
-    /\.yarn\//,
-  ];
 
-  function shouldSkip(filename) {
-    if (!filename || filename.startsWith(".")) return true;
-    return SKIP_PATTERNS.some((p) => p.test(filename));
-  }
-
-  console.log(`👀 Watching: ${repoPath}`);
-  console.log(`   Repo: ${repoName}`);
-  console.log(`   Server: ${YATS_URL}`);
-  console.log(`   (debounce: ${DEBOUNCE_MS}ms)`);
-  console.log("");
-
-  watch(repoPath, { recursive: true }, (eventType, filename) => {
-    if (!filename || shouldSkip(filename)) return;
+  fsWatch(repoPath, { recursive: true }, (_eventType, filename) => {
+    if (!filename || SKIP_PATTERNS.some((p) => p.test(filename))) return;
+    if (filename.startsWith(".")) return;
 
     const fullPath = resolve(repoPath, filename);
+    const relPath = relative(repoPath, fullPath);
+    if (shouldSkipPath(relPath)) return;
 
-    // Debounce: group rapid changes to the same file
     const existing = pending.get(fullPath);
     if (existing) clearTimeout(existing);
 
@@ -136,24 +255,132 @@ export default async function watchRepo(args = []) {
       fullPath,
       setTimeout(async () => {
         pending.delete(fullPath);
-
-        // Check if file still exists (or was deleted)
         try {
           statSync(fullPath);
-          await indexFile(fullPath);
+          await indexFile(baseUrl, repoPath, repoName, relPath);
         } catch {
-          await removeFile(fullPath);
+          await removeFile(baseUrl, repoName, relPath);
         }
       }, DEBOUNCE_MS),
     );
   });
 
-  // Keep the process alive
-  process.stdin.resume();
+  console.log(`   (live saves: every save re-indexes the file, debounced ${DEBOUNCE_MS}ms)`);
+}
 
-  // Clean shutdown
-  process.on("SIGINT", () => {
-    console.log("\n👋 Stopped watching.");
-    process.exit(0);
-  });
+// ============================================================
+// Main
+// ============================================================
+
+export default async function watchRepo(args = []) {
+  const live = args.includes("--live");
+  const baseUrl = process.env.YATS_URL ?? DEFAULT_URL;
+  const cleanArgs = args.filter((a) => a !== "--live" && a !== "--repo");
+
+  const repoPath = resolve(cleanArgs[0] ?? process.cwd());
+
+  if (!cleanArgs[0] || cleanArgs[0] === "--help" || cleanArgs[0] === "-h") {
+    console.log("Usage: yats watch <path> [--live]");
+    console.log("");
+    console.log("Keeps the YATS index in sync with the repository's commits.");
+    console.log("Saving files without committing does NOT touch the index —");
+    console.log("the graph always reflects the last commit.");
+    console.log("");
+    console.log("  --live  also re-index on every file save (uncommitted code)");
+    console.log("");
+    console.log("  yats watch ~/my-project");
+    console.log("  yats watch ~/my-project --live");
+    process.exit(1);
+  }
+
+  const repoName = repoNameFor(repoPath);
+
+  // Server reachability
+  try {
+    await fetch(`${baseUrl}/health`);
+  } catch {
+    console.error(`Cannot reach YATS at ${baseUrl}. Is it running?`);
+    process.exit(1);
+  }
+
+  console.log(`👀 Watching: ${repoPath}`);
+  console.log(`   Repo: ${repoName}`);
+  console.log(`   Server: ${baseUrl}`);
+  console.log(`   Mode: ${live ? "commits + live saves" : "commits only"}`);
+  console.log("");
+
+  const gitOk = isGitRepo(repoPath);
+
+  if (live) {
+    // Ensure metadata registration so the repo shows up in list_repositories
+    try {
+      await post(baseUrl, "/index", { path: repoPath });
+    } catch {
+      /* non-fatal */
+    }
+    startLiveWatch(repoPath, repoName, baseUrl);
+  }
+
+  if (!gitOk) {
+    if (live) {
+      console.log("   (not a git repository — live saves only)");
+      process.stdin.resume();
+      process.on("SIGINT", () => {
+        console.log("\n👋 Stopped watching.");
+        process.exit(0);
+      });
+      return;
+    }
+    console.error(
+      "Not a git repository — commit-based watch requires git.\n" +
+      "Use `yats watch <path> --live` to index on every save instead.",
+    );
+    process.exit(1);
+  }
+
+  // ============================================================
+  // Commit-based loop
+  // ============================================================
+
+  let recorded = await getRecordedCommit(baseUrl, repoName);
+  let head = headCommit(repoPath);
+
+  if (recorded == null || recorded.length === 0) {
+    if (head) {
+      console.log("   No recorded index commit — running a full index first...");
+      await indexRepo([repoPath]);
+      recorded = headCommit(repoPath);
+    } else {
+      console.log("   Repo has no commits yet — waiting for the first commit...");
+      recorded = null;
+    }
+  } else if (head && recorded !== head) {
+    console.log(
+      `   Indexed commit ${recorded.slice(0, 8)} ≠ HEAD ${head.slice(0, 8)} — syncing...`,
+    );
+    await applyDiff(repoPath, repoName, recorded, head, baseUrl);
+    recorded = head;
+  }
+
+  if (recorded) {
+    console.log(`   ✓ In sync with commit ${recorded.slice(0, 8)}`);
+  }
+  console.log(`   (polling HEAD every ${POLL_MS}ms — commits trigger re-index)`);
+  console.log("");
+
+  while (true) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+    head = headCommit(repoPath);
+    if (!head || head === recorded) continue;
+
+    console.log(`\n  ⬆ HEAD moved ${recorded ? recorded.slice(0, 8) + " → " : ""}${head.slice(0, 8)}`);
+    if (recorded) {
+      await applyDiff(repoPath, repoName, recorded, head, baseUrl);
+    } else {
+      // First commit after an unborn HEAD — nothing to diff from: full index.
+      await indexRepo([repoPath]);
+    }
+    recorded = head;
+    console.log("");
+  }
 }

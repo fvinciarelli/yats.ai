@@ -47,6 +47,7 @@ export class McpServer {
   private readonly handlers: Map<string, ToolHandler>;
   private readonly logger: Logger;
   private readonly indexer: McpDependencies["indexer"];
+  private readonly graphRepository: McpDependencies["graphRepository"];
   private running = false;
 
   constructor(deps: McpDependencies) {
@@ -54,6 +55,7 @@ export class McpServer {
     this.tools = getAllToolDefinitions();
     this.handlers = createToolHandlers(deps);
     this.indexer = deps.indexer;
+    this.graphRepository = deps.graphRepository;
   }
 
   // ==========================================================
@@ -336,6 +338,16 @@ export class McpServer {
         return;
       }
 
+      // Last indexed commit — read/write (used by commit-based `yats watch`, P1)
+      if (req.method === "GET" && url.pathname === "/index/commit") {
+        this.handleGetIndexCommit(req, res, url);
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/index/commit") {
+        this.handleSetIndexCommit(req, res);
+        return;
+      }
+
       // Rebuild vector index (re-embed all symbols) — used by `yats reindex --rebuild-vectors`
       if (req.method === "POST" && url.pathname === "/reindex") {
         this.handleRebuildVectors(req, res);
@@ -559,6 +571,63 @@ export class McpServer {
       const result = await this.indexer.removeFile(repository, path);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, removed: result.removed, file: path }));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  /**
+   * GET /index/commit?repository=<rootPath> — the commit the server considers
+   * the repository indexed at (null if never recorded). Used by the
+   * commit-based `yats watch` to know where to start diffing from.
+   */
+  private async handleGetIndexCommit(
+    _req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const repository = url.searchParams.get("repository");
+    if (!repository) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "repository query parameter is required" }));
+      return;
+    }
+    try {
+      const commit = await this.graphRepository.getLastIndexedCommit(repository);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, repository, commit }));
+    } catch (err: any) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  /**
+   * POST /index/commit {repository, commit} — record that the repository was
+   * indexed at this commit. Called by `yats index` after a full run and by
+   * `yats watch` after applying a commit diff. Ensures the Repository node
+   * exists first (watch may record without a prior /index registration).
+   */
+  private async handleSetIndexCommit(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = await this.readBody(req);
+    try {
+      const { repository, commit } = JSON.parse(body);
+      if (!repository || !commit) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "repository and commit are required" }));
+        return;
+      }
+      await this.graphRepository.upsertRepositoryMetadata(
+        repository.split("/").pop() || repository,
+        repository,
+      );
+      await this.graphRepository.setLastIndexedCommit(repository, commit);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, repository, commit }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));

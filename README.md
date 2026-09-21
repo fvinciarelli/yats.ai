@@ -202,7 +202,7 @@ YATS doesn't index once and go stale. When you or your agent edits a file, the i
 | 🔄 **Auto-reindex on query** | Every search checks if your repo changed since the last index. New commits? YATS incrementally re-indexes only what changed — before answering. |
 | 📝 **Index a single file** | Call `index_file` and only that file gets re-analyzed, embedded, and stored. Under a second. |
 | 🗑 **Remove on delete** | Call `remove_file` and its symbols disappear from the graph instantly. No dead references. |
-| 👀 **Live watcher** | `yats watch ~/my-project` — every file change triggers an automatic re-index. |
+| 👀 **Commit-based watcher** | `yats watch ~/my-project` — every commit re-indexes only what changed (saves without committing don't touch the index). Add `--live` to also index on every save. |
 
 ---
 
@@ -272,7 +272,8 @@ yats connect [agent]              # Show agent setup config
 yats connect --install <agent>    # Auto-place config files
 yats bridge                       # MCP stdio ↔ HTTP proxy (for CLI-only agents)
 yats benchmark                    # AI agent token comparison
-yats watch <path>                 # Auto-reindex on file changes
+yats watch <path>                 # Sync index with git commits
+                                  # (--live: also re-index on every save)
 ```
 
 ---

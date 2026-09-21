@@ -586,7 +586,7 @@ export class IndexerService implements Indexer {
           repositoryPath,
         );
         const lastCommit = await this.deps.graphRepository.getLastIndexedCommit(
-          repoName,
+          repositoryPath,
         );
 
         if (lastCommit && currentCommit !== lastCommit) {

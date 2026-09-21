@@ -7,7 +7,7 @@ import { join, relative } from "node:path";
 
 const YATS_URL = process.env.YATS_URL || "http://localhost:5555";
 
-const IGNORED = new Set([
+export const IGNORED = new Set([
   "node_modules", ".git", "dist", "build", ".next", "__pycache__",
   "vendor", "target", "bin", "obj", ".venv", "venv", ".yarn", ".pnpm",
 ]);
@@ -120,6 +120,27 @@ export default async function indexRepo(args, options = {}) {
     }
   } catch {
     // Non-fatal — the server flushes on its own debounce timer.
+  }
+
+  // Record the indexed commit so `yats watch` knows where to start diffing
+  // from (P1: the index reflects the last commit, not the last save).
+  try {
+    const { execSync } = await import("node:child_process");
+    const commit = execSync("git rev-parse HEAD", {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    if (commit) {
+      await fetch(`${YATS_URL}/index/commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repository: repoName, commit }),
+      });
+      console.log(`  ✓ Indexed commit recorded: ${commit.slice(0, 8)}`);
+    }
+  } catch {
+    // Not a git repo (or server unreachable) — watch will handle it.
   }
 
   // Report the real totals from the graph. The server flushes incrementally

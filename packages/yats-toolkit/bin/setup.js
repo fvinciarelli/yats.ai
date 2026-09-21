@@ -17,7 +17,8 @@
  *   yats update-base        # Update Docker images
  *   yats bridge             # MCP stdio ↔ HTTP proxy (for Copilot, Claude)
  *   yats benchmark          # AI agent token comparison
- *   yats watch <path>       # Watch a repo and keep the index live
+ *   yats watch <path>       # Keep the index in sync with git commits
+ *   yats watch <path> --live  # Also re-index on every save
  *   yats connect [agent]    # Show or install agent config
  */
 
@@ -122,7 +123,7 @@ switch (cmd) {
     console.log(`  yats update-base        Update Docker images`);
     console.log(`  yats bridge             Stdio proxy for Copilot/Claude`);
     console.log(`  yats benchmark          AI agent token comparison`);
-    console.log(`  yats watch <path>       Keep index in sync with live edits`);
+    console.log(`  yats watch <path>       Sync index with git commits (--live: on save)`);
     console.log(`  yats connect [agent]    Show agent setup config`);
     break;
 }
