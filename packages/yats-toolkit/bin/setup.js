@@ -4,7 +4,7 @@
  *
  * Usage:
  *   yats setup              # One-time setup wizard
- *   yats index <path>       # Index a repository
+ *   yats index <path>       # Index a repository (--skip-docs: skip docs)
  *   yats search <query>     # Search indexed code
  *   yats list               # List indexed repositories
  *   yats summary <repo>     # Show repository summary
@@ -110,7 +110,7 @@ switch (cmd) {
     console.log(`YATS Toolkit — Code intelligence for AI agents`);
     console.log(``);
     console.log(`  yats setup              Setup wizard`);
-    console.log(`  yats index <path>       Index a repository`);
+    console.log(`  yats index <path>       Index a repository (--skip-docs: skip docs)`);
     console.log(`  yats search <query>     Search indexed code`);
     console.log(`  yats list               List indexed repositories`);
     console.log(`  yats summary <repo>     Show repository summary`);

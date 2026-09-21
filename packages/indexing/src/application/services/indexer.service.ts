@@ -691,9 +691,13 @@ export class IndexerService implements Indexer {
     content: string,
   ): Promise<void> {
     // Route documentation files to the doc pipeline — indexed from the content
-    // received over the network (not from the server filesystem).
+    // received over the network (not from the server filesystem). Respect
+    // INDEX_DOCS=false exactly like the full pipeline does (P4): docs sent
+    // through the per-file path are dropped instead of always indexed.
     if (this.isDocumentationFile(filePath)) {
-      await this.indexDocFileContent(filePath, repositoryName, content);
+      if (process.env.INDEX_DOCS !== "false") {
+        await this.indexDocFileContent(filePath, repositoryName, content);
+      }
       return;
     }
 
@@ -904,6 +908,10 @@ export class IndexerService implements Indexer {
     repositoryPath: string,
     content: string,
   ): Promise<number> {
+    // Defense in depth: never index docs when disabled, regardless of which
+    // route reached this method (full pipeline or per-file path).
+    if (process.env.INDEX_DOCS === "false") return 0;
+
     const sections = this.parseMarkdownSections(content, filePath);
 
     if (sections.length === 0) return 0;

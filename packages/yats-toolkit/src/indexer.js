@@ -1,9 +1,13 @@
 /**
- * yats index <path> — Index a repository by sending files to YATS server.
+ * yats index <path> [--skip-docs] — Index a repository by sending files to YATS server.
  * Reads each file from the host and POSTs it via HTTP.
+ *
+ * --skip-docs: skip documentation files (DOC_EXTENSIONS, default .md/.mdx/.rst/
+ * .txt/.adoc/.org/.wiki/.readme) instead of only .md files.
  */
 import { readFileSync, statSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { homedir } from "node:os";
 
 const YATS_URL = process.env.YATS_URL || "http://localhost:5555";
 
@@ -12,14 +16,49 @@ export const IGNORED = new Set([
   "vendor", "target", "bin", "obj", ".venv", "venv", ".yarn", ".pnpm",
 ]);
 
-async function walk(dir) {
+export const DEFAULT_DOC_EXTENSIONS = ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme";
+
+/**
+ * Read the YATS config written by `yats setup` (~/.yats/.env), so the CLI
+ * filters files consistently with the server (DOC_EXTENSIONS, SKIP_EXTENSIONS,
+ * IGNORED_DIRS). Accepts an explicit path for tests.
+ */
+export function loadYatsEnv(envPath = null) {
+  const file = envPath ?? join(homedir(), ".yats", ".env");
+  const env = {};
+  try {
+    for (const line of readFileSync(file, "utf-8").split("\n")) {
+      if (!line.trim() || line.trim().startsWith("#")) continue;
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m) env[m[1]] = m[2];
+    }
+  } catch {
+    // No .env — use built-in defaults.
+  }
+  return env;
+}
+
+/**
+ * Decide whether a repository-relative path must be skipped client-side.
+ * Pure helper (exported for tests):
+ *  - skipDocs: drop files whose extension is in docExtensions
+ *  - skipExtensions: drop files ending with any of these suffixes
+ */
+export function shouldSkipFile(relPath, { skipDocs = false, docExtensions = [], skipExtensions = [] } = {}) {
+  const lower = relPath.toLowerCase();
+  if (skipDocs && docExtensions.some((e) => lower.endsWith(e))) return true;
+  if (skipExtensions.some((e) => lower.endsWith(e))) return true;
+  return false;
+}
+
+async function walk(dir, ignored) {
   const files = [];
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const e of entries) {
-    if (IGNORED.has(e.name) || e.name.startsWith(".")) continue;
+    if (ignored.has(e.name) || e.name.startsWith(".")) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      files.push(...await walk(full));
+      files.push(...await walk(full, ignored));
     } else if (e.isFile()) {
       files.push(full);
     }
@@ -31,7 +70,7 @@ export default async function indexRepo(args, options = {}) {
   const skipDocs = options.skipDocs || false;
   const repoPath = args[0];
   if (!repoPath) {
-    console.error("Usage: npx yats index <path>");
+    console.error("Usage: npx yats index <path> [--skip-docs]");
     process.exit(1);
   }
 
@@ -50,6 +89,19 @@ export default async function indexRepo(args, options = {}) {
     process.exit(1);
   }
 
+  // P4 — read the YATS config from ~/.yats/.env so the CLI filters files
+  // consistently with the server.
+  const yatsEnv = loadYatsEnv();
+  const ignoredDirs = new Set(IGNORED);
+  for (const d of (yatsEnv.IGNORED_DIRS ?? "").split(",")) {
+    const t = d.trim();
+    if (t) ignoredDirs.add(t);
+  }
+  const docExtensions = (yatsEnv.DOC_EXTENSIONS ?? DEFAULT_DOC_EXTENSIONS)
+    .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const skipExtensions = (yatsEnv.SKIP_EXTENSIONS ?? "")
+    .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+
   // Register repo
   try {
     await fetch(`${YATS_URL}/index`, {
@@ -64,14 +116,14 @@ export default async function indexRepo(args, options = {}) {
 
   // Walk and send files
   console.log(`Indexing ${repoPath}...`);
-  const files = await walk(repoPath);
+  const files = await walk(repoPath, ignoredDirs);
   // Send files concurrently in batches
   const CONCURRENCY = 10;
   const batch = [];
-  
+
   for (const file of files) {
     const relPath = relative(repoPath, file);
-    if (skipDocs && relPath.endsWith(".md")) continue;
+    if (shouldSkipFile(relPath, { skipDocs, docExtensions, skipExtensions })) continue;
     batch.push(file);
   }
 
