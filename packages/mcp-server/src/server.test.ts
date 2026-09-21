@@ -22,6 +22,8 @@ let mockIndexing: { indexing: boolean; pendingRelationships: number } = {
   pendingRelationships: 0,
 };
 
+let lastFindRoutesCall: { repo: string; options?: any } | null = null;
+
 function makeMockDeps(): McpDependencies {
   return {
     retriever: {
@@ -40,7 +42,10 @@ function makeMockDeps(): McpDependencies {
       findImplementations: async () => [],
       findInheritors: async () => [],
       findTests: async () => [],
-      findRoutes: async () => [],
+      findRoutes: async (repo: string, options?: any) => {
+        lastFindRoutesCall = { repo, options };
+        return [];
+      },
       findConfiguration: async () => [],
       expandGraph: async () => ({ nodes: [], relationships: [] }),
       relatedSymbols: async () => [],
@@ -349,5 +354,26 @@ describe("MCP Server — input validation", () => {
     assert.ok(text.includes("yats index /full/path/to/my-project"), "should suggest yats index command");
     assert.ok(text.includes("full path"), "should instruct to use the full path");
     assert.ok(!text.includes("I can run it for you"), "should not claim the server can run commands");
+  });
+
+  it("find_routes passes method/routePath/limit filters to the repository (P5)", async () => {
+    lastFindRoutesCall = null;
+    const response = await server.handleRequest({
+      jsonrpc: "2.0",
+      id: 12,
+      method: "tools/call",
+      params: {
+        name: "find_routes",
+        arguments: { path: "/tmp/test-repo", method: "GET", routePath: "/users", limit: 5 },
+      },
+    });
+
+    const result = (response as any).result;
+    assert.ok(result, "should return a result");
+    assert.ok(lastFindRoutesCall, "findRoutes should have been called");
+    assert.equal(lastFindRoutesCall!.repo, "/tmp/test-repo");
+    assert.equal(lastFindRoutesCall!.options?.method, "GET");
+    assert.equal(lastFindRoutesCall!.options?.path, "/users");
+    assert.equal(lastFindRoutesCall!.options?.limit, 5);
   });
 });

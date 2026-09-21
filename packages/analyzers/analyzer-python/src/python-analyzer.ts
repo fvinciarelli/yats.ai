@@ -277,10 +277,23 @@ export class PythonAnalyzer extends AbstractAnalyzer {
         contentHash: hashContent(match[0]),
       });
 
-      // Route detection for FastAPI/Flask
+      // Route detection for FastAPI/Flask (P5: capture method + path)
       if (this.isFastAPIRouteDecorator(content, match.index)) {
         sym.kind = SymbolKind.ROUTE;
         sym.metadata["framework"] = "fastapi";
+        const info = this.parseFastAPIRoute(content, match.index);
+        if (info) {
+          sym.metadata["httpMethod"] = info.method;
+          sym.metadata["routePath"] = info.path;
+        }
+      } else if (this.isFlaskRouteDecorator(content, match.index)) {
+        sym.kind = SymbolKind.ROUTE;
+        sym.metadata["framework"] = "flask";
+        const info = this.parseFlaskRoute(content, match.index);
+        if (info) {
+          sym.metadata["httpMethod"] = info.method;
+          sym.metadata["routePath"] = info.path;
+        }
       }
 
       symbols.push(sym);
@@ -373,5 +386,35 @@ export class PythonAnalyzer extends AbstractAnalyzer {
     // Look backwards from the function to find decorators
     const before = content.slice(Math.max(0, funcIdx - 200), funcIdx);
     return /@(app|router)\.(get|post|put|patch|delete)\b/.test(before);
+  }
+
+  private isFlaskRouteDecorator(content: string, funcIdx: number): boolean {
+    const before = content.slice(Math.max(0, funcIdx - 200), funcIdx);
+    return /@(app|bp|blueprint)\.route\s*\(/.test(before);
+  }
+
+  /** @app.get("/users") → { method: "GET", path: "/users" } */
+  private parseFastAPIRoute(
+    content: string,
+    funcIdx: number,
+  ): { method: string; path: string } | null {
+    const before = content.slice(Math.max(0, funcIdx - 200), funcIdx);
+    const m = before.match(/@(?:app|router|bp|api)\.(get|post|put|patch|delete)\s*\(\s*["']([^"']+)["']/i);
+    if (!m) return null;
+    return { method: m[1]!.toUpperCase(), path: m[2]! };
+  }
+
+  /** @app.route("/users", methods=["POST"]) → { method: "POST", path: "/users" } */
+  private parseFlaskRoute(
+    content: string,
+    funcIdx: number,
+  ): { method: string; path: string } | null {
+    const before = content.slice(Math.max(0, funcIdx - 200), funcIdx);
+    const m = before.match(
+      /@(?:app|bp|blueprint)\.route\s*\(\s*["']([^"']+)["']\s*(?:,\s*methods\s*=\s*\[([^\]]*)\])?/i,
+    );
+    if (!m) return null;
+    const method = m[2]?.match(/["']([A-Z]+)["']/i)?.[1]?.toUpperCase() ?? "GET";
+    return { method, path: m[1]! };
   }
 }

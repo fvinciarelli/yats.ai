@@ -115,6 +115,52 @@ async def create_user(data: dict):
 
     const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
     assert.equal(routes.length, 2, `Expected 2 ROUTEs, got ${routes.length}`);
+
+    const getRoute = routes.find((r) => r.name === "get_users");
+    assert.ok(getRoute, "get_users should be a route");
+    assert.equal(getRoute.metadata["httpMethod"], "GET");
+    assert.equal(getRoute.metadata["routePath"], "/users");
+
+    const postRoute = routes.find((r) => r.name === "create_user");
+    assert.equal(postRoute.metadata["httpMethod"], "POST");
+    assert.equal(postRoute.metadata["routePath"], "/users");
+  });
+
+  it("detects Flask @app.route decorators with methods (P5)", async () => {
+    const code = `
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/users", methods=["GET"])
+def list_users():
+    return []
+
+@app.route("/users", methods=["POST"])
+def create_user():
+    return {"id": 1}
+
+@app.route("/health")
+def health():
+    return "ok"
+`;
+    const result = await analyzer.analyze("app.py", code, "test-repo");
+
+    const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
+    assert.equal(routes.length, 3, `Expected 3 ROUTEs, got ${routes.length}`);
+
+    const listRoute = routes.find((r) => r.name === "list_users");
+    assert.equal(listRoute.metadata["framework"], "flask");
+    assert.equal(listRoute.metadata["httpMethod"], "GET");
+    assert.equal(listRoute.metadata["routePath"], "/users");
+
+    const createRoute = routes.find((r) => r.name === "create_user");
+    assert.equal(createRoute.metadata["httpMethod"], "POST");
+
+    // methods= omitted → GET by default
+    const healthRoute = routes.find((r) => r.name === "health");
+    assert.equal(healthRoute.metadata["httpMethod"], "GET");
+    assert.equal(healthRoute.metadata["routePath"], "/health");
   });
 
   it("detects imports", async () => {

@@ -201,16 +201,16 @@ const FIND_TESTS: ToolDefinition = {
 
 const FIND_ROUTES: ToolDefinition = {
   name: "find_routes",
-  description: "Find HTTP routes / API endpoints in the repository.",
+  description: "Find HTTP routes / API endpoints in the repository. Filter by HTTP method (GET/POST/PUT/PATCH/DELETE) and/or partial path.",
   inputSchema: {
     type: "object",
     properties: {
-      repository: { type: "string" },
-      method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-      path: { type: "string", description: "Partial path match" },
+      path: { type: "string", description: "Root path of the repository (from list_repositories or your current working directory)" },
+      repository: { type: "string", description: "Repository name (alternative to path)" },
+      method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"], description: "Exact HTTP method to filter by" },
+      routePath: { type: "string", description: "Partial route path to match (e.g. /users)" },
       limit: { type: "number", default: 30 },
     },
-    required: ["repository"],
   },
 };
 
@@ -701,7 +701,14 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
-    const routes = await deps.graphRepository.findRoutes(resolved.rootPath);
+    // P5 — honor the schema's method/routePath/limit filters (previously dead).
+    // Note: `path` means the repository root (consistent with sibling tools);
+    // the route path filter is `routePath`.
+    const routes = await deps.graphRepository.findRoutes(resolved.rootPath, {
+      method: args.method as string | undefined,
+      path: args.routePath as string | undefined,
+      limit: (args.limit as number) ?? 100,
+    });
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(routes), null, 2) }] };
   });
 
@@ -935,7 +942,7 @@ function formatSymbols(symbols: any[]): any[] {
 }
 
 function formatSymbol(s: any): any {
-  return {
+  const out: any = {
     id: s.id,
     name: s.name,
     kind: s.kind,
@@ -946,6 +953,12 @@ function formatSymbol(s: any): any {
     signature: s.signature,
     parentClass: s.parentClass,
   };
+  // Routes carry their HTTP method + path (P5) — surfaced for find_routes.
+  if (s.httpMethod != null || s.routePath != null) {
+    out.method = s.httpMethod ?? null;
+    out.path = s.routePath ?? null;
+  }
+  return out;
 }
 
 function formatContextItems(items: RankedContextItem[]): any[] {

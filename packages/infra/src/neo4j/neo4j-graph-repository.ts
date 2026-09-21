@@ -393,14 +393,36 @@ export class Neo4jGraphRepository implements GraphRepository {
       .map((r: any) => this.rowToGraphSymbol(r));
   }
 
-  async findRoutes(repository: string): Promise<GraphSymbol[]> {
+  async findRoutes(
+    repository: string,
+    options?: { method?: string; path?: string; limit?: number },
+  ): Promise<GraphSymbol[]> {
+    // Filter on the dedicated route properties (httpMethod / routePath) that
+    // analyzers store on Route nodes. Parameterized filters — no hardcoded
+    // LIMIT 100 (P5).
+    const filters: string[] = [];
+    const params: Record<string, unknown> = { repository };
+
+    if (options?.method) {
+      filters.push("s.httpMethod = $method");
+      params.method = options.method.toUpperCase();
+    }
+    if (options?.path) {
+      filters.push("s.routePath CONTAINS $path");
+      params.path = options.path;
+    }
+
+    const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const limit = options?.limit ?? 100;
+
     const rows = await this.connection.read<any>(
       `
       MATCH (s:Route {repository: $repository})
+      ${where}
       RETURN s, labels(s) AS labels, id(s) AS nodeId
-      LIMIT 100
+      LIMIT $limit
       `,
-      { repository },
+      { ...params, limit },
     );
     return rows.map((r) => this.rowToGraphSymbol(r));
   }
@@ -684,6 +706,9 @@ export class Neo4jGraphRepository implements GraphRepository {
       startColumn: symbol.location.startColumn,
       endColumn: symbol.location.endColumn,
       metadata: JSON.stringify(symbol.metadata ?? {}),
+      // Route-specific properties — queryable by find_routes filters (P5)
+      httpMethod: (symbol.metadata?.["httpMethod"] as string) ?? null,
+      routePath: (symbol.metadata?.["routePath"] as string) ?? null,
       updatedAt: new Date().toISOString(),
     };
   }

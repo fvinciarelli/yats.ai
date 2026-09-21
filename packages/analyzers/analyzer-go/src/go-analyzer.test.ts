@@ -169,4 +169,55 @@ func (c *Calculator) Subtract(a, b int) int {
     // Fallback still processes — should not crash
     assert.equal(result.errors.length, 0);
   });
+
+  it("detects routes from stdlib, gorilla, gin, and chi registrations (P5)", async () => {
+    const code = `
+package main
+
+func healthHandler() {}
+func userList() {}
+func userDetail() {}
+func orderCreate() {}
+
+func muxRouter() *mux.Router { return nil }
+func ginRouter() *gin.Engine { return nil }
+func chiRouter() *chi.Mux { return nil }
+
+func main() {
+  http.HandleFunc("/health", healthHandler)
+
+  r := muxRouter()
+  r.HandleFunc("/users", userList)
+
+  g := ginRouter()
+  g.GET("/users/:id", userDetail)
+
+  c := chiRouter()
+  c.Get("/orders", orderCreate)
+}
+`;
+    const result = await analyzer.analyze("routes.go", code, "test-repo");
+
+    const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
+    assert.equal(routes.length, 4, `Expected 4 ROUTEs, got ${routes.length}`);
+
+    const health = routes.find((r) => r.name === "healthHandler");
+    assert.ok(health, "healthHandler should be a route");
+    assert.equal(health.metadata["framework"], "stdlib");
+    assert.equal(health.metadata["routePath"], "/health");
+
+    const list = routes.find((r) => r.name === "userList");
+    assert.equal(list.metadata["framework"], "gorilla");
+    assert.equal(list.metadata["routePath"], "/users");
+
+    const detail = routes.find((r) => r.name === "userDetail");
+    assert.equal(detail.metadata["framework"], "gin");
+    assert.equal(detail.metadata["httpMethod"], "GET");
+    assert.equal(detail.metadata["routePath"], "/users/:id");
+
+    const create = routes.find((r) => r.name === "orderCreate");
+    assert.equal(create.metadata["framework"], "chi");
+    assert.equal(create.metadata["httpMethod"], "GET");
+    assert.equal(create.metadata["routePath"], "/orders");
+  });
 });

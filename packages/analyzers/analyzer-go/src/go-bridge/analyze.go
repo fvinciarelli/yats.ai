@@ -8,9 +8,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"strings"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ============================================================
@@ -18,18 +18,18 @@ import (
 // ============================================================
 
 type Symbol struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Kind          string            `json:"kind"`
-	Language      string            `json:"language"`
-	Location      Location          `json:"location"`
-	Namespace     string            `json:"namespace"`
-	ParentClass   string            `json:"parentClass"`
-	Signature     string            `json:"signature"`
-	DocComment    string            `json:"docComment"`
-	SourceSnippet string            `json:"sourceSnippet"`
-	ContentHash   string            `json:"contentHash"`
-	Metadata      map[string]any    `json:"metadata"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Kind          string         `json:"kind"`
+	Language      string         `json:"language"`
+	Location      Location       `json:"location"`
+	Namespace     string         `json:"namespace"`
+	ParentClass   string         `json:"parentClass"`
+	Signature     string         `json:"signature"`
+	DocComment    string         `json:"docComment"`
+	SourceSnippet string         `json:"sourceSnippet"`
+	ContentHash   string         `json:"contentHash"`
+	Metadata      map[string]any `json:"metadata"`
 }
 
 type Location struct {
@@ -57,9 +57,9 @@ type Result struct {
 }
 
 var (
-	filePath   = flag.String("file", "", "Path to the Go source file")
-	repoName   = flag.String("repo", "", "Repository name")
-	useStdin   = flag.Bool("stdin", false, "Read source from stdin")
+	filePath = flag.String("file", "", "Path to the Go source file")
+	repoName = flag.String("repo", "", "Repository name")
+	useStdin = flag.Bool("stdin", false, "Read source from stdin")
 )
 
 func main() {
@@ -120,16 +120,20 @@ func analyzeNode(fset *token.FileSet, node *ast.File, repo, path string) (*Resul
 	}
 
 	a := &analyzer{
-		repo:     repo,
-		path:     path,
-		relPath:  relPath,
-		pkgName:  pkgName,
-		fset:     fset,
-		symbols:  []Symbol{},
-		relns:    []Relationship{},
+		repo:    repo,
+		path:    path,
+		relPath: relPath,
+		pkgName: pkgName,
+		fset:    fset,
+		symbols: []Symbol{},
+		relns:   []Relationship{},
 	}
 
 	ast.Walk(a, node)
+
+	// Route detection pass (P5) — runs after the full walk so handler
+	// symbols exist regardless of declaration order.
+	a.detectRoutes(node)
 
 	return &Result{
 		Symbols:       a.symbols,
@@ -256,6 +260,91 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 	}
 
 	return a
+}
+
+// routeVerbs maps selector names to HTTP methods. "" means the method is
+// not determined by the selector (e.g. gorilla HandleFunc — the verb comes
+// from a Methods() chain or defaults).
+var routeVerbs = map[string]string{
+	"GET": "GET", "POST": "POST", "PUT": "PUT", "PATCH": "PATCH",
+	"DELETE": "DELETE", "OPTIONS": "OPTIONS", "HEAD": "HEAD",
+	"Get": "GET", "Post": "POST", "Put": "PUT", "Patch": "PATCH",
+	"Delete": "DELETE", "Options": "OPTIONS", "Head": "HEAD",
+	"Handle": "", "HandleFunc": "",
+}
+
+// detectRoutes scans the file for route registrations and marks the handler
+// function/method symbols as routes with httpMethod/routePath metadata (P5).
+// Supported conventions:
+//
+//	stdlib:      http.HandleFunc("/x", handler)
+//	gorilla/mux: r.HandleFunc("/x", handler), r.Handle("/x", handler)
+//	gin:         r.GET("/x", handler), g.POST(...)   (all-uppercase verbs)
+//	chi:         r.Get("/x", handler), r.Post(...)   (title-case verbs)
+//
+// Runs after the full AST walk, so handler symbols exist regardless of
+// declaration order. Method chains (e.g. mux Methods("GET").Path(...)) are
+// not supported — documented heuristic.
+func (a *analyzer) detectRoutes(node *ast.File) {
+	ast.Inspect(node, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		verb, known := routeVerbs[sel.Sel.Name]
+		if !known {
+			return true
+		}
+
+		framework := "stdlib"
+		if sel.Sel.Name == "HandleFunc" || sel.Sel.Name == "Handle" {
+			if id, isIdent := sel.X.(*ast.Ident); isIdent && id.Name == "http" {
+				framework = "stdlib"
+			} else {
+				framework = "gorilla"
+			}
+		} else if sel.Sel.Name == strings.ToUpper(sel.Sel.Name) {
+			// All-uppercase verbs (GET, POST) → gin convention
+			framework = "gin"
+		} else {
+			// Title-case verbs (Get, Post) → chi convention
+			framework = "chi"
+		}
+
+		pathLit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || pathLit.Kind != token.STRING {
+			return true
+		}
+		routePath := strings.Trim(pathLit.Value, `"`)
+
+		var handlerName string
+		switch h := call.Args[1].(type) {
+		case *ast.Ident:
+			handlerName = h.Name
+		case *ast.SelectorExpr:
+			handlerName = h.Sel.Name
+		default:
+			return true // inline handler — no symbol to mark
+		}
+
+		for i := range a.symbols {
+			s := &a.symbols[i]
+			if s.Name == handlerName && (s.Kind == "function" || s.Kind == "method") {
+				s.Kind = "route"
+				s.Metadata["framework"] = framework
+				s.Metadata["routePath"] = routePath
+				if verb != "" {
+					s.Metadata["httpMethod"] = verb
+				}
+				break
+			}
+		}
+		return true
+	})
 }
 
 func (a *analyzer) extractCalls(body *ast.BlockStmt, callerID string) {

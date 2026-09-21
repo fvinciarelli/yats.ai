@@ -174,4 +174,81 @@ export type PaymentResult = {
     const result = await analyzer.analyze("src/empty.ts", "", "test-repo");
     assert.equal(result.errors.length, 0);
   });
+
+  it("detects NestJS routes per method with controller prefix (P5)", async () => {
+    const code = `
+import { Controller, Get, Post } from "@nestjs/common";
+
+@Controller("users")
+export class UsersController {
+  @Get(":id")
+  findOne(): string {
+    return "user";
+  }
+
+  @Post()
+  create(): string {
+    return "created";
+  }
+}
+`;
+    const result = await analyzer.analyze("src/users.controller.ts", code, "test-repo");
+
+    const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
+    assert.equal(routes.length, 2, `Expected 2 routes, got ${routes.length}`);
+
+    const findOne = routes.find((r) => r.name === "findOne");
+    assert.ok(findOne, "findOne should be a route");
+    assert.equal(findOne.metadata["httpMethod"], "GET");
+    assert.equal(findOne.metadata["routePath"], "users/:id");
+
+    const create = routes.find((r) => r.name === "create");
+    assert.ok(create, "create should be a route");
+    assert.equal(create.metadata["httpMethod"], "POST");
+    assert.equal(create.metadata["routePath"], "users");
+
+    // The controller class itself is a CONTROLLER, not a ROUTE
+    const controller = result.symbols.find((s) => s.name === "UsersController");
+    assert.equal(controller.kind, SymbolKind.CONTROLLER);
+  });
+
+  it("detects Express routes (P5)", async () => {
+    const code = `
+import express from "express";
+
+const app = express();
+
+export class UserRouter {
+  getUsers(): string {
+    return "[]";
+  }
+}
+
+app.get("/health", (req, res) => res.send("ok"));
+app.get("/users", getUsersHandler);
+app.post("/users", createUser);
+
+function getUsersHandler(): string {
+  return "[]";
+}
+function createUser(): string {
+  return "created";
+}
+`;
+    const result = await analyzer.analyze("src/app.ts", code, "test-repo");
+
+    const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
+    assert.equal(routes.length, 2, `Expected 2 routes, got ${routes.length}`);
+
+    const getRoute = routes.find((r) => r.name === "getUsersHandler");
+    assert.ok(getRoute, "getUsersHandler should be a route");
+    assert.equal(getRoute.metadata["httpMethod"], "GET");
+    assert.equal(getRoute.metadata["routePath"], "/users");
+    assert.equal(getRoute.metadata["framework"], "express");
+
+    const postRoute = routes.find((r) => r.name === "createUser");
+    assert.ok(postRoute, "createUser should be a route");
+    assert.equal(postRoute.metadata["httpMethod"], "POST");
+    assert.equal(postRoute.metadata["routePath"], "/users");
+  });
 });

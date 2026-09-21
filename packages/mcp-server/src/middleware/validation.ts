@@ -106,10 +106,11 @@ export const schemas = {
   }),
 
   find_routes: z.object({
+    path: safePath.optional(),
     repository: safeRepoName.optional(),
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
-    path: z.string().max(500).optional(),
-    limit: z.number().int().min(1).max(50).optional(),
+    routePath: z.string().max(500).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
   }),
 
   find_configuration: z.object({

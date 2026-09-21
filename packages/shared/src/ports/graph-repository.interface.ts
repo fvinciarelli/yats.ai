@@ -33,6 +33,16 @@ export interface SymbolLite {
   relativePath: string;
 }
 
+/** Optional filters for findRoutes. */
+export interface RouteFilterOptions {
+  /** Exact HTTP method match (GET/POST/PUT/PATCH/DELETE, case-insensitive). */
+  method?: string;
+  /** Partial route path match (substring). */
+  path?: string;
+  /** Maximum number of routes to return (default 100). */
+  limit?: number;
+}
+
 export interface GraphRepository {
   upsertSymbol(symbol: Symbol): Promise<void>;
   upsertSymbols(symbols: Symbol[]): Promise<void>;
@@ -57,7 +67,7 @@ export interface GraphRepository {
   findImplementations(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
   findInheritors(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
   findTests(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
-  findRoutes(repository: string): Promise<GraphSymbol[]>;
+  findRoutes(repository: string, options?: RouteFilterOptions): Promise<GraphSymbol[]>;
   findConfiguration(repository: string, key?: string): Promise<GraphSymbol[]>;
   expandGraph(seedIds: string[], hops: number, relationshipTypes: RelationshipKind[]): Promise<Subgraph>;
   relatedSymbols(symbolId: string, limit?: number): Promise<GraphSymbol[]>;

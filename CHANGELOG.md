@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Doc config respected on the per-file path (P4).** `INDEX_DOCS=false` now
+  drops documentation files sent via `/index/file` (both the doc route in
+  `indexFileContent` and `indexDocFileContent` itself guard), matching the full
+  pipeline. `yats index --skip-docs` is documented in the CLI help and now skips
+  every `DOC_EXTENSIONS` file (was only `.md`); the CLI also reads
+  `DOC_EXTENSIONS`/`SKIP_EXTENSIONS`/`IGNORED_DIRS` from `~/.yats/.env` so it
+  filters files consistently with the server.
+- **`find_routes` coverage + working filters (P5).**
+  - The **Go bridge** now detects routes: stdlib `http.HandleFunc`, gorilla/mux
+    `r.HandleFunc`/`r.Handle`, gin `r.GET(...)`, chi `r.Get(...)`.
+  - The **TS analyzer** detects Express/plain-router patterns (`app.get('/x',
+    handler)`, `router.post(...)`, `this.app.get`) and NestJS routes are now
+    emitted per method with the controller prefix (`@Controller('users')` +
+    `@Get(':id')` → `users/:id`).
+  - Routes carry `httpMethod`/`routePath` metadata (FastAPI, Flask
+    `@app.route` with `methods=[...]`, NestJS, Express, Go), stored as
+    queryable node properties.
+  - `method`/`routePath`/`limit` filters are implemented in the handler and the
+    Neo4j query (parameterized; the hardcoded LIMIT 100 is gone). The schema
+    accepts `path` as an alternative to `repository`; the route path filter is
+    `routePath` (the old `path` filter conflicted with the repository path
+    convention). `find_routes` output includes `method` + `path` per route.
 - **Commit-based `yats watch` (P1).** The watcher no longer tracks the working tree
   — it polls `git rev-parse HEAD` every ~2s on the host and, when HEAD changes
   (new commit or branch checkout), streams only `git diff --name-status

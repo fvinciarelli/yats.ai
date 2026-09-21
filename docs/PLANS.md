@@ -178,5 +178,29 @@ polling guidance is misleading with this pipeline (it drops to 0, then jumps).
 - P3: **implemented in v0.4.2** (indexing-state flag + notice in graph tools;
   `repository_summary` returns `indexing`/`pendingRelationships`/`notice`;
   graph tools prepend the notice; state clears ~15s after last activity).
-- P4: added as plan (2026-08-25). Not started.
-- P5: added as plan (2026-08-25). Not started.
+- P4: added as plan (2026-08-25). **Implemented (2026-09-21):** the per-file
+  path now respects `INDEX_DOCS=false` server-side (`indexFileContent` drops
+  doc files, `indexDocFileContent` guards too); `--skip-docs` is documented in
+  the CLI help and now skips every `DOC_EXTENSIONS` file (was only `.md`); the
+  CLI reads `DOC_EXTENSIONS`/`SKIP_EXTENSIONS`/`IGNORED_DIRS` from
+  `~/.yats/.env` so it filters files consistently with the server.
+- P5: added as plan (2026-08-25). **Implemented (2026-09-21):**
+  - Route detection coverage: the **Go bridge** now detects routes (stdlib
+    `http.HandleFunc`, gorilla/mux `r.HandleFunc`/`r.Handle`, gin `r.GET(...)`,
+    chi `r.Get(...)`), and the **TS analyzer** detects Express/plain-router
+    patterns (`app.get('/x', handler)`, `router.post(...)`, `this.app.get`)
+    beyond NestJS.
+  - Routes carry `httpMethod` + `routePath` metadata (TS NestJS per-method
+    routes incl. controller prefix, FastAPI + Flask `@app.route` with
+    `methods=[...]`, Go bridge) and it is stored as queryable node properties
+    (`httpMethod`/`routePath`).
+  - `find_routes` filters now work: `method`/`routePath`/`limit` are
+    parameterized in the Neo4j query (hardcoded LIMIT 100 dropped; `limit`
+    honored), and the zod schema + handler pass them through. The schema now
+    accepts `path` as an alternative to `repository` (consistent with sibling
+    tools); the route path filter is `routePath` (the old schema's `path`
+    filter conflicted with the repository path convention).
+  - `find_routes` output includes `method` + `path` per route.
+  - Known heuristics: gin vs chi by verb casing (GET vs Get); gorilla method
+    chains (`Methods("GET").Path(...)`) and gin `Group()` prefixes are not
+    captured.

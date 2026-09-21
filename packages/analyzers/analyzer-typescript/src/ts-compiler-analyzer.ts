@@ -761,51 +761,144 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
       }
     }
 
-    // Detect decorator-based conventions
-    this.visitDecorators(sourceFile, (decoratorName, parentNode) => {
-      const containingClass = this.findContainingClass(parentNode, sourceFile);
-      if (!containingClass) return;
+    // Detect decorator-based conventions.
+    // Pass 1: collect NestJS controller route prefixes (@Controller('api')).
+    const controllerPrefixes = new Map<string, string>();
+    this.visitDecorators(sourceFile, (decoratorName, parentNode, decoratorNode) => {
+      const decoLower = decoratorName.toLowerCase();
+      if (decoLower !== "controller" && !decoLower.includes("controller")) return;
+      if (!ts.isClassDeclaration(parentNode) || !parentNode.name) return;
+      controllerPrefixes.set(parentNode.name.text, this.decoratorStringArg(decoratorNode) ?? "");
+    });
 
-      const matchingSymbol = symbols.find(
-        (s) => s.name === containingClass && s.kind === SymbolKind.CLASS,
-      );
-      if (!matchingSymbol) return;
-
+    // Pass 2: class-level conventions + method-level route decorators.
+    const ROUTE_VERBS = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"]);
+    this.visitDecorators(sourceFile, (decoratorName, parentNode, decoratorNode) => {
       const decoLower = decoratorName.toLowerCase();
 
-      if (decoLower === "controller" || decoLower.includes("controller")) {
-        matchingSymbol.kind = SymbolKind.CONTROLLER;
-        matchingSymbol.metadata["framework"] = "nestjs";
-      } else if (decoLower === "injectable") {
-        matchingSymbol.kind = SymbolKind.SERVICE;
-        matchingSymbol.metadata["framework"] = "nestjs";
-      } else if (decoLower === "module") {
-        matchingSymbol.kind = SymbolKind.MODULE;
-        matchingSymbol.metadata["framework"] = "nestjs";
-      } else if (decoLower === "entity") {
-        matchingSymbol.kind = SymbolKind.ENTITY;
-        matchingSymbol.metadata["framework"] = "typeorm";
-      } else if (
-        decoLower === "get" ||
-        decoLower === "post" ||
-        decoLower === "put" ||
-        decoLower === "patch" ||
-        decoLower === "delete"
-      ) {
-        matchingSymbol.kind = SymbolKind.ROUTE;
-        matchingSymbol.metadata["httpMethod"] = decoratorName.toUpperCase();
+      // Class-level decorators (NestJS / TypeORM)
+      if (ts.isClassDeclaration(parentNode) && parentNode.name) {
+        const clsSym = symbols.find(
+          (s) => s.name === parentNode.name!.text && s.kind === SymbolKind.CLASS,
+        );
+        if (!clsSym) return;
+
+        if (decoLower === "controller" || decoLower.includes("controller")) {
+          clsSym.kind = SymbolKind.CONTROLLER;
+          clsSym.metadata["framework"] = "nestjs";
+        } else if (decoLower === "injectable") {
+          clsSym.kind = SymbolKind.SERVICE;
+          clsSym.metadata["framework"] = "nestjs";
+        } else if (decoLower === "module") {
+          clsSym.kind = SymbolKind.MODULE;
+          clsSym.metadata["framework"] = "nestjs";
+        } else if (decoLower === "entity") {
+          clsSym.kind = SymbolKind.ENTITY;
+          clsSym.metadata["framework"] = "typeorm";
+        }
+        return;
       }
+
+      // Method-level route decorators (@Get('/users')) — mark the METHOD
+      // symbol as the route (per-endpoint granularity, P5).
+      if (!ROUTE_VERBS.has(decoLower)) return;
+      const memberName = this.getDecoratedMemberName(parentNode);
+      if (!memberName) return;
+      const containingClass = this.findContainingClass(parentNode, sourceFile);
+      const methodSym = symbols.find(
+        (s) =>
+          s.name === memberName &&
+          s.parentClass === containingClass &&
+          s.kind === SymbolKind.METHOD,
+      );
+      if (!methodSym) return;
+
+      methodSym.kind = SymbolKind.ROUTE;
+      methodSym.metadata["framework"] = "nestjs";
+      methodSym.metadata["httpMethod"] = decoratorName.toUpperCase();
+      const prefix = containingClass ? (controllerPrefixes.get(containingClass) ?? "") : "";
+      methodSym.metadata["routePath"] = this.joinRoutePaths(
+        prefix,
+        this.decoratorStringArg(decoratorNode) ?? "",
+      );
     });
+
+    // Express / plain router patterns (P5)
+    this.detectExpressRoutes(sourceFile, symbols);
+  }
+
+  /** @Controller('users') + @Get(':id') → "users/:id". */
+  private joinRoutePaths(prefix: string, suffix: string): string {
+    if (!prefix) return suffix;
+    if (!suffix) return prefix;
+    return `${prefix.replace(/\/+$/, "")}/${suffix.replace(/^\/+/, "")}`;
+  }
+
+  /** The string argument of a decorator call: @Controller('users') → "users". */
+  private decoratorStringArg(node: ts.Decorator): string | null {
+    if (!ts.isCallExpression(node.expression)) return null;
+    const arg = node.expression.arguments[0];
+    return arg && ts.isStringLiteral(arg) ? arg.text : null;
+  }
+
+  private getDecoratedMemberName(node: ts.Node): string | null {
+    if (ts.isMethodDeclaration(node) || ts.isPropertyDeclaration(node)) {
+      if (node.name && ts.isIdentifier(node.name)) return node.name.text;
+      if (node.name && ts.isStringLiteral(node.name)) return node.name.text;
+    }
+    return null;
+  }
+
+  /**
+   * Express / plain-TS route detection (P5): app.get('/users', handler),
+   * router.post('/x', this.handler), this.app.get(...). The handler argument
+   * must reference a function/method symbol in the same file (inline
+   * callbacks have no symbol to mark).
+   */
+  private detectExpressRoutes(sourceFile: ts.SourceFile, symbols: Symbol[]): void {
+    const verbs = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"]);
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const calleeText = node.expression.getText(sourceFile);
+        const m = calleeText.match(/^(?:(?:this|self)\.)?(app|router|server|api)\.([a-zA-Z]+)$/);
+        if (m && verbs.has(m[2]!.toLowerCase()) && node.arguments.length >= 2) {
+          const pathArg = node.arguments[0];
+          if (pathArg && ts.isStringLiteral(pathArg)) {
+            let handlerName: string | null = null;
+            const handlerArg = node.arguments[1];
+            if (handlerArg && ts.isIdentifier(handlerArg)) handlerName = handlerArg.text;
+            else if (handlerArg && ts.isPropertyAccessExpression(handlerArg)) handlerName = handlerArg.name.text;
+
+            if (handlerName) {
+              const sym = symbols.find(
+                (s) =>
+                  s.name === handlerName &&
+                  (s.kind === SymbolKind.METHOD || s.kind === SymbolKind.FUNCTION),
+              );
+              if (sym) {
+                sym.kind = SymbolKind.ROUTE;
+                sym.metadata["framework"] = "express";
+                sym.metadata["httpMethod"] = m[2]!.toUpperCase();
+                sym.metadata["routePath"] = pathArg.text;
+              }
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(sourceFile, visit);
   }
 
   private visitDecorators(
     sourceFile: ts.SourceFile,
-    visitor: (decoratorName: string, parent: ts.Node) => void,
+    visitor: (decoratorName: string, parent: ts.Node, decoratorNode: ts.Decorator) => void,
   ): void {
     const visit = (node: ts.Node): void => {
       if (ts.isDecorator(node)) {
         const name = node.expression.getText(sourceFile).split("(")[0]!;
-        visitor(name, node.parent);
+        visitor(name, node.parent, node);
       }
       ts.forEachChild(node, visit);
     };

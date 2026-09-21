@@ -77,6 +77,55 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
             return f"{obj}.{attr}"
         return None
 
+    def _decorator_route_info(self, decorator) -> Optional[dict]:
+        """Extract {framework, method, path} from FastAPI/Flask route decorators.
+
+        FastAPI: @app.get("/users"), @router.post("/x")
+        Flask:   @app.route("/users", methods=["GET"])
+        """
+        name = self._get_decorator_name(decorator)
+        if not name:
+            return None
+        deco = decorator.decorator
+        obj, _, attr = name.partition(".")
+        lower_attr = attr.lower()
+
+        def first_string_arg() -> Optional[str]:
+            args = getattr(deco, 'args', [])
+            if not args:
+                return None
+            v = getattr(args[0], 'value', None)
+            if v is None:
+                return None
+            # LibCST SimpleString: .value includes the quotes — strip them.
+            if hasattr(v, 'value') and isinstance(v.value, str):
+                return v.value.strip("'\"")
+            if isinstance(v, str):
+                return v.strip("'\"")
+            return None
+
+        # Flask: @app.route("/path", methods=["GET"]) — GET by default
+        if lower_attr == "route":
+            method = "GET"
+            args = getattr(deco, 'args', [])
+            for arg in args[1:]:
+                kw = getattr(arg, 'keyword', None)
+                kw_name = kw.value if kw is not None and hasattr(kw, 'value') else None
+                if kw_name == "methods" and hasattr(arg.value, 'elements'):
+                    for el in arg.value.elements:
+                        v = getattr(el.value, 'value', None)
+                        if v is not None and isinstance(v, str):
+                            method = v.strip("'\"")
+                            break
+                    break
+            return {"framework": "flask", "method": method, "path": first_string_arg()}
+
+        # FastAPI: @app.get("/users"), @router.post(...), bare @get(...)
+        if lower_attr in ("get", "post", "put", "patch", "delete", "head", "options", "websocket"):
+            return {"framework": "fastapi", "method": lower_attr.upper(), "path": first_string_arg()}
+
+        return None
+
     def make_id(self, symbol_path: str) -> str:
         return f"{self.repo}::{self.relative_path}::{symbol_path}"
 
@@ -249,9 +298,17 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                 })
 
         # Attach decorator names to the function symbol for convention detection
+        # Route decorators also carry framework/method/path for find_routes (P5)
         if func_decorators:
             func_symbol = self.symbols[-len(func_decorators) - 1]  # function is before its decorators
             func_symbol["metadata"]["decorators"] = func_decorators
+            route_infos = []
+            for decorator in node.decorators:
+                info = self._decorator_route_info(decorator)
+                if info:
+                    route_infos.append(info)
+            if route_infos:
+                func_symbol["metadata"]["routeInfos"] = route_infos
 
         self.current_function = name
         return True
@@ -424,12 +481,22 @@ def detect_conventions(repo_name: str, file_path: str, symbols: list) -> list:
                 symbol["kind"] = kind
                 symbol["metadata"]["detectedByConvention"] = True
 
-        # FastAPI / Flask route decorators
-        for deco_name, deco_kind in FRAMEWORK_DECORATORS.items():
-            if deco_name in symbol.get("metadata", {}).get("decorators", []):
-                if deco_kind == "route" and symbol["kind"] == "function":
-                    symbol["kind"] = "route"
-                    symbol["metadata"]["framework"] = "fastapi/flask"
+        # FastAPI / Flask route decorators (P5: capture method + path)
+        route_infos = symbol.get("metadata", {}).get("routeInfos", [])
+        if route_infos and symbol["kind"] == "function":
+            info = route_infos[-1]  # the decorator closest to the def
+            symbol["kind"] = "route"
+            symbol["metadata"]["framework"] = info.get("framework", "fastapi")
+            if info.get("method"):
+                symbol["metadata"]["httpMethod"] = info["method"]
+            if info.get("path"):
+                symbol["metadata"]["routePath"] = info["path"]
+        else:
+            for deco_name, deco_kind in FRAMEWORK_DECORATORS.items():
+                if deco_name in symbol.get("metadata", {}).get("decorators", []):
+                    if deco_kind == "route" and symbol["kind"] == "function":
+                        symbol["kind"] = "route"
+                        symbol["metadata"]["framework"] = "fastapi/flask"
 
         # Django view detection
         if symbol["kind"] == "function" and name.endswith("_view"):
