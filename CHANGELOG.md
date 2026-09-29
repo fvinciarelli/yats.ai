@@ -5,6 +5,13 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-09-29
+
+### Fixed
+- npm publish for 0.6.2 reported success in CI but never landed in the
+  registry — re-released as 0.6.3 (verified against
+  registry.npmjs.org immediately after publish).
+
 ## [0.6.2] - 2026-09-29
 
 ### Fixed
