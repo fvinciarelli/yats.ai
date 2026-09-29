@@ -11,13 +11,28 @@ export interface OpenAIConfig {
   apiKey: string;
   model: string;
   baseUrl: string;
+  /**
+   * "openai" — OpenAI-compatible API: POST {baseUrl}/embeddings, Bearer auth.
+   * "azure" — Azure OpenAI: POST {baseUrl}/openai/deployments/{model}/embeddings
+   *           with `api-key` auth and an `api-version` query param.
+   */
+  apiStyle: "openai" | "azure";
+  apiVersion: string;
+  /** Explicit vector dimension override (e.g. Azure deployments with custom names). */
+  dimensions?: number;
 }
 
 function loadOpenAIConfig(): OpenAIConfig {
+  const apiStyle = (process.env.OPENAI_API_STYLE ?? "openai") as "openai" | "azure";
   return {
     apiKey: process.env.OPENAI_API_KEY ?? "",
     model: process.env.OPENAI_MODEL ?? "text-embedding-3-small",
     baseUrl: process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
+    apiStyle,
+    apiVersion: process.env.OPENAI_AZURE_API_VERSION ?? "2024-02-01",
+    dimensions: process.env.OPENAI_EMBEDDING_DIMENSIONS
+      ? parseInt(process.env.OPENAI_EMBEDDING_DIMENSIONS, 10) || undefined
+      : undefined,
   };
 }
 
@@ -34,7 +49,10 @@ export class OpenAIEmbeddingGenerator implements EmbeddingGenerator {
 
   constructor(config?: Partial<OpenAIConfig>) {
     this.config = { ...loadOpenAIConfig(), ...config };
-    this.dimensions = OPENAI_MODEL_DIMENSIONS[this.config.model] ?? 1536;
+    this.dimensions =
+      this.config.dimensions ??
+      OPENAI_MODEL_DIMENSIONS[this.config.model] ??
+      1536;
     this.logger = createLogger("embeddings:openai");
   }
 
@@ -74,21 +92,15 @@ export class OpenAIEmbeddingGenerator implements EmbeddingGenerator {
     const maxRetries = 3;
 
     while (attempt < maxRetries) {
-      const response = await fetch(
-        `${this.config.baseUrl}/embeddings`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.config.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: this.config.model,
-            input: inputs,
-          }),
-          signal: AbortSignal.timeout(60000),
-        },
-      );
+      const response = await fetch(this.buildRequestUrl(), {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({
+          model: this.config.model,
+          input: inputs,
+        }),
+        signal: AbortSignal.timeout(60000),
+      });
 
       if (response.status === 429) {
         // Rate limited — back off
@@ -119,6 +131,36 @@ export class OpenAIEmbeddingGenerator implements EmbeddingGenerator {
     }
 
     throw new Error("OpenAI rate limit exceeded after retries");
+  }
+
+  /**
+   * OpenAI-compatible: {baseUrl}/embeddings.
+   * Azure: the endpoint may be the resource base
+   * (https://my-resource.openai.azure.com) or already include the deployment
+   * path; we normalize both and append the api-version query param.
+   */
+  private buildRequestUrl(): string {
+    if (this.config.apiStyle !== "azure") {
+      return `${this.config.baseUrl}/embeddings`;
+    }
+    let base = this.config.baseUrl.replace(/\/+$/, "").split("?")[0]!;
+    if (!base.includes("/openai/deployments/")) {
+      base = `${base}/openai/deployments/${this.config.model}`;
+    }
+    if (!base.endsWith("/embeddings")) {
+      base = `${base}/embeddings`;
+    }
+    return `${base}?api-version=${this.config.apiVersion}`;
+  }
+
+  private buildHeaders(): Record<string, string> {
+    if (this.config.apiStyle === "azure") {
+      return { "Content-Type": "application/json", "api-key": this.config.apiKey };
+    }
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.config.apiKey}`,
+    };
   }
 
   private prepareCodeText(code: string, language: Language): string {

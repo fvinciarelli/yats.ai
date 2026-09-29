@@ -13,6 +13,22 @@ describe("Embedding generator dimensions (model-aware)", () => {
     assert.equal(new OpenAIEmbeddingGenerator({ model: "some-unknown-model" }).dimensions, 1536);
   });
 
+  it("Azure derives dimensions from the deployment name and honors overrides", () => {
+    assert.equal(
+      new OpenAIEmbeddingGenerator({ apiStyle: "azure", model: "text-embedding-3-large" }).dimensions,
+      3072,
+    );
+    // Custom deployment names (e.g. "embedding-prod") need an explicit override.
+    assert.equal(
+      new OpenAIEmbeddingGenerator({ apiStyle: "azure", model: "embedding-prod" }).dimensions,
+      1536,
+    );
+    assert.equal(
+      new OpenAIEmbeddingGenerator({ apiStyle: "azure", model: "embedding-prod", dimensions: 3072 }).dimensions,
+      3072,
+    );
+  });
+
   it("Mistral derives dimensions from the selected model", () => {
     assert.equal(new MistralEmbeddingGenerator({ model: "mistral-embed" }).dimensions, 1024);
     assert.equal(new MistralEmbeddingGenerator({ model: "unknown" }).dimensions, 1024);

@@ -79,7 +79,7 @@ services:
   # YATS — MCP Server
   # ============================================
   yats:
-    image: ghcr.io/fvinciarelli/yats.ai:${YATS_VERSION:-0.5.0}
+    image: ghcr.io/fvinciarelli/yats.ai:${YATS_VERSION:-0.6.0}
     # Uncomment below and comment 'image' above to build locally instead:
     # build:
     #   context: ..
@@ -100,7 +100,19 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-nomic-embed-text}
       - OPENAI_API_KEY=${EMBEDDING_OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-text-embedding-3-small}
+      - OPENAI_MODEL=${EMBEDDING_OPENAI_MODEL:-text-embedding-3-small}
+      - OPENAI_BASE_URL=${EMBEDDING_OPENAI_BASE_URL:-}
+      - MISTRAL_API_KEY=${EMBEDDING_MISTRAL_API_KEY:-}
+      - MISTRAL_MODEL=${EMBEDDING_MISTRAL_MODEL:-mistral-embed}
+      - MISTRAL_BASE_URL=${EMBEDDING_MISTRAL_BASE_URL:-}
+      - VOYAGE_API_KEY=${EMBEDDING_VOYAGE_API_KEY:-}
+      - VOYAGE_MODEL=${EMBEDDING_VOYAGE_MODEL:-voyage-code-2}
+      - VOYAGE_BASE_URL=${EMBEDDING_VOYAGE_BASE_URL:-}
+      - AZURE_OPENAI_ENDPOINT=${EMBEDDING_AZURE_ENDPOINT:-}
+      - AZURE_OPENAI_API_KEY=${EMBEDDING_AZURE_API_KEY:-}
+      - AZURE_OPENAI_MODEL=${EMBEDDING_AZURE_MODEL:-text-embedding-3-small}
+      - AZURE_OPENAI_API_VERSION=${EMBEDDING_AZURE_API_VERSION:-2024-02-01}
+      - AZURE_OPENAI_EMBEDDING_DIMENSIONS=${EMBEDDING_AZURE_EMBEDDING_DIMENSIONS:-}
       - REPOSITORIES_PATH=/repos
       - YATS_PORT=5555
       - LOG_LEVEL=${LOG_LEVEL:-info}

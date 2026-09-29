@@ -58,7 +58,7 @@ We parse your entire codebase into a **knowledge graph**: every function, class,
 npx yats-toolkit
 ```
 
-The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/Mistral/Voyage), which directories to pre-index, and writes your MCP config automatically.
+The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/Azure OpenAI/Mistral/Voyage), which directories to pre-index, and writes your MCP config automatically.
 
 **That's it. No other dependencies.** YATS pulls a Docker image with Neo4j, Qdrant, and the MCP server — everything runs in containers. No Python, no Java, no .NET SDK to install. Just Docker.
 
@@ -143,7 +143,7 @@ Indexing generates embeddings. You choose who runs that computation.
 | | |
 |---|---|
 | 🆓 **Ollama — zero cost** | Runs locally on your machine. No API keys, no network calls, no bills. The `nomic-embed-text` model is pulled automatically. Indexing costs you nothing — ever. |
-| 🔑 **Bring your own key** | Prefer a hosted model? Plug in your OpenAI, Mistral, or Voyage AI key. You pay your provider directly — YATS adds zero markup. |
+| 🔑 **Bring your own key** | Prefer a hosted model? Plug in your OpenAI, Azure OpenAI, Mistral, or Voyage AI key. You pay your provider directly — YATS adds zero markup. |
 
 Everything — Neo4j, Qdrant, the indexer, the MCP server — runs in **your own infrastructure**, in Docker. Your code never leaves your machine. That's the version of "AI tooling" your security team will actually sign off on.
 
@@ -221,7 +221,7 @@ flowchart LR
 
 - **Graph:** Neo4j 5 (symbols, calls, imports, inheritance — full relationship graph)
 - **Vectors:** Qdrant (768d embeddings for semantic search)
-- **Embeddings:** Ollama (local), OpenAI, Mistral, or Voyage AI
+- **Embeddings:** Ollama (local), OpenAI, Azure OpenAI, Mistral, or Voyage AI (custom endpoints supported)
 - **Protocol:** MCP JSON-RPC (stdio, HTTP+SSE, Streamable HTTP)
 - **Deployment:** Single `docker compose up` — Neo4j + Qdrant + Ollama + YATS server
 

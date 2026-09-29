@@ -88,6 +88,20 @@ container.register(TOKENS.EMBEDDING_GENERATOR, {
       return new OpenAIEmbeddingGenerator({ apiKey: process.env.OPENAI_API_KEY });
     }
 
+    if (provider === "azure" && process.env.AZURE_OPENAI_API_KEY) {
+      logger.info("Using Azure OpenAI for embeddings");
+      return new OpenAIEmbeddingGenerator({
+        apiKey: process.env.AZURE_OPENAI_API_KEY,
+        model: process.env.AZURE_OPENAI_MODEL ?? "text-embedding-3-small",
+        baseUrl: process.env.AZURE_OPENAI_ENDPOINT ?? "",
+        apiStyle: "azure",
+        apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? "2024-02-01",
+        dimensions: process.env.AZURE_OPENAI_EMBEDDING_DIMENSIONS
+          ? parseInt(process.env.AZURE_OPENAI_EMBEDDING_DIMENSIONS, 10) || undefined
+          : undefined,
+      });
+    }
+
     if (provider === "mistral" && process.env.MISTRAL_API_KEY) {
       logger.info("Using Mistral for embeddings (mistral-embed)");
       return new MistralEmbeddingGenerator({ apiKey: process.env.MISTRAL_API_KEY });

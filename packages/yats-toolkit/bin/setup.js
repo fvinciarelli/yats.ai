@@ -4,7 +4,7 @@
  *
  * Usage:
  *   yats setup              # One-time setup wizard
- *   yats index <path>       # Index a repo (--skip-docs, --no-config)
+ *   yats index <path>       # Index a repo (--skip-docs, --no-config, --force)
  *   yats search <query>     # Search indexed code
  *   yats list               # List indexed repositories
  *   yats summary <repo>     # Show repository summary
@@ -31,12 +31,15 @@ function parseFlags(arr) {
     const a = arr[i];
     if (a === "--provider" && arr[i + 1]) flags.provider = arr[++i];
     else if (a === "--api-key" && arr[i + 1]) flags.apiKey = arr[++i];
+    else if (a === "--endpoint" && arr[i + 1]) flags.endpoint = arr[++i];
+    else if (a === "--model" && arr[i + 1]) flags.model = arr[++i];
     else if (a === "--port" && arr[i + 1]) flags.port = arr[++i];
     else if (a === "--batch" && arr[i + 1]) flags.batch = arr[++i];
     else if (a === "--no-docs") flags.noDocs = true;
     else if (a === "--yes") flags.skipConfirm = true;
   }
-  flags.nonInteractive = !!(flags.provider && flags.apiKey);
+  // Azure additionally requires an endpoint URL to run unattended.
+  flags.nonInteractive = !!(flags.provider && flags.apiKey && (flags.provider !== "azure" || flags.endpoint));
   return flags;
 }
 
@@ -48,8 +51,13 @@ switch (cmd) {
   case "add": {
     const skipDocs = args.includes("--skip-docs");
     const noConfig = args.includes("--no-config");
-    const cleanArgs = args.filter((a) => a !== "--skip-docs" && a !== "--no-config");
-    import("../src/indexer.js").then(m => m.default(cleanArgs, { skipDocs, noConfig }));
+    const force = args.includes("--force");
+    const cleanArgs = args.filter(
+      (a) => a !== "--skip-docs" && a !== "--no-config" && a !== "--force",
+    );
+    import("../src/indexer.js").then((m) =>
+      m.default(cleanArgs, { skipDocs, noConfig, force }),
+    );
     break;
   }
   case "reindex":

@@ -55,6 +55,11 @@ const PROVIDER_MODELS = {
     { label: "text-embedding-3-large (3072d, more accurate)", value: "text-embedding-3-large" },
     { label: "text-embedding-ada-002 (1536d, legacy)", value: "text-embedding-ada-002" },
   ],
+  azure: [
+    { label: "text-embedding-3-small (1536d, fast & cheap)", value: "text-embedding-3-small" },
+    { label: "text-embedding-3-large (3072d, more accurate)", value: "text-embedding-3-large" },
+    { label: "text-embedding-ada-002 (1536d, legacy)", value: "text-embedding-ada-002" },
+  ],
   mistral: [
     { label: "mistral-embed (1024d)", value: "mistral-embed" },
   ],
@@ -73,7 +78,7 @@ const PROVIDER_MODELS = {
   ],
 };
 
-const DEFAULT_MODEL = { openai: "text-embedding-3-small", mistral: "mistral-embed", voyage: "voyage-code-2", ollama: "nomic-embed-text" };
+const DEFAULT_MODEL = { openai: "text-embedding-3-small", azure: "text-embedding-3-small", mistral: "mistral-embed", voyage: "voyage-code-2", ollama: "nomic-embed-text" };
 
 // Minimal embedded docker-compose as fallback
 const EMBEDDED_COMPOSE = `services:
@@ -127,10 +132,18 @@ const EMBEDDED_COMPOSE = `services:
       - OLLAMA_MODEL=\${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text}
       - OPENAI_API_KEY=\${EMBEDDING_OPENAI_API_KEY:-}
       - OPENAI_MODEL=\${EMBEDDING_OPENAI_MODEL:-text-embedding-3-small}
+      - OPENAI_BASE_URL=\${EMBEDDING_OPENAI_BASE_URL:-}
       - MISTRAL_API_KEY=\${EMBEDDING_MISTRAL_API_KEY:-}
       - MISTRAL_MODEL=\${EMBEDDING_MISTRAL_MODEL:-mistral-embed}
+      - MISTRAL_BASE_URL=\${EMBEDDING_MISTRAL_BASE_URL:-}
       - VOYAGE_API_KEY=\${EMBEDDING_VOYAGE_API_KEY:-}
       - VOYAGE_MODEL=\${EMBEDDING_VOYAGE_MODEL:-voyage-code-2}
+      - VOYAGE_BASE_URL=\${EMBEDDING_VOYAGE_BASE_URL:-}
+      - AZURE_OPENAI_ENDPOINT=\${EMBEDDING_AZURE_ENDPOINT:-}
+      - AZURE_OPENAI_API_KEY=\${EMBEDDING_AZURE_API_KEY:-}
+      - AZURE_OPENAI_MODEL=\${EMBEDDING_AZURE_MODEL:-text-embedding-3-small}
+      - AZURE_OPENAI_API_VERSION=\${EMBEDDING_AZURE_API_VERSION:-2024-02-01}
+      - AZURE_OPENAI_EMBEDDING_DIMENSIONS=\${EMBEDDING_AZURE_EMBEDDING_DIMENSIONS:-}
       - REPOSITORIES_PATH=/repos
       - YATS_PORT=__MCP_PORT__
       - EMBEDDING_BATCH_SIZE=\${EMBEDDING_BATCH_SIZE:-__BATCH_SIZE__}
@@ -430,13 +443,32 @@ async function loadEnv() {
 // Merge embedding + benchmark keys into the env map before writing ~/.yats/.env.
 // Benchmark agent keys are added empty (if missing) so users see exactly what to
 // fill in for `yats benchmark`; any existing values are preserved.
-export function applyEnvKeys(envMap, { provider, apiKey, model }) {
+//
+// Everything is persisted so the whole setup is visible in ~/.yats/.env:
+//   provider → EMBEDDING_PROVIDER (+ YATS_PROVIDER alias)
+//   api key  → EMBEDDING_<PROVIDER>_API_KEY
+//   model    → EMBEDDING_<PROVIDER>_MODEL (Azure: deployment name)
+//   url      → EMBEDDING_<PROVIDER>_BASE_URL / EMBEDDING_AZURE_ENDPOINT
+export function applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion }) {
   envMap.EMBEDDING_PROVIDER = provider;
   envMap.YATS_PROVIDER = provider;
   if (provider === "openai" && apiKey) envMap.EMBEDDING_OPENAI_API_KEY = apiKey;
   if (provider === "mistral" && apiKey) envMap.EMBEDDING_MISTRAL_API_KEY = apiKey;
   if (provider === "voyage" && apiKey) envMap.EMBEDDING_VOYAGE_API_KEY = apiKey;
-  const modelVar = { openai: "EMBEDDING_OPENAI_MODEL", mistral: "EMBEDDING_MISTRAL_MODEL", voyage: "EMBEDDING_VOYAGE_MODEL", ollama: "EMBEDDING_OLLAMA_MODEL" }[provider];
+  if (provider === "azure") {
+    if (apiKey) envMap.EMBEDDING_AZURE_API_KEY = apiKey;
+    if (baseUrl) envMap.EMBEDDING_AZURE_ENDPOINT = baseUrl;
+    envMap.EMBEDDING_AZURE_API_VERSION = apiVersion || "2024-02-01";
+  }
+  if (baseUrl) {
+    const baseVar = {
+      openai: "EMBEDDING_OPENAI_BASE_URL",
+      mistral: "EMBEDDING_MISTRAL_BASE_URL",
+      voyage: "EMBEDDING_VOYAGE_BASE_URL",
+    }[provider];
+    if (baseVar) envMap[baseVar] = baseUrl;
+  }
+  const modelVar = { openai: "EMBEDDING_OPENAI_MODEL", azure: "EMBEDDING_AZURE_MODEL", mistral: "EMBEDDING_MISTRAL_MODEL", voyage: "EMBEDDING_VOYAGE_MODEL", ollama: "EMBEDDING_OLLAMA_MODEL" }[provider];
   if (model && modelVar) envMap[modelVar] = model;
   for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"]) {
     if (!(k in envMap)) envMap[k] = "";
@@ -447,19 +479,44 @@ export function applyEnvKeys(envMap, { provider, apiKey, model }) {
   return envMap;
 }
 
-async function testApiConnection(provider, apiKey) {
-  const endpoints = {
-    openai: { url: "https://api.openai.com/v1/embeddings", key: apiKey, body: { model: "text-embedding-3-small", input: ["test"] } },
-    mistral: { url: "https://api.mistral.ai/v1/embeddings", key: apiKey, body: { model: "mistral-embed", input: ["test"] } },
-    voyage: { url: "https://api.voyageai.com/v1/embeddings", key: apiKey, body: { model: "voyage-3-lite", input: ["test"] } },
+// Verify a provider's connection before writing anything.
+// - openai/mistral/voyage: Bearer auth against {baseUrl}/embeddings, where
+//   baseUrl is the provider default or a user-supplied custom endpoint.
+// - azure: api-key auth against
+//   {endpoint}/openai/deployments/{deployment}/embeddings?api-version=...
+async function testApiConnection(provider, apiKey, { baseUrl, model, apiVersion } = {}) {
+  const defaults = {
+    openai: { base: "https://api.openai.com/v1", model: "text-embedding-3-small" },
+    mistral: { base: "https://api.mistral.ai/v1", model: "mistral-embed" },
+    voyage: { base: "https://api.voyageai.com/v1", model: "voyage-3-lite" },
   };
-  const cfg = endpoints[provider];
-  if (!cfg) return { ok: false, error: "Unknown provider" };
+
+  const modelName = model || defaults[provider]?.model || "text-embedding-3-small";
+  let url;
+  let headers;
+
+  if (provider === "azure") {
+    if (!baseUrl) return { ok: false, error: "Azure endpoint URL is required" };
+    let base = baseUrl.replace(/\/+$/, "").split("?")[0];
+    if (!base.includes("/openai/deployments/")) {
+      base = `${base}/openai/deployments/${modelName}`;
+    }
+    if (!base.endsWith("/embeddings")) base = `${base}/embeddings`;
+    url = `${base}?api-version=${apiVersion || "2024-02-01"}`;
+    headers = { "Content-Type": "application/json", "api-key": apiKey };
+  } else {
+    const cfg = defaults[provider];
+    if (!cfg) return { ok: false, error: "Unknown provider" };
+    const base = (baseUrl || cfg.base).replace(/\/+$/, "");
+    url = `${base}/embeddings`;
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
+  }
+
   try {
-    const res = await fetch(cfg.url, {
+    const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.key}` },
-      body: JSON.stringify(cfg.body),
+      headers,
+      body: JSON.stringify({ model: modelName, input: ["test"] }),
       signal: AbortSignal.timeout(15000),
     });
     if (res.ok) return { ok: true };
@@ -474,9 +531,14 @@ async function main(options = {}) {
   // Load pre-filled values from .env (if exists) or CLI flags
   const env = loadEnv();
   const nonInteractive = options.nonInteractive || false;
+  const prefillProvider = options.provider || env.YATS_PROVIDER || env.EMBEDDING_PROVIDER || null;
+  const keyVar = { openai: "EMBEDDING_OPENAI_API_KEY", azure: "EMBEDDING_AZURE_API_KEY", mistral: "EMBEDDING_MISTRAL_API_KEY", voyage: "EMBEDDING_VOYAGE_API_KEY" }[prefillProvider];
+  const baseVar = { openai: "EMBEDDING_OPENAI_BASE_URL", azure: "EMBEDDING_AZURE_ENDPOINT", mistral: "EMBEDDING_MISTRAL_BASE_URL", voyage: "EMBEDDING_VOYAGE_BASE_URL" }[prefillProvider];
   const prefill = {
-    provider: options.provider || env.YATS_PROVIDER || env.EMBEDDING_PROVIDER || null,
-    apiKey: options.apiKey || env.EMBEDDING_OPENAI_API_KEY || env.EMBEDDING_MISTRAL_API_KEY || env.EMBEDDING_VOYAGE_API_KEY || null,
+    provider: prefillProvider,
+    apiKey: options.apiKey || (keyVar && env[keyVar]) || null,
+    baseUrl: options.endpoint || (baseVar && env[baseVar]) || null,
+    model: options.model || null,
     port: options.port ? parseInt(options.port, 10) : null,
     batch: options.batch ? parseInt(options.batch, 10) : null,
     noDocs: options.noDocs || false,
@@ -550,17 +612,52 @@ async function main(options = {}) {
     provider = await choose("How should I generate embeddings for your code?", [
       { label: "Ollama (local, private, included) — recommended", value: "ollama" },
       { label: "OpenAI (cloud, needs API key)", value: "openai" },
+      { label: "Azure OpenAI (cloud, needs endpoint URL + API key)", value: "azure" },
       { label: "Mistral (cloud, needs API key)", value: "mistral" },
       { label: "Voyage AI (cloud, optimized for code, needs API key)", value: "voyage" },
     ]);
   }
 
+  const providerNames = { openai: "OpenAI", azure: "Azure OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
   let apiKey = "";
-  let model = DEFAULT_MODEL[provider];
+  let baseUrl = "";
+  const apiVersion = "2024-02-01";
+  let model = prefill.model || DEFAULT_MODEL[provider];
+
+  // Azure needs an endpoint URL — ask for it before the API key.
+  if (provider === "azure") {
+    step("Step 2 — Azure OpenAI endpoint URL");
+    if (nonInteractive && prefill.baseUrl) {
+      baseUrl = prefill.baseUrl;
+      console.log(`  Endpoint: ${baseUrl}`);
+    } else {
+      const rlAzure = createInterface({ input: process.stdin, output: process.stdout });
+      const prompt = prefill.baseUrl
+        ? `  ${B}Endpoint URL${R} [${prefill.baseUrl}]: `
+        : `  ${B}Endpoint URL (e.g. https://my-resource.openai.azure.com):${R} `;
+      baseUrl = (await ask(rlAzure, prompt)).trim();
+      if (!baseUrl && prefill.baseUrl) baseUrl = prefill.baseUrl;
+      rlAzure.close();
+      if (!baseUrl) {
+        console.log(`  ${RED}✗${R} Azure requires an endpoint URL.`);
+        process.exit(1);
+      }
+    }
+    console.log("");
+  }
+
+  // Azure: the "model" is the deployment name — pick it before the API key so
+  // the connection test hits the real deployment.
+  if (provider === "azure" && !nonInteractive) {
+    step("Step 3 — Azure deployment name");
+    console.log(`  ${D}The name of your embeddings deployment in Azure.${R}`);
+    console.log("");
+    model = await choose("Which deployment?", PROVIDER_MODELS.azure);
+    console.log("");
+  }
 
   if (provider !== "ollama") {
-    const providerNames = { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
-    step(`Step 2 — ${providerNames[provider]} API key`);
+    step(`Step ${provider === "azure" ? "4" : "2"} — ${providerNames[provider]} API key`);
 
     if (nonInteractive && prefill.apiKey) {
       apiKey = prefill.apiKey;
@@ -580,6 +677,26 @@ async function main(options = {}) {
     console.log(`  ${Y}⚠${R}  This is a paid service — you may be charged for API usage.`);
     console.log("");
 
+    // Optional custom endpoint (OpenAI-compatible providers only — Azure has
+    // its own endpoint step above). Works with any proxy or OpenAI-compatible
+    // gateway; leave empty for the provider default.
+    if (["openai", "mistral", "voyage"].includes(provider)) {
+      if (nonInteractive && prefill.baseUrl) {
+        baseUrl = prefill.baseUrl;
+        console.log(`  Custom endpoint: ${baseUrl}`);
+      } else {
+        const rlUrl = createInterface({ input: process.stdin, output: process.stdout });
+        const prompt = prefill.baseUrl
+          ? `  ${B}Custom endpoint URL (Enter = provider default)${R} [${prefill.baseUrl}]: `
+          : `  ${B}Custom endpoint URL? (Enter = provider default; e.g. a local proxy)${R}: `;
+        baseUrl = (await ask(rlUrl, prompt)).trim();
+        if (!baseUrl && prefill.baseUrl) baseUrl = prefill.baseUrl;
+        rlUrl.close();
+        if (baseUrl) console.log(`  ${G}✓${R} Custom endpoint: ${baseUrl}`);
+      }
+      console.log("");
+    }
+
     // Optional: test connection
     if (!nonInteractive) {
       const rlTest = createInterface({ input: process.stdin, output: process.stdout });
@@ -587,7 +704,11 @@ async function main(options = {}) {
       rlTest.close();
       if (testAnswer.toLowerCase() !== "n") {
         const sTest = spinner("Testing API connection...");
-        const result = await testApiConnection(provider, apiKey);
+        const result = await testApiConnection(provider, apiKey, {
+          baseUrl,
+          model: provider === "azure" ? model : undefined,
+          apiVersion,
+        });
         if (result.ok) {
           sTest.done(true);
           console.log("");
@@ -615,18 +736,23 @@ async function main(options = {}) {
     console.log("");
   }
 
-  // Embedding model (every provider)
-  if (nonInteractive) {
-    console.log(`  Embedding model: ${model}`);
-  } else {
-    step(provider === "ollama" ? "Step 2 — Embedding model" : "Step 3 — Embedding model");
-    model = await choose("Which embedding model?", PROVIDER_MODELS[provider]);
-    console.log("");
+  // Embedding model (every provider except Azure, where the deployment name
+  // was chosen above)
+  if (provider !== "azure") {
+    if (nonInteractive) {
+      console.log(`  Embedding model: ${model}`);
+    } else {
+      step(provider === "ollama" ? "Step 2 — Embedding model" : "Step 3 — Embedding model");
+      model = await choose("Which embedding model?", PROVIDER_MODELS[provider]);
+      console.log("");
+    }
+  } else if (nonInteractive) {
+    console.log(`  Azure deployment: ${model}`);
   }
 
   // Step 4: Embedding batch size
-  const BATCH_DEFAULTS = { openai: 200, mistral: 200, voyage: 100, ollama: 4 };
-  const BATCH_MAX = { openai: 2048, mistral: 1024, voyage: 128, ollama: 4 };
+  const BATCH_DEFAULTS = { openai: 200, azure: 200, mistral: 200, voyage: 100, ollama: 4 };
+  const BATCH_MAX = { openai: 2048, azure: 2048, mistral: 1024, voyage: 128, ollama: 4 };
   const defaultBatch = prefill.batch || BATCH_DEFAULTS[provider];
   const maxBatch = BATCH_MAX[provider];
   let batchSize = defaultBatch;
@@ -732,16 +858,17 @@ async function main(options = {}) {
   // Confirm
   if (!nonInteractive && !prefill.skipConfirm) {
     step(`Step ${pathsToIndex.length ? "6" : "5"} — Confirm`);
-    const providerName = provider === "ollama"
-      ? `Ollama (${model})`
-      : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
+    const providerName = provider === "ollama" || provider === "azure"
+      ? `${provider === "ollama" ? "Ollama" : providerNames[provider]} (${model})`
+      : providerNames[provider];
     box([
       `${B}Provider:${R}     ${providerName}`,
+      ...(baseUrl ? [`${B}Endpoint:${R}     ${baseUrl}`] : []),
       `${B}Port:${R}         ${String(mcpPort)}`,
       ...(pathsToIndex.length ? [`${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)")}`] : []),
       `${B}Batch:${R}        ${String(batchSize)}`,
       `${B}Index docs:${R}   ${indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No"}`,
-      `${B}API calls:${R}    ${provider === "ollama" ? "None (runs locally)" : `To ${provider} API`}`,
+      `${B}API calls:${R}    ${provider === "ollama" ? "None (runs locally)" : `To ${providerNames[provider] ?? provider} API`}`,
       `${B}Disk needed:${R}  ${provider === "ollama" ? "~3GB" : "~1GB"}`,
     ]);
     console.log("");
@@ -775,7 +902,7 @@ async function main(options = {}) {
 
   // Persist keys to ~/.yats/.env — canonical source (embedding + benchmark keys).
   const envMap = loadEnv();
-  applyEnvKeys(envMap, { provider, apiKey, model });
+  applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion });
   writeFileSync(ENV_FILE, Object.entries(envMap).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 
   // Pull the YATS Docker image from GitHub Container Registry
