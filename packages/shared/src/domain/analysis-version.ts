@@ -7,4 +7,4 @@
  * (parser upgrades, new symbol kinds, extraction fixes): the next
  * `yats index` re-analyzes every file automatically, no --force needed.
  */
-export const ANALYSIS_SCHEMA_VERSION = 2;
+export const ANALYSIS_SCHEMA_VERSION = 3;

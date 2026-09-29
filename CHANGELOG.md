@@ -5,6 +5,52 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-09-29
+
+### Fixed
+- **C# call graph was empty in Docker (the client-reported bug).** The
+  self-contained .NET bridge crashed on the Alpine image (`Couldn't find a
+  valid ICU package`) and the analyzer fell back to regex **silently**: indexes
+  looked healthy while relationships were near zero, entity architecture was
+  empty and related_symbols/callers/expand_graph returned nothing. The image
+  now installs `icu-libs icu-data-full`. Verified against MediatR (154 .cs
+  files): 1435 symbols, 1702 relationships, 423 CALLS edges, 0 fallbacks.
+- **`relativePath` truncated to the file name in the C# and Go bridges.**
+  Two files with the same name in different folders collided in symbol IDs
+  and in cross-file resolution. Both bridges now emit the full repo-relative
+  path (`/`-normalized). `ANALYSIS_SCHEMA_VERSION` bumped 2→3 so existing
+  indexes re-analyze automatically.
+- **Call receivers were discarded** (`OrderValidator.Validate()` was scoped
+  to the caller's class). Bridges now classify receivers syntactically:
+  - C#: field/property/parameter/local type map + static type names,
+    `this`, object creation; expression-bodied members (`=> Send(...)`)
+    are analyzed too; `nameof()` noise is skipped.
+  - Go: receiver/parameter/local type map + imported-package qualifiers;
+    method IDs are qualified with their receiver type (no more collisions
+    between same-named methods on different types).
+  - Python: module-qualified calls (`Mod.func()`) carry module metadata.
+  - Rust: `Type::method()` carries the receiver type.
+  - PHP (`className`) and Java (`resolved` qualified signature) metadata —
+    already emitted — is now consumed.
+- **Deterministic relationship resolution, no guessing.**
+  `GlobalSymbolTable.resolveCallTarget` now matches by receiver metadata
+  (receiverType/className/resolved signature/module), then by the class
+  qualifier in the raw target, and only then by name — and an ambiguous match
+  is never rewritten (a wrong edge is worse than a missing edge). Verified
+  against chi (54 .go files): 465 relationships, 348 CALLS, 261 rewrites.
+- **Silent fallbacks are now loud.** Every bridge analyzer logs a
+  rate-limited warning with the real failure cause and adds a warning entry
+  to the analysis result (shared helper in `AbstractAnalyzer`).
+
+### Added
+- **Docker image smoke tests in CI** — the C# bridge, Go bridge and
+  rust-analyzer now run *inside the built image* on every push, and the
+  release pipeline has a smoke gate before publishing. This is the test
+  that would have caught the ICU regression the day it shipped.
+- C# analyzer tests covering receiver classification, full-path IDs,
+  CONTAINS edges and convention kinds; resolver tests for typed matching,
+  module resolution, Java `resolved` and the no-guess policy.
+
 ## [0.6.0] - 2026-09-29
 
 ### Added

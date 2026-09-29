@@ -113,7 +113,9 @@ func analyzeFile(path, repo string) (*Result, error) {
 }
 
 func analyzeNode(fset *token.FileSet, node *ast.File, repo, path string) (*Result, error) {
-	relPath := filepath.Base(path)
+	// Full repo-relative path (not basename) — two files with the same name in
+	// different folders must not collide in symbol IDs or resolution heuristics.
+	relPath := filepath.ToSlash(path)
 	pkgName := node.Name.Name
 	if pkgName == "" {
 		pkgName = filepath.Dir(path)
@@ -150,6 +152,7 @@ type analyzer struct {
 
 	currentStruct string
 	structFields  map[string][]string // struct name -> field names
+	pkgNames      map[string]bool     // imported package names (aliases + last path segment)
 
 	symbols []Symbol
 	relns   []Relationship
@@ -219,7 +222,9 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 
 			// Create relationship: receiver type CONTAINS this method
 			recvID := a.makeID(parent)
-			methID := a.makeID(name)
+			// Qualify the method ID with its receiver type — two methods named
+			// the same on different types in one package must not collide.
+			methID := a.makeID(parent + "." + name)
 			a.relns = append(a.relns, Relationship{
 				ID:             fmt.Sprintf("%s|contains|%s", recvID, methID),
 				SourceSymbolID: recvID,
@@ -230,6 +235,9 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 
 		sig := a.funcSignature(n)
 		sym := a.makeSymbol(name, kind, n.Pos(), n.End())
+		if parent != "" {
+			sym.ID = a.makeID(parent + "." + name)
+		}
 		sym.Signature = sig
 		sym.ParentClass = parent
 		if parent != "" {
@@ -237,9 +245,10 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 		}
 		a.symbols = append(a.symbols, sym)
 
-		// Extract calls within function body
+		// Extract calls within function body (with receiver type map)
 		if n.Body != nil {
-			a.extractCalls(n.Body, sym.ID)
+			scope := a.collectFuncScope(n)
+			a.extractCalls(n.Body, sym.ID, scope)
 		}
 
 	// ---- Import declarations ----
@@ -247,6 +256,20 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 		importPath := strings.Trim(n.Path.Value, `"`)
 		if n.Name != nil {
 			importPath = n.Name.Name + "=" + importPath
+		}
+		// Track the imported package name for receiver classification:
+		// `services.FetchAll()` — receiver `services` is a package, resolved
+		// deterministically by namespace downstream.
+		if a.pkgNames == nil {
+			a.pkgNames = map[string]bool{}
+		}
+		if n.Name != nil {
+			a.pkgNames[n.Name.Name] = true
+		} else {
+			parts := strings.Split(strings.Trim(n.Path.Value, `"`), "/")
+			if len(parts) > 0 {
+				a.pkgNames[parts[len(parts)-1]] = true
+			}
 		}
 		sourceID := a.makeID("import:" + importPath)
 		targetID := a.makeID(importPath)
@@ -347,7 +370,7 @@ func (a *analyzer) detectRoutes(node *ast.File) {
 	})
 }
 
-func (a *analyzer) extractCalls(body *ast.BlockStmt, callerID string) {
+func (a *analyzer) extractCalls(body *ast.BlockStmt, callerID string, scope map[string]scopeEntry) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -355,11 +378,23 @@ func (a *analyzer) extractCalls(body *ast.BlockStmt, callerID string) {
 		}
 
 		var calleeName string
+		var receiverType, receiverExpr, receiverKind string
 		switch fun := call.Fun.(type) {
 		case *ast.Ident:
 			calleeName = fun.Name
 		case *ast.SelectorExpr:
 			calleeName = fun.Sel.Name
+			// Classify the receiver: `svc.Fetch()` (typed local/param/field),
+			// `services.FetchAll()` (imported package), or unknown.
+			if x, ok := fun.X.(*ast.Ident); ok {
+				receiverExpr = x.Name
+				if e, found := scope[x.Name]; found {
+					receiverType, receiverKind = e.typ, e.kind
+				} else if a.pkgNames != nil && a.pkgNames[x.Name] {
+					receiverKind = "package"
+					receiverType = x.Name
+				}
+			}
 		default:
 			return true
 		}
@@ -369,14 +404,116 @@ func (a *analyzer) extractCalls(body *ast.BlockStmt, callerID string) {
 		}
 
 		calleeID := a.makeID(calleeName)
-		a.relns = append(a.relns, Relationship{
+		rel := Relationship{
 			ID:             fmt.Sprintf("%s|calls|%s", callerID, calleeID),
 			SourceSymbolID: callerID,
 			TargetSymbolID: calleeID,
 			Kind:           "CALLS",
-		})
+			Metadata:       map[string]any{},
+		}
+		if receiverType != "" {
+			rel.Metadata["receiverType"] = receiverType
+			rel.Metadata["receiverExpr"] = receiverExpr
+			rel.Metadata["receiverKind"] = receiverKind
+		} else if receiverExpr != "" {
+			rel.Metadata["receiverExpr"] = receiverExpr
+		}
+		a.relns = append(a.relns, rel)
 		return true
 	})
+}
+
+// scopeEntry is a syntax-level identifier → type mapping used to classify
+// call receivers without semantic analysis.
+type scopeEntry struct {
+	typ  string
+	kind string // parameter | local | field
+}
+
+// simpleTypeName normalizes a Go type expression for receiver matching:
+// "*http.Request" → "Request", "*Service" → "Service". Method namespaces
+// are pkg.SimpleName, so qualified/external types would never match otherwise.
+func simpleTypeName(t string) string {
+	t = strings.TrimPrefix(t, "*")
+	if i := strings.LastIndex(t, "/"); i >= 0 {
+		t = t[i+1:]
+	}
+	if i := strings.LastIndex(t, "."); i >= 0 {
+		t = t[i+1:]
+	}
+	return t
+}
+
+// collectFuncScope builds the identifier → type map for one function body:
+// receiver, parameters, explicit-typed locals (`var x Service`,
+// `x := &Service{}`). Call results and `var`-style inference stay unknown.
+func (a *analyzer) collectFuncScope(fn *ast.FuncDecl) map[string]scopeEntry {
+	scope := map[string]scopeEntry{}
+
+	// Receiver: `func (s *Service) Fetch()` → s → Service
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		if len(fn.Recv.List[0].Names) > 0 {
+			scope[fn.Recv.List[0].Names[0].Name] = scopeEntry{
+				typ: simpleTypeName(a.typeToString(fn.Recv.List[0].Type)), kind: "parameter",
+			}
+		}
+	}
+
+	// Parameters
+	if fn.Type.Params != nil {
+		for _, f := range fn.Type.Params.List {
+			typ := simpleTypeName(a.typeToString(f.Type))
+			for _, name := range f.Names {
+				scope[name.Name] = scopeEntry{typ: typ, kind: "parameter"}
+			}
+		}
+	}
+
+	// Locals with explicit types
+	if fn.Body != nil {
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch d := n.(type) {
+			case *ast.DeclStmt:
+				if gd, ok := d.Decl.(*ast.GenDecl); ok {
+					for _, spec := range gd.Specs {
+						if vs, ok := spec.(*ast.ValueSpec); ok {
+							typ := a.typeToString(vs.Type)
+							for _, name := range vs.Names {
+								if typ != "" {
+									scope[name.Name] = scopeEntry{typ: simpleTypeName(typ), kind: "local"}
+								}
+							}
+						}
+					}
+				}
+			case *ast.AssignStmt:
+				if d.Tok == token.DEFINE {
+					for i, rhs := range d.Rhs {
+						if i >= len(d.Lhs) {
+							break
+						}
+						typ := ""
+						switch r := rhs.(type) {
+						case *ast.CompositeLit:
+							typ = a.typeToString(r.Type)
+						case *ast.UnaryExpr: // &Service{}
+							if cl, ok := r.X.(*ast.CompositeLit); ok {
+								typ = a.typeToString(cl.Type)
+							}
+						}
+						if typ != "" {
+							if id, ok := d.Lhs[i].(*ast.Ident); ok {
+								scope[id.Name] = scopeEntry{typ: simpleTypeName(typ), kind: "local"}
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	return scope
 }
 
 func (a *analyzer) makeSymbol(name, kind string, pos, end token.Pos) Symbol {

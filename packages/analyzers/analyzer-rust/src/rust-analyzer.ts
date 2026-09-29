@@ -189,8 +189,10 @@ export class RustAnalyzer extends AbstractAnalyzer {
   ): Promise<AnalysisResult> {
     try {
       return await this.analyzeWithLsp(filePath, content, repositoryName);
-    } catch {
-      return this.analyzeFallback(filePath, content, repositoryName);
+    } catch (err) {
+      const result = this.analyzeFallback(filePath, content, repositoryName);
+      result.errors.push(this.bridgeFailureWarning("rust-analyzer", err));
+      return result;
     }
   }
 
@@ -367,7 +369,22 @@ export class RustAnalyzer extends AbstractAnalyzer {
         const key = `${callerId}->${targetId}`;
         if (seenCalls.has(key)) continue;
         seenCalls.add(key);
-        relationships.push(this.createRelationship(callerId, targetId, RelationshipKind.CALLS));
+
+        // `Type::method()` — the receiver type is known syntactically;
+        // carry it as metadata for deterministic resolution downstream.
+        const receiverType = cm[2]
+          ? cm[2].split("::").pop()
+          : undefined;
+        relationships.push(
+          this.createRelationship(
+            callerId,
+            targetId,
+            RelationshipKind.CALLS,
+            receiverType
+              ? { receiverType, receiverKind: "type" }
+              : {},
+          ),
+        );
       }
 
       return { symbols, relationships, errors: [], warnings: [] };

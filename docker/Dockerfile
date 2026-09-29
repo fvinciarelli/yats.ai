@@ -132,6 +132,9 @@ FROM node:22-alpine
 # curl needed for entrypoint health checks
 RUN apk add --no-cache curl
 
+# ICU — the self-contained .NET C# bridge (Roslyn) requires it on musl
+RUN apk add --no-cache icu-libs icu-data-full
+
 # Optional: install PHP and Python runtimes for bridge scripts
 ARG INCLUDE_PHP=true
 ARG INCLUDE_PYTHON=true

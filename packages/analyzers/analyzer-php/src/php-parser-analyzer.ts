@@ -79,8 +79,10 @@ export class PhpAnalyzer extends AbstractAnalyzer {
   ): Promise<AnalysisResult> {
     try {
       return await this.analyzeWithBridge(filePath, content, repositoryName);
-    } catch {
-      return this.analyzeFallback(filePath, content, repositoryName);
+    } catch (err) {
+      const result = this.analyzeFallback(filePath, content, repositoryName);
+      result.errors.push(this.bridgeFailureWarning("php", err));
+      return result;
     }
   }
 

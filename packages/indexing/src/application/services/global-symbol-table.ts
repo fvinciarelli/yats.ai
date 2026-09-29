@@ -75,39 +75,79 @@ export class GlobalSymbolTable {
   /**
    * Resolve a CALLS relationship target.
    *
-   * Analyzers scope the callee to the caller's namespace:
-   *   targetId = {repo}::{filePath}::{namespace.calleeName}
+   * Priority order (most deterministic first):
+   * 1. Explicit receiver metadata from the bridge (receiverType / className /
+   *    resolved signature) — match candidates by containing class.
+   * 2. Module metadata (Python `Mod.func()`) — match by namespace.
+   * 3. Class qualifier in the raw target (C# `Ns.Class.method`) — same match.
+   * 4. Legacy name-based heuristic — only when unambiguous.
    *
-   * We extract the calleeName, look it up globally, and if we find
-   * it in a DIFFERENT file, we rewrite to that real ID.
+   * Philosophy: an ambiguous match is NOT resolved at all (the edge is
+   * dropped downstream by the endpoint filter). A wrong edge is worse than a
+   * missing edge for agent queries.
    *
    * Returns the resolved targetSymbolId, or the original if unresolvable.
    */
-  resolveCallTarget(targetId: string, sourceId: string): string {
-    // Extract callee name: last segment after the final dot
-    // Format: {repo}::{filePath}::{namespace.qualName}
-    const lastColon = targetId.lastIndexOf("::");
-    if (lastColon === -1) return targetId;
+  resolveCallTarget(
+    targetId: string,
+    sourceId: string,
+    metadata: Record<string, unknown> = {},
+  ): string {
+    const calleeName = this.extractCalleeName(targetId);
+    if (!calleeName) return targetId;
 
-    const symbolPath = targetId.slice(lastColon + 2);
-    const dotIdx = symbolPath.lastIndexOf(".");
-    const calleeName = dotIdx !== -1 ? symbolPath.slice(dotIdx + 1) : symbolPath;
+    // 1. Explicit receiver metadata from the bridge
+    const explicitReceiver = this.receiverTypeFromMetadata(metadata);
+    if (explicitReceiver) {
+      const typed = this.typedCandidates(calleeName, explicitReceiver);
+      if (typed.length === 1) return typed[0]!;
+      if (typed.length > 1) {
+        this.logger.debug(
+          `Ambiguous receiver-typed CALLS target "${explicitReceiver}.${calleeName}": ` +
+          `${typed.length} candidates — not rewriting`,
+        );
+      }
+      // Explicit receiver with no match = call on an external type — keep
+      // the raw target; the endpoint filter drops it. Do NOT fall through to
+      // name-based guessing: an unrelated same-named method is a wrong edge.
+      return targetId;
+    }
 
-    // Extract source file path for same-file check
+    // 2. Module-qualified calls (Python `Mod.func()`)
+    const moduleName = metadata["module"] as string | undefined;
+    if (moduleName) {
+      const matches = this.candidatesInModule(calleeName, moduleName);
+      if (matches.length === 1) return matches[0]!;
+      return targetId;
+    }
+
+    // 3. Class qualifier in the raw target ({Ns}.{Class}.{method} — C#)
+    const pathReceiver = this.receiverTypeFromPath(targetId);
+    if (pathReceiver) {
+      const typed = this.typedCandidates(calleeName, pathReceiver);
+      if (typed.length === 1) return typed[0]!;
+      if (typed.length > 1) {
+        this.logger.debug(
+          `Ambiguous class-qualified CALLS target "${pathReceiver}.${calleeName}" — not rewriting`,
+        );
+        return targetId;
+      }
+      // 0 matches — fall through to name-based (the qualifier may be a
+      // synthetic local-variable path, e.g. TypeScript `apiClient.start()`).
+    }
+
+    // 4. Legacy name-based heuristic — unambiguous cases only
     const sourceFile = this.extractFilePath(sourceId);
     const sourceNamespace = sourceFile ? this.pathToNamespace.get(sourceFile) : undefined;
 
     const candidates = this.byName.get(calleeName);
     if (!candidates || candidates.size === 0) {
-      // Built-in or unresolvable — keep original (Neo4j will just skip it)
       return targetId;
     }
 
-    // Filter candidates that are in a DIFFERENT file/namespace
     const externalCandidates = [...candidates].filter((cid) => {
       const entry = this.byId.get(cid);
       if (!entry) return false;
-      // Different file OR different namespace
       return entry.relativePath !== sourceFile &&
         entry.namespace !== sourceNamespace;
     });
@@ -117,43 +157,95 @@ export class GlobalSymbolTable {
     }
 
     if (externalCandidates.length === 0 && candidates.size === 1) {
-      // No external candidate, but exactly one symbol with this name in the
-      // whole repo — likely a same-file method call whose raw target lacks the
-      // class qualifier (e.g. `_jql` emitted for `self._jql()`). The single
-      // match is unambiguous, so rewrite to it.
       const only = [...candidates][0]!;
-      if (only !== targetId) {
-        return only;
-      }
+      if (only !== targetId) return only;
       return targetId;
     }
 
     if (externalCandidates.length > 1) {
-      // Multiple external candidates — try to disambiguate by namespace match
-      // (e.g. if caller imported from "db", prefer candidate in "db" namespace)
-      for (const cid of externalCandidates) {
-        const entry = this.byId.get(cid);
-        if (entry && entry.namespace === calleeName) {
-          // Direct match: callee named "hash_string" and namespace is also "hash_string"?
-          // No, that's wrong. Let me think...
-          // Actually, calleeName is "hash_string" and if a candidate's namespace is 
-          // somehow "hash_string", that means it's a top-level function in that module.
-          // But this is unlikely. Skip this heuristic for now.
-        }
-      }
-
-      // If multiple matches, pick the first one from a different file.
-      // This is a best-effort heuristic — ambiguous cases are rare.
       this.logger.debug(
-        `Ambiguous CALLS target "${calleeName}": ${externalCandidates.length} candidates, picking first`,
+        `Ambiguous CALLS target "${calleeName}": ${externalCandidates.length} candidates — not rewriting`,
       );
-      return externalCandidates[0]!;
     }
 
-    // All candidates are in the same file — that's a local call, keep original
-    // But wait: if all candidates are in the same file, the original targetId
-    // should already be correct (same namespace). Keep it.
     return targetId;
+  }
+
+  /** Receiver type from explicit bridge metadata (C#/Go receiverType, PHP className, Java resolved). */
+  private receiverTypeFromMetadata(metadata: Record<string, unknown>): string | null {
+    const rt = metadata["receiverType"] as string | undefined;
+    if (rt) return rt;
+
+    const className = metadata["className"] as string | undefined;
+    if (className) {
+      // PHP fully-qualified names: App\Services\OrderService → OrderService
+      const simple = className.split("\\").pop();
+      return simple && simple.length > 0 ? simple : null;
+    }
+
+    const resolved = metadata["resolved"] as string | undefined;
+    if (resolved) {
+      // Java qualified signature: com.acme.OrderRepository.FetchAll(...)
+      const bare = resolved.split("(")[0]!;
+      const parts = bare.split(".");
+      if (parts.length >= 2) return parts[parts.length - 2]!;
+    }
+
+    return null;
+  }
+
+  /** Class qualifier embedded in the raw target: {Ns}.{Class}.{method}. */
+  private receiverTypeFromPath(targetId: string): string | null {
+    const symbolPath = this.extractSymbolPath(targetId);
+    if (!symbolPath) return null;
+    const parts = symbolPath.split(".");
+    if (parts.length < 3) return null;
+    return parts[parts.length - 2]!;
+  }
+
+  private typedCandidates(calleeName: string, receiverType: string): string[] {
+    const candidates = this.byName.get(calleeName);
+    if (!candidates || candidates.size === 0) return [];
+    return [...candidates].filter((cid) => {
+      const entry = this.byId.get(cid);
+      if (!entry) return false;
+      if (entry.parentClass === receiverType) return true;
+      return (
+        entry.namespace === receiverType ||
+        entry.namespace.endsWith(`.${receiverType}`)
+      );
+    });
+  }
+
+  private candidatesInModule(calleeName: string, moduleName: string): string[] {
+    const matches: string[] = [];
+    for (const [ns, ids] of this.byNamespace) {
+      // Python __init__.py files get namespace "...module.__init__" —
+      // normalize so `Mod.func()` matches the package's __init__ too.
+      const bare = ns.endsWith(".__init__")
+        ? ns.slice(0, -".__init__".length)
+        : ns;
+      if (bare !== moduleName && !bare.endsWith(`.${moduleName}`)) continue;
+      for (const cid of ids) {
+        const entry = this.byId.get(cid);
+        if (entry && entry.name === calleeName) matches.push(cid);
+      }
+    }
+    return matches;
+  }
+
+  private extractCalleeName(targetId: string): string | null {
+    const lastColon = targetId.lastIndexOf("::");
+    if (lastColon === -1) return null;
+    const symbolPath = targetId.slice(lastColon + 2);
+    const dotIdx = symbolPath.lastIndexOf(".");
+    return dotIdx !== -1 ? symbolPath.slice(dotIdx + 1) : symbolPath;
+  }
+
+  private extractSymbolPath(targetId: string): string | null {
+    const lastColon = targetId.lastIndexOf("::");
+    if (lastColon === -1) return null;
+    return targetId.slice(lastColon + 2);
   }
 
   /**
@@ -235,6 +327,8 @@ export interface SymbolTableEntry {
   name: string;
   namespace: string;
   relativePath: string;
+  /** Containing class (Java/PHP members), when known. */
+  parentClass?: string;
 }
 
 // ============================================================
@@ -262,7 +356,11 @@ export function resolveRelationships(
     let newTargetId = rel.targetSymbolId;
 
     if (rel.kind === ("CALLS" as RelationshipKind)) {
-      newTargetId = table.resolveCallTarget(rel.targetSymbolId, rel.sourceSymbolId);
+      newTargetId = table.resolveCallTarget(
+        rel.targetSymbolId,
+        rel.sourceSymbolId,
+        rel.metadata,
+      );
     } else if (rel.kind === ("IMPORTS" as RelationshipKind)) {
       newTargetId = table.resolveImportTarget(
         rel.targetSymbolId,
@@ -273,7 +371,11 @@ export function resolveRelationships(
       rel.kind === ("IMPLEMENTS" as RelationshipKind) ||
       rel.kind === ("INHERITS" as RelationshipKind)
     ) {
-      newTargetId = table.resolveCallTarget(rel.targetSymbolId, rel.sourceSymbolId);
+      newTargetId = table.resolveCallTarget(
+        rel.targetSymbolId,
+        rel.sourceSymbolId,
+        rel.metadata,
+      );
     }
 
     if (newTargetId !== rel.targetSymbolId) {

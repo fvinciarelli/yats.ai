@@ -55,9 +55,11 @@ export class PythonAnalyzer extends AbstractAnalyzer {
     try {
       // Pass content via stdin so the bridge doesn't need to read the file
       return await this.analyzeWithBridge(filePath, content, repositoryName);
-    } catch {
-      // Fallback to regex-based analysis
-      return this.analyzeFallback(filePath, content, repositoryName);
+    } catch (err) {
+      // Fallback to regex-based analysis — but surface it (see helper docs).
+      const result = this.analyzeFallback(filePath, content, repositoryName);
+      result.errors.push(this.bridgeFailureWarning("python", err));
+      return result;
     }
   }
 
@@ -71,14 +73,17 @@ export class PythonAnalyzer extends AbstractAnalyzer {
   ): Promise<AnalysisResult[]> {
     try {
       return await this.analyzeBatchWithBridge(files, repositoryName);
-    } catch {
+    } catch (err) {
+      this.bridgeFailureWarning("python", err);
       // Fallback: analyze one by one
       const results: AnalysisResult[] = [];
       for (const file of files) {
         try {
           results.push(await this.analyzeWithBridge(file.filePath, file.content, repositoryName));
-        } catch {
-          results.push(this.analyzeFallback(file.filePath, file.content, repositoryName));
+        } catch (err2) {
+          const result = this.analyzeFallback(file.filePath, file.content, repositoryName);
+          result.errors.push(this.bridgeFailureWarning("python", err2));
+          results.push(result);
         }
       }
       return results;

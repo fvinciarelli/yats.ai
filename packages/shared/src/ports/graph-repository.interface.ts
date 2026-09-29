@@ -31,6 +31,8 @@ export interface SymbolLite {
   name: string;
   namespace: string;
   relativePath: string;
+  /** Containing class, when known (used for deterministic CALLS resolution). */
+  parentClass?: string | null;
 }
 
 /** Optional filters for findRoutes. */

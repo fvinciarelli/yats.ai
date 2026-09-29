@@ -110,4 +110,141 @@ describe("resolveRelationships", () => {
     assert.equal(skipped, 1);
     assert.equal(resolved[0]!.targetSymbolId, target);
   });
+
+  it("rewrites deterministically with receiverType metadata (C#/Go style)", () => {
+    const csharpEntries: SymbolTableEntry[] = [
+      {
+        id: "r::Services/OrderService.cs::App.Services.OrderService.GetOrders",
+        name: "GetOrders",
+        namespace: "App.Services.OrderService",
+        relativePath: "Services/OrderService.cs",
+      },
+      {
+        id: "r::Repositories/OrderRepository.cs::App.Repositories.OrderRepository.FetchAll",
+        name: "FetchAll",
+        namespace: "App.Repositories.OrderRepository",
+        relativePath: "Repositories/OrderRepository.cs",
+      },
+      {
+        id: "r::Other/ShopRepository.cs::App.Other.ShopRepository.FetchAll",
+        name: "FetchAll",
+        namespace: "App.Other.ShopRepository",
+        relativePath: "Other/ShopRepository.cs",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(csharpEntries);
+
+    // `_repo.FetchAll()` with receiverType=OrderRepository → deterministic
+    const r = rel("CALLS" as RelationshipKind, csharpEntries[0]!.id, "r::Services/OrderService.cs::App.Services.OrderService.FetchAll");
+    r.metadata = { receiverType: "OrderRepository", receiverExpr: "_repo", receiverKind: "field" };
+    const { resolved, rewritten } = resolveRelationships([r], t);
+    assert.equal(rewritten, 1);
+    assert.equal(resolved[0]!.targetSymbolId, csharpEntries[1]!.id);
+  });
+
+  it("does NOT guess when receiverType matches multiple candidates", () => {
+    const csharpEntries: SymbolTableEntry[] = [
+      {
+        id: "r::Services/OrderService.cs::App.Services.OrderService.GetOrders",
+        name: "GetOrders",
+        namespace: "App.Services.OrderService",
+        relativePath: "Services/OrderService.cs",
+      },
+      {
+        id: "r::Repositories/A.cs::App.Repositories.OrderRepository.FetchAll",
+        name: "FetchAll",
+        namespace: "App.Repositories.OrderRepository",
+        relativePath: "Repositories/A.cs",
+      },
+      {
+        id: "r::Repositories/B.cs::App.Repositories.OrderRepository.FetchAll",
+        name: "FetchAll",
+        namespace: "App.Repositories.OrderRepository",
+        relativePath: "Repositories/B.cs",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(csharpEntries);
+
+    const raw = "r::Services/OrderService.cs::App.Services.OrderService.FetchAll";
+    const r = rel("CALLS" as RelationshipKind, csharpEntries[0]!.id, raw);
+    r.metadata = { receiverType: "OrderRepository", receiverExpr: "_repo" };
+    const { resolved, rewritten } = resolveRelationships([r], t);
+    assert.equal(rewritten, 0);
+    assert.equal(resolved[0]!.targetSymbolId, raw); // no-guess: wrong edge > missing edge
+  });
+
+  it("does NOT fall back to name guessing when an explicit receiver has no match", () => {
+    const csharpEntries: SymbolTableEntry[] = [
+      {
+        id: "r::Services/OrderService.cs::App.Services.OrderService.GetOrders",
+        name: "GetOrders",
+        namespace: "App.Services.OrderService",
+        relativePath: "Services/OrderService.cs",
+      },
+      {
+        // Same-named method on an UNRELATED class — must not be picked.
+        id: "r::Other/Warehouse.cs::App.Other.Warehouse.FetchAll",
+        name: "FetchAll",
+        namespace: "App.Other.Warehouse",
+        relativePath: "Other/Warehouse.cs",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(csharpEntries);
+
+    // Bridge said receiverType=ExternalThing (e.g. a framework type) — no
+    // symbol has that class, so the call is external. The unrelated
+    // Warehouse.FetchAll must NOT be chosen by name.
+    const raw = "r::Services/OrderService.cs::App.Services.OrderService.FetchAll";
+    const r = rel("CALLS" as RelationshipKind, csharpEntries[0]!.id, raw);
+    r.metadata = { receiverType: "ExternalThing", receiverExpr: "_client" };
+    const { resolved, rewritten } = resolveRelationships([r], t);
+    assert.equal(rewritten, 0);
+    assert.equal(resolved[0]!.targetSymbolId, raw);
+  });
+
+  it("resolves Java `resolved` metadata by containing class", () => {
+    const javaEntries: SymbolTableEntry[] = [
+      {
+        id: "r::OrderService.java::com.acme.OrderService.getOrders",
+        name: "getOrders",
+        namespace: "com.acme",
+        relativePath: "OrderService.java",
+      },
+      {
+        id: "r::OrderRepository.java::com.acme.OrderRepository.fetchAll",
+        name: "fetchAll",
+        namespace: "com.acme",
+        relativePath: "OrderRepository.java",
+        parentClass: "OrderRepository",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(javaEntries);
+
+    const raw = "r::OrderService.java::fetchAll";
+    const r = rel("CALLS" as RelationshipKind, javaEntries[0]!.id, raw);
+    r.metadata = { resolved: "com.acme.OrderRepository.fetchAll()" };
+    const { resolved, rewritten } = resolveRelationships([r], t);
+    assert.equal(rewritten, 1);
+    assert.equal(resolved[0]!.targetSymbolId, javaEntries[1]!.id);
+  });
+
+  it("resolves module-qualified calls by namespace (Python style)", () => {
+    const { resolved, rewritten } = resolveRelationships(
+      [(() => {
+        const r = rel("CALLS" as RelationshipKind, entries[0]!.id, "qa::services/ticket-sync/app/main.py::services.ticket-sync.app.main.build_strategy");
+        r.metadata = { module: "strategies", receiverKind: "module" };
+        return r;
+      })()],
+      table(),
+    );
+    assert.equal(rewritten, 1);
+    assert.equal(
+      resolved[0]!.targetSymbolId,
+      "qa::services/ticket-sync/app/strategies/__init__.py::services.ticket-sync.app.strategies.__init__.build_strategy",
+    );
+  });
 });

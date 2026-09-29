@@ -1,6 +1,6 @@
 import type { LanguageAnalyzer, AnalysisResult, AnalysisError } from "@yats/shared";
 import type { Symbol, Relationship } from "@yats/shared";
-import { Language } from "@yats/shared";
+import { Language, createLogger } from "@yats/shared";
 import { createSymbolId } from "@yats/shared";
 
 // ============================================================
@@ -98,5 +98,46 @@ export abstract class AbstractAnalyzer implements LanguageAnalyzer {
   /** Create an error */
   protected error(line: number, column: number, message: string): AnalysisError {
     return { line, column, message, severity: "error" };
+  }
+
+  // ============================================================
+  // Subprocess-bridge visibility
+  // ============================================================
+
+  private _bridgeFailureCount = 0;
+  private _bridgeFailureLoggedAt = 0;
+
+  /**
+   * Signal a subprocess-bridge failure in a way that is visible in the server
+   * logs and in the analysis result. Every bridge analyzer falls back to a
+   * regex analyzer when its subprocess dies (missing runtime deps, broken
+   * binary, …) — falling back silently made degraded indexes look healthy
+   * (e.g. the C# bridge crash without ICU produced "476 symbols, 4
+   * relationships" with zero warnings).
+   *
+   * Logs the first failure and then at most once every 30s (rate-limited so
+   * a medium repo produces one log line, not thousands). Returns a warning
+   * entry the caller should append to the result's errors.
+   */
+  protected bridgeFailureWarning(bridge: string, err: unknown): AnalysisError {
+    this._bridgeFailureCount++;
+    const now = Date.now();
+    const shouldLog =
+      this._bridgeFailureCount === 1 || now - this._bridgeFailureLoggedAt > 30_000;
+    if (shouldLog) {
+      this._bridgeFailureLoggedAt = now;
+      const detail = err instanceof Error ? err.message : String(err);
+      createLogger(`analyzer:${bridge}`).warn(
+        `Bridge "${bridge}" failed (${this._bridgeFailureCount} failures so far) — ` +
+        `falling back to regex analysis. The graph will be degraded: no precise ` +
+        `call targets, no convention kinds. Cause: ${detail.slice(0, 500)}`,
+      );
+    }
+    return {
+      line: 0,
+      column: 0,
+      severity: "warning",
+      message: `Bridge "${bridge}" unavailable — used regex fallback (degraded analysis)`,
+    };
   }
 }

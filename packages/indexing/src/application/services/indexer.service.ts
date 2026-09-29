@@ -250,6 +250,7 @@ export class IndexerService implements Indexer {
               name: symbol.name,
               namespace: symbol.namespace,
               relativePath: symbol.location.relativePath,
+              parentClass: symbol.parentClass ?? undefined,
             });
           }
           for (const rel of batch.relationships) {

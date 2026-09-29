@@ -64,9 +64,9 @@ jobs:
         run: pnpm run test
 
   docker-build:
-    name: Docker build (dry-run)
+    name: Docker build (dry-run + bridge smoke)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -80,5 +80,25 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: false
+          load: true
+          tags: yats:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Smoke test: run each subprocess bridge INSIDE the image. These would
+      # have caught the ICU regression (C# bridge crashing on alpine) the day
+      # it shipped — local tests run bridges via host tools and can't see it.
+      - name: Smoke — C# bridge
+        run: |
+          echo 'namespace N; public class Foo { public void Bar() { Helper(); } private void Helper() {} }' \
+            | docker run --rm -i --entrypoint /usr/local/lib/yats-csharp-bridge/yats-csharp-bridge yats:ci --file Test.cs --repo r --stdin \
+            | grep -q '"kind": "CLASS"'
+
+      - name: Smoke — Go bridge
+        run: |
+          printf 'package main\ntype S struct{}\nfunc (s *S) F() {}\n' \
+            | docker run --rm -i --entrypoint /usr/local/bin/yats-go-bridge yats:ci --file t.go --repo r --stdin \
+            | grep -q '"kind": "struct"'
+
+      - name: Smoke — rust-analyzer binary
+        run: docker run --rm --entrypoint sh yats:ci -c 'rust-analyzer --version' | grep -q 'rust-analyzer'

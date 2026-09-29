@@ -166,8 +166,11 @@ func (c *Calculator) Subtract(a, b int) int {
 
   it("returns empty results for non-Go content", async () => {
     const result = await analyzer.analyze("empty.go", "", "test-repo");
-    // Fallback still processes — should not crash
-    assert.equal(result.errors.length, 0);
+    // Fallback still processes — should not crash. The bridge failure is now
+    // VISIBLE (warning entry) instead of silent, so assert that contract.
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0]!.severity, "warning");
+    assert.match(result.errors[0]!.message, /fallback/);
   });
 
   it("detects routes from stdlib, gorilla, gin, and chi registrations (P5)", async () => {

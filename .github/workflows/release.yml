@@ -87,6 +87,30 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  smoke:
+    name: Smoke — image bridges
+    needs: docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Pull image
+        run: docker pull ghcr.io/${{ github.repository_owner }}/yats.ai:latest
+
+      # Gate: the C# bridge must run INSIDE the published image. This caught
+      # the ICU regression (silent regex fallback, empty call graph) that
+      # local tests couldn't see.
+      - name: C# bridge
+        run: |
+          echo 'namespace N; public class Foo { public void Bar() { Helper(); } private void Helper() {} }' \
+            | docker run --rm -i --entrypoint /usr/local/lib/yats-csharp-bridge/yats-csharp-bridge ghcr.io/${{ github.repository_owner }}/yats.ai:latest --file Test.cs --repo r --stdin \
+            | grep -q '"kind": "CLASS"'
+
+      - name: Go bridge
+        run: |
+          printf 'package main\ntype S struct{}\nfunc (s *S) F() {}\n' \
+            | docker run --rm -i --entrypoint /usr/local/bin/yats-go-bridge ghcr.io/${{ github.repository_owner }}/yats.ai:latest --file t.go --repo r --stdin \
+            | grep -q '"kind": "struct"'
+
   npm:
     name: npm → yats-toolkit
     needs: test
@@ -119,7 +143,7 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [docker, npm]
+    needs: [docker, npm, smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

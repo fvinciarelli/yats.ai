@@ -236,7 +236,7 @@ export class Neo4jGraphRepository implements GraphRepository {
     const rows = await this.connection.read<any>(
       `
       MATCH (s:Symbol {repository: $repository})
-      RETURN s.id AS id, s.name AS name, s.namespace AS namespace, s.relativePath AS relativePath
+      RETURN s.id AS id, s.name AS name, s.namespace AS namespace, s.relativePath AS relativePath, s.parentClass AS parentClass
       `,
       { repository },
     );
@@ -245,6 +245,7 @@ export class Neo4jGraphRepository implements GraphRepository {
       name: r.name ?? "",
       namespace: r.namespace ?? "",
       relativePath: r.relativePath ?? "",
+      parentClass: r.parentClass ?? null,
     }));
   }
 

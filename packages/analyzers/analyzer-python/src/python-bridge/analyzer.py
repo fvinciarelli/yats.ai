@@ -50,6 +50,7 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
         self.relationships = []
         self.current_class = None
         self.current_function = None
+        self.known_modules: set = set()
         self.namespace = os.path.splitext(self.relative_path.replace("/", "."))[0]
 
     def _get_decorator_name(self, decorator) -> Optional[str]:
@@ -320,6 +321,9 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
         for name in node.names:
             module_name = name.name.value if hasattr(name.name, 'value') else str(name.name)
             alias = name.asname.name.value if hasattr(name, 'asname') and name.asname else None
+            # Track the name callers use (alias or last path segment) for
+            # module-qualified call resolution (`Mod.func()`).
+            self.known_modules.add(alias or module_name.split(".")[-1])
             target_id = self.make_id(module_name)
             source_id = self.make_id(f"import:{module_name}")
             self.relationships.append({
@@ -343,6 +347,7 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
             imported = name.name.value if hasattr(name.name, 'value') else str(name.name)
             alias = name.asname.name.value if hasattr(name, 'asname') and name.asname else None
             full_name = f"{module}.{imported}" if module else imported
+            self.known_modules.add(alias or module.split(".")[-1] if module else imported)
             target_id = self.make_id(full_name)
             source_id = self.make_id(f"import:{imported}")
             self.relationships.append({
@@ -364,6 +369,7 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
             # Extract callee name from different call forms
             callee_name = None
             callee_id = None
+            callee_meta = {}
             if hasattr(node.func, 'value') and hasattr(node.func, 'attr'):
                 # obj.method() calls
                 obj = node.func.value
@@ -373,6 +379,12 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                     callee_name = method
                     if self.current_class:
                         callee_id = self.make_id(f"{self.namespace}.{self.current_class}.{method}")
+                elif isinstance(obj, cst.Name) and obj.value in self.known_modules:
+                    # Mod.func() → module-qualified call; the resolver rewrites
+                    # it deterministically by namespace (module metadata).
+                    callee_name = method
+                    callee_id = self.make_id(f"{self.namespace}.{method}")
+                    callee_meta = {"module": obj.value, "receiverExpr": obj.value, "receiverKind": "module"}
                 else:
                     # Call on another object — can't resolve the receiver's type
                     # without type inference; the emitted ID would be dangling,
@@ -392,7 +404,7 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
                     "sourceSymbolId": caller_id,
                     "targetSymbolId": callee_id,
                     "kind": "CALLS",
-                    "metadata": {},
+                    "metadata": callee_meta,
                 })
 
 
