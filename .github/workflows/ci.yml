@@ -91,7 +91,7 @@ jobs:
       - name: Smoke — C# bridge
         run: |
           echo 'namespace N; public class Foo { public void Bar() { Helper(); } private void Helper() {} }' \
-            | docker run --rm -i --entrypoint /usr/local/lib/yats-csharp-bridge/yats-csharp-bridge yats:ci --file Test.cs --repo r --stdin \
+            | docker run --rm -i --entrypoint /usr/local/lib/yats-csharp-bridge/yats-csharp-bridge yats:ci --file Foo.cs --repo r --stdin \
             | grep -q '"kind": "CLASS"'
 
       - name: Smoke — Go bridge
