@@ -5,6 +5,35 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-29
+
+### Fixed
+- **`yats connect` wrote the wrong MCP config for JSON-based agents.** The
+  JSON install branch ignored the agent templates and merged the generic
+  HTTP config from `~/.yats/mcp-config.json` — Copilot, Gemini and Claude
+  received an HTTP `mcpServers` entry instead of the stdio bridge their
+  templates define. The branch now installs each agent's template (correct
+  format + transport per agent) and merges non-destructively into existing
+  files (`mcpServers` or VS Code's `servers` objects, keyed by server name).
+- **Copilot connector now targets the portable Agent Host format.**
+  `.copilot/mcp.json` (CLI-only format, array + `type: local`) is replaced by
+  `.mcp.json` at the repo root with `mcpServers` + `type: stdio` — the format
+  VS Code Chat / Copilot Agent Host reads. A legacy `.copilot/mcp.json` is
+  reported but never touched.
+- **Template path resolution broken on Windows and paths with spaces.**
+  `getFileContent` used `new URL(import.meta.url).pathname` (percent-encoded,
+  `/C:/` prefix on Windows); now uses `fileURLToPath`.
+- **Legacy `/mcp/sse` URL replaced by the Streamable HTTP endpoint `/mcp`**
+  in the setup wizard's global config and final messages; `connect` also
+  normalizes existing `/mcp/sse` URLs when reading the global config.
+
+### Added
+- **VS Code (native MCP) connector** (`yats connect --install vscode`):
+  writes `.vscode/mcp.json` in the workspace `servers` format with the stdio
+  bridge, compatible with any client of VS Code's MCP hub (Copilot Chat
+  included).
+- Tests for the merge semantics and the shipped agent templates.
+
 ## [0.6.1] - 2026-09-29
 ### Fixed
 - **C# call graph was empty in Docker (the client-reported bug).** The

@@ -8,7 +8,7 @@ yats connect <agent>            # preview the config for an agent
 yats connect --install <agent>  # create/merge the files in the current repo
 ```
 
-Agents: `claude`, `codex`, `copilot`, `cursor`, `gemini`
+Agents: `claude`, `codex`, `copilot`, `cursor`, `gemini`, `vscode`
 
 ---
 
@@ -18,7 +18,8 @@ Agents: `claude`, `codex`, `copilot`, `cursor`, `gemini`
 |-------|---------------|----------|
 | [Claude Code](./claude/) | `.claude/skills/yats/SKILL.md` | `.mcp.json` |
 | [Gemini CLI](./gemini/) | `GEMINI.md` (repo root) | `.gemini/settings.json` |
-| [Copilot CLI](./copilot/) | `.github/copilot-instructions.md` | `.copilot/mcp.json` |
+| [Copilot](./copilot/) | `.github/copilot-instructions.md` | `.mcp.json` (Agent Host format) |
+| [VS Code (native MCP)](./vscode/) | — | `.vscode/mcp.json` (`servers` format) |
 | [Codex CLI](./codex/) | `AGENTS.md` (repo root) | `.codex/config.toml` |
 | [Cursor](./cursor/) | `.cursor/rules/rules.mdc` | `.cursor/mcp.json` |
 

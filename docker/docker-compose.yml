@@ -79,7 +79,7 @@ services:
   # YATS — MCP Server
   # ============================================
   yats:
-    image: ghcr.io/fvinciarelli/yats.ai:${YATS_VERSION:-0.6.2}
+    image: ghcr.io/fvinciarelli/yats.ai:${YATS_VERSION:-0.7.0}
     # Uncomment below and comment 'image' above to build locally instead:
     # build:
     #   context: ..

@@ -851,7 +851,7 @@ async function main(options = {}) {
       mcpPort = suggested;
     }
     rlPort.close();
-    console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
+    console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp${R}`);
     console.log("");
   }
 
@@ -897,7 +897,7 @@ async function main(options = {}) {
   writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
-  const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp/sse` } } };
+  const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp` } } };
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
 
   // Persist keys to ~/.yats/.env — canonical source (embedding + benchmark keys).
@@ -1016,14 +1016,14 @@ async function main(options = {}) {
 
   // Done
   console.log("");
-  console.log(`  ✅  ${G}YATS is ready!${R}  →  ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
+  console.log(`  ✅  ${G}YATS is ready!${R}  →  ${C}http://localhost:${mcpPort}/mcp${R}`);
   console.log("");
   console.log(`  Config saved to ${C}~/.yats/.env${R}`);
   console.log(`  ${D}Benchmark agent keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) go there too.${R}`);
   console.log("");
   box([
     `${B}Copy this URL into your AI agent:${R}`,
-    `{ "url": "http://localhost:${mcpPort}/mcp/sse" }`,
+    `{ "url": "http://localhost:${mcpPort}/mcp" }`,
     "",
     `${B}Copilot / Claude Desktop:${R}`,
     `{ "command": "npx", "args": ["yats-bridge"] }`,

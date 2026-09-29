@@ -15,6 +15,7 @@
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -54,9 +55,20 @@ const AGENTS = {
     transport: "stdio bridge",
     files: [
       { src: "connect/copilot/instructions.md", dest: ".github/copilot-instructions.md", type: "text" },
-      { src: "connect/copilot/mcp.json", dest: ".copilot/mcp.json", type: "json" },
+      // VS Code Chat / Copilot Agent Host reads the portable .mcp.json at the
+      // repo root (mcpServers format), not .copilot/mcp.json (CLI-only format).
+      { src: "connect/copilot/mcp.json", dest: ".mcp.json", type: "json" },
     ],
     url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/copilot",
+  },
+  vscode: {
+    name: "VS Code (native MCP)",
+    transport: "stdio bridge",
+    files: [
+      // Native VS Code workspace MCP config (servers format).
+      { src: "connect/vscode/mcp.json", dest: ".vscode/mcp.json", type: "json" },
+    ],
+    url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/vscode",
   },
   gemini: {
     name: "Gemini CLI",
@@ -79,17 +91,23 @@ const AGENTS = {
 };
 
 function getYatsMcpConfig() {
+  let cfg = { mcpServers: { yats: { url: "http://localhost:5555/mcp" } } };
   try {
-    return JSON.parse(readFileSync(MCP_CONFIG_FILE, "utf-8"));
-  } catch {
-    return { mcpServers: { yats: { url: "http://localhost:5555/mcp/sse" } } };
+    cfg = JSON.parse(readFileSync(MCP_CONFIG_FILE, "utf-8"));
+  } catch { /* no config yet — use the default above */ }
+  // Normalize legacy /mcp/sse URLs to the Streamable HTTP endpoint.
+  const url = cfg?.mcpServers?.yats?.url;
+  if (typeof url === "string" && url.endsWith("/mcp/sse")) {
+    cfg.mcpServers.yats.url = url.slice(0, -4);
   }
+  return cfg;
 }
 
 function getFileContent(srcPath) {
-  // Templates ship inside the package (connect/ dir) — resolves from src/ → ../connect/
+  // Templates ship inside the package (connect/ dir) — resolves from src/ → ../connect/.
+  // fileURLToPath handles percent-encoded paths (spaces, unicode) and Windows drives.
   try {
-    const pkgDir = dirname(new URL(import.meta.url).pathname);
+    const pkgDir = dirname(fileURLToPath(import.meta.url));
     const installedPath = join(pkgDir, "..", srcPath);
     if (existsSync(installedPath)) {
       return readFileSync(installedPath, "utf-8");
@@ -102,7 +120,7 @@ function getFileContent(srcPath) {
 // Render / template helpers
 // ============================================================
 
-function renderContent(srcPath) {
+export function renderContent(srcPath) {
   const content = getFileContent(srcPath);
   if (content === null) {
     console.log(`  ${RED}✗${R} Missing template ${srcPath} — reinstall yats-toolkit`);
@@ -135,14 +153,84 @@ function appendMarker(agentKey) {
 // Install helpers
 // ============================================================
 
-function safeMergeJson(existingPath, newEntry) {
-  let obj = {};
+/** Read an existing JSON config as an object, or null if missing/invalid. */
+function readJsonObject(path) {
   try {
-    obj = JSON.parse(readFileSync(existingPath, "utf-8"));
-  } catch { /* file doesn't exist or invalid, start fresh */ }
-  if (!obj.mcpServers) obj.mcpServers = {};
-  obj.mcpServers = { ...obj.mcpServers, ...newEntry.mcpServers };
-  return JSON.stringify(obj, null, 2) + "\n";
+    const obj = JSON.parse(readFileSync(path, "utf-8"));
+    return obj && typeof obj === "object" && !Array.isArray(obj) ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Merge an agent template into an existing JSON config. Templates carry one
+ * of two shapes — `mcpServers` (Claude/Copilot/Gemini/Cursor) or `servers`
+ * (VS Code native) — both objects keyed by server name. Existing entries are
+ * preserved; only the YATS entry is added or updated.
+ */
+export function mergeServerConfig(existing, template) {
+  const out = {};
+  for (const key of Object.keys(existing)) out[key] = existing[key];
+  for (const key of Object.keys(template)) {
+    const tpl = template[key];
+    if (tpl && typeof tpl === "object" && !Array.isArray(tpl)) {
+      const base =
+        out[key] && typeof out[key] === "object" && !Array.isArray(out[key])
+          ? out[key]
+          : {};
+      out[key] = { ...base, ...tpl };
+    } else {
+      out[key] = tpl;
+    }
+  }
+  return out;
+}
+
+/**
+ * Install one agent's JSON config file from its template.
+ * The template is the source of truth (correct format + transport per
+ * agent: stdio bridge for copilot/claude/gemini/vscode, HTTP for cursor) —
+ * never the global ~/.yats/mcp-config.json, which is HTTP-only and generic.
+ * Non-destructive: existing files are merged, other entries preserved.
+ */
+function installJsonFile(file) {
+  const templateContent = renderContent(file.src);
+  if (templateContent === null) {
+    console.log(`  ${RED}✗${R} Missing template ${file.src} — reinstall yats-toolkit`);
+    return false;
+  }
+
+  let templateObj;
+  try {
+    templateObj = JSON.parse(templateContent);
+  } catch {
+    console.log(`  ${RED}✗${R} Invalid template ${file.src}`);
+    return false;
+  }
+
+  const destPath = file.dest;
+  const exists = existsSync(destPath);
+  let merged = templateObj;
+  if (exists) {
+    const existing = readJsonObject(destPath);
+    if (existing === null) {
+      console.log(`  ${Y}⚠${R} ${destPath} exists but is not valid JSON — left untouched.`);
+      return false;
+    }
+    merged = mergeServerConfig(existing, templateObj);
+  }
+
+  mkdirSync(dirname(destPath), { recursive: true });
+  writeFileSync(destPath, JSON.stringify(merged, null, 2) + "\n");
+  if (exists) {
+    console.log(`  ${Y}↻${R} Merged YATS into existing ${destPath}`);
+    console.log(`  ${D}  Added/updated: ${JSON.stringify(templateObj)}${R}`);
+    console.log(`  ${D}  Your existing entries are preserved.${R}`);
+  } else {
+    console.log(`  ${G}✓${R} Created ${destPath}`);
+  }
+  return true;
 }
 
 // Single shared readline so piped stdin keeps working across multiple prompts
@@ -225,22 +313,10 @@ async function installFiles(agentKey, prompter) {
 
   for (const file of agent.files) {
     const destPath = file.dest;
-    const mcpConfig = getYatsMcpConfig();
 
     if (file.type === "json") {
-      const exists = existsSync(destPath);
-      const merged = safeMergeJson(destPath, mcpConfig);
-      mkdirSync(dirname(destPath), { recursive: true });
-      writeFileSync(destPath, merged);
-      if (exists) {
-        console.log(`  ${Y}↻${R} Merged YATS into existing ${destPath}`);
-        const entry = mcpConfig.mcpServers.yats;
-        console.log(`  ${D}  Added: mcpServers.yats → ${JSON.stringify(entry)}${R}`);
-        console.log(`  ${D}  Your existing entries are preserved.${R}`);
-      } else {
-        console.log(`  ${G}✓${R} Created ${destPath}`);
-      }
-      installed++;
+      if (installJsonFile(file)) installed++;
+      else skipped++;
     } else if (file.type === "toml") {
       const exists = existsSync(destPath);
       mkdirSync(dirname(destPath), { recursive: true });
@@ -301,6 +377,15 @@ async function installFiles(agentKey, prompter) {
   console.log(`  Done: ${installed} installed, ${skipped} skipped.`);
   console.log(`  Full instructions: ${C}${agent.url}${R}`);
   console.log("");
+
+  // Copilot switched from .copilot/mcp.json (CLI format) to the portable
+  // .mcp.json at the repo root (Agent Host format). Point out the legacy file
+  // so the old config doesn't linger unnoticed.
+  if (agentKey === "copilot" && existsSync(".copilot/mcp.json")) {
+    console.log(`  ${Y}⚠${R} Legacy .copilot/mcp.json found — Copilot now reads .mcp.json (Agent Host format).`);
+    console.log(`  ${D}  Remove the old file if unused.${R}`);
+    console.log("");
+  }
 }
 
 // ============================================================
@@ -365,8 +450,6 @@ function showConfig(agentKey) {
     process.exit(1);
   }
 
-  const mcpConfig = getYatsMcpConfig();
-
   console.log("");
   console.log(`  ${B}${agent.name}${R} — via ${agent.transport}`);
   console.log("");
@@ -374,7 +457,19 @@ function showConfig(agentKey) {
   for (const file of agent.files) {
     console.log(`  ${B}${file.dest}${R}`);
     if (file.type === "json") {
-      console.log(`  ${D}${safeMergeJson("", mcpConfig).replace(/\n/g, "\n  ")}${R}`);
+      const templateContent = renderContent(file.src);
+      if (templateContent) {
+        try {
+          const tpl = JSON.parse(templateContent);
+          const existing = existsSync(file.dest) ? readJsonObject(file.dest) : null;
+          const preview = existing ? mergeServerConfig(existing, tpl) : tpl;
+          console.log(`  ${D}${JSON.stringify(preview, null, 2).replace(/\n/g, "\n  ")}${R}`);
+        } catch {
+          console.log(`  ${D}${templateContent.replace(/\n/g, "\n  ")}${R}`);
+        }
+      } else {
+        console.log(`  ${RED}(missing template)${R}`);
+      }
     } else {
       const content = renderContent(file.src);
       if (content) {
@@ -465,6 +560,7 @@ export default async function connect(args) {
     { label: "Claude Code", value: "claude" },
     { label: "Cursor", value: "cursor" },
     { label: "GitHub Copilot", value: "copilot" },
+    { label: "VS Code (native MCP)", value: "vscode" },
     { label: "Gemini CLI", value: "gemini" },
     { label: "Codex CLI", value: "codex" },
   ]);

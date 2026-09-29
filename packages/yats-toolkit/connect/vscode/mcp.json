@@ -1,5 +1,5 @@
 {
-  "mcpServers": {
+  "servers": {
     "yats": {
       "type": "stdio",
       "command": "yats",
