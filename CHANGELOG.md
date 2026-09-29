@@ -5,22 +5,6 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.3] - 2026-09-29
-
-### Fixed
-- npm publish for 0.6.2 reported success in CI but never landed in the
-  registry — re-released as 0.6.3 (verified against
-  registry.npmjs.org immediately after publish).
-
-## [0.6.2] - 2026-09-29
-
-### Fixed
-- Release smoke gate fixture: the C# bridge smoke test used a file named
-  `Test.cs`, which the convention detector correctly classifies as a TEST —
-  the gate (working as intended) blocked the 0.6.1 GitHub Release. Fixture
-  renamed to `Foo.cs`; this version re-runs the full release with all gates
-  green. (npm and the Docker image from 0.6.1 are unchanged and valid.)
-
 ## [0.6.1] - 2026-09-29
 ### Fixed
 - **C# call graph was empty in Docker (the client-reported bug).** The
