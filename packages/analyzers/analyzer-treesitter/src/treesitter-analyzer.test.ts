@@ -13,8 +13,8 @@ describe("TreeSitterAnalyzer", () => {
     assert.ok(analyzer.canAnalyze("file.py", ""));
     assert.ok(analyzer.canAnalyze("file.cs", ""));
     assert.ok(analyzer.canAnalyze("file.php", ""));
+    assert.ok(analyzer.canAnalyze("file.rs", ""));
     assert.ok(!analyzer.canAnalyze("file.rb", ""));
-    assert.ok(!analyzer.canAnalyze("file.rs", ""));
   });
 
   it("extracts classes via regex fallback (TypeScript)", async () => {

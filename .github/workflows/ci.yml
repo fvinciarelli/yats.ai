@@ -35,6 +35,22 @@ jobs:
       - name: Build C# bridge
         run: dotnet build packages/analyzers/analyzer-csharp/src/csharp-bridge/RoslynAnalyzer.csproj
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build Java bridge (shaded jar)
+        working-directory: packages/analyzers/analyzer-java/src/java-bridge
+        run: mvn -q -DskipTests package
+
+      - name: Install rust-analyzer
+        run: |
+          wget -qO /tmp/ra.gz https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-unknown-linux-gnu.gz
+          gunzip /tmp/ra.gz
+          chmod +x /tmp/ra
+          sudo mv /tmp/ra /usr/local/bin/rust-analyzer
+
       - name: Install Python deps (libcst for Python analyzer bridge)
         run: pip install libcst
 

@@ -328,6 +328,11 @@ export class McpServer {
         this.handleIndexFile(req, res);
         return;
       }
+      // File-hash state — lets the CLI diff against the last indexed content
+      if (req.method === "GET" && url.pathname === "/index/state") {
+        this.handleGetIndexState(req, res, url);
+        return;
+      }
       // Finalize endpoint — flush pending relationships (cross-file resolution)
       if (req.method === "POST" && url.pathname === "/index/complete") {
         this.handleIndexComplete(req, res);
@@ -525,9 +530,35 @@ export class McpServer {
         res.end(JSON.stringify({ error: "repoName/repository, filePath/path, and content are required" }));
         return;
       }
-      await this.indexer.indexFileContent(repoName, filePath, content);
+      const result = await this.indexer.indexFileContent(
+        repoName,
+        filePath,
+        content,
+        typeof params.contentHash === "string" ? params.contentHash : undefined,
+      );
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, file: filePath }));
+      res.end(JSON.stringify({ ok: true, file: filePath, skipped: result.status === "skipped" }));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleGetIndexState(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const repository = url.searchParams.get("repository") ?? url.searchParams.get("repoName");
+    if (!repository) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "repository query param is required" }));
+      return;
+    }
+    try {
+      const state = await this.indexer.getIndexState(repository);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(state));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));

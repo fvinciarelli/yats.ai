@@ -17,6 +17,7 @@ import {
   validateRepoConfig,
   mergeRepoConfig,
   configErrorText,
+  planIndex,
   DEFAULT_DOC_EXTENSIONS,
 } from "./indexer.js";
 
@@ -270,5 +271,59 @@ describe("indexRepo — malformed config stops the run (P6)", () => {
       assert.ok(!out.includes("Invalid repo config"), out);
       assert.ok(out.includes("Cannot reach YATS"), out);
     }
+  });
+});
+
+describe("planIndex", () => {
+  const walked = [
+    { path: "src/a.ts", hash: "h1" },
+    { path: "src/b.ts", hash: "h2-new" },
+    { path: "src/c.ts", hash: "h3" },
+  ];
+
+  it("sends only changed/new files against matching state", () => {
+    const state = {
+      files: { "src/a.ts": "h1", "src/b.ts": "h2-old", "src/d.ts": "h4" },
+      reanalyzeAll: false,
+    };
+    const plan = planIndex(walked, state);
+    assert.deepEqual(plan.send, ["src/b.ts", "src/c.ts"]); // b changed, c is new
+    assert.deepEqual(plan.remove, ["src/d.ts"]);
+    assert.equal(plan.unchanged, 1);
+  });
+
+  it("sends everything when the analyzer version changed (reanalyzeAll)", () => {
+    const state = {
+      files: { "src/a.ts": "h1", "src/b.ts": "h2-new", "src/c.ts": "h3" },
+      reanalyzeAll: true,
+    };
+    const plan = planIndex(walked, state);
+    assert.deepEqual(plan.send, ["src/a.ts", "src/b.ts", "src/c.ts"]);
+    assert.deepEqual(plan.remove, []);
+    assert.equal(plan.unchanged, 0);
+  });
+
+  it("sends everything with empty state (first index)", () => {
+    const plan = planIndex(walked, { files: {}, reanalyzeAll: true });
+    assert.equal(plan.send.length, 3);
+    assert.equal(plan.remove.length, 0);
+    assert.equal(plan.unchanged, 0);
+  });
+
+  it("force re-analyzes everything and skips deletion detection", () => {
+    const state = {
+      files: { "src/a.ts": "h1", "src/gone.ts": "hx" },
+      reanalyzeAll: false,
+    };
+    const plan = planIndex(walked, state, { force: true });
+    assert.equal(plan.send.length, 3);
+    assert.deepEqual(plan.remove, []);
+    assert.equal(plan.unchanged, 0);
+  });
+
+  it("tolerates a null state (old server / fetch failure)", () => {
+    const plan = planIndex(walked, null);
+    assert.equal(plan.send.length, 3);
+    assert.equal(plan.unchanged, 0);
   });
 });

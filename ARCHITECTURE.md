@@ -40,7 +40,7 @@ YATS indexes software repositories into a **symbolic knowledge graph** (Neo4j) a
               │
    ┌──────────┴────────────┐
    │  Language Analyzers    │
-   │  TS | Go | C# | Py | PHP │
+   │  TS | Go | C# | Py | PHP | Java | Rust │
    └────────────────────────┘
 ```
 
@@ -78,9 +78,34 @@ packages/
     ├── analyzer-go/          Go subprocess bridge
     ├── analyzer-csharp/      Roslyn bridge (.NET)
     ├── analyzer-python/      LibCST bridge
-    ├── analyzer-php/         nikic/php-parser bridge
+    ├── analyzer-php/         nikic/php-parser + NameResolver bridge
+    ├── analyzer-java/        JavaParser + JavaSymbolSolver bridge (shaded jar)
+    ├── analyzer-rust/        rust-analyzer LSP driver (+ regex fallback)
     └── analyzer-treesitter/  Universal fallback
 ```
+
+### Language strategy (decisions)
+
+Real/semantic parsers over syntax-only (tree-sitter) whenever the language
+offers one — YATS's core value is the call graph, and tree-sitter cannot
+resolve types or call targets. Decisions:
+
+- **Java → JavaParser bridge** (done): JavaParser AST + JavaSymbolSolver for
+  type resolution, shaded jar spawned per file like the Go/C#/PHP bridges.
+  Emits classes, interfaces, enums, records, annotations, members, and
+  INHERITS/IMPLEMENTS/CONTAINS/CALLS (calls resolved to FQCN where possible,
+  name-based otherwise). tree-sitter-java rejected: syntax-only.
+- **Rust → rust-analyzer LSP** (done): the semantic engine used by IDEs,
+  driven over JSON-RPC per file in detached mode (no cargo workspace inside
+  the indexing container). Extracts modules, structs, enums, traits, fns,
+  fields, impl/trait edges (IMPLEMENTS) and CONTAINS hierarchy. Note:
+  `prepareCallHierarchy` returns empty for detached files, so CALLS are
+  extracted syntactically by name and resolved by the global symbol table
+  (like Go/PHP). Requires gcompat/libgcc/libstdc++ on alpine (glibc binary).
+  `syn` remains a cheaper fallback option.
+- **PHP → nikic/php-parser + NameResolver bridge** (done): real AST + FQCN
+  name resolution; replaced the old regex-based extraction. PHPStan is
+  vendored for a future semantic upgrade.
 
 ---
 
@@ -287,7 +312,8 @@ docker compose -f docker/docker-compose.yml up -d
 #   yats:5555     — MCP server
 ```
 
-The MCP server Docker image includes all language bridges (Go, C#, PHP, Python) compiled in. Published at `ghcr.io/fvinciarelli/yats.ai`.
+The MCP server Docker image includes all language bridges (Go, C#, PHP, Python,
+Java, rust-analyzer) compiled in. Published at `ghcr.io/fvinciarelli/yats.ai`.
 
 The `yats` service interpolates these environment variables (defaults shown,
 settable in `~/.yats/.env`): `INDEX_DOCS=true`, `DOC_MAX_FILES=300`,

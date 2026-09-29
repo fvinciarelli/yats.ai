@@ -25,7 +25,18 @@ export interface Indexer {
    * to host paths, so indexing itself always happens via per-file HTTP.
    */
   registerRepository(repositoryName: string, rootPath: string): Promise<void>;
-  indexFileContent(repositoryName: string, filePath: string, content: string): Promise<void>;
+  indexFileContent(
+    repositoryName: string,
+    filePath: string,
+    content: string,
+    clientHash?: string,
+  ): Promise<{ status: "indexed" | "skipped" }>;
+  getIndexState(repositoryName: string): Promise<{
+    files: Record<string, string>;
+    storedAnalyzerVersion: number | null;
+    analyzerVersion: number;
+    reanalyzeAll: boolean;
+  }>;
   removeFile(repositoryName: string, filePath: string): Promise<{ removed: number }>;
   /**
    * Whether a repository is currently mid-indexing (relationships incomplete).

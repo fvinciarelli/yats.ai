@@ -26,6 +26,12 @@ function makeDeps() {
         listRepositories: async () => [],
         deleteSymbols: async () => {},
         deleteRelationships: async () => {},
+        getAnalyzerVersion: async () => null,
+        setAnalyzerVersion: async () => {},
+        getFileState: async () => ({ contentHash: null, analyzerVersion: null }),
+        getFileHashes: async () => ({}),
+        upsertFileHash: async () => {},
+        removeFileHash: async () => {},
       },
       vectorRepository: {
         upsertVectors: async () => { calls.push("upsertVectors"); },

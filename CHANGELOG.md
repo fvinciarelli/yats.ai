@@ -5,6 +5,42 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-29
+
+### Added
+- **Azure OpenAI embeddings provider.** The setup wizard now offers Azure
+  OpenAI alongside Ollama/OpenAI/Mistral/Voyage. It asks for the endpoint URL
+  (e.g. `https://my-resource.openai.azure.com`), the deployment name, and the
+  API key, and the connection test hits the real Azure deployment. The backend
+  generator supports Azure's `api-key` auth, the
+  `{endpoint}/openai/deployments/{deployment}/embeddings?api-version=…` URL
+  shape, and an optional `AZURE_OPENAI_EMBEDDING_DIMENSIONS` override for
+  deployments with custom names (dimension is otherwise derived from the
+  deployment/model name). Everything is persisted to `~/.yats/.env`
+  (`EMBEDDING_PROVIDER=azure`, `EMBEDDING_AZURE_ENDPOINT`,
+  `EMBEDDING_AZURE_API_KEY`, `EMBEDDING_AZURE_MODEL`,
+  `EMBEDDING_AZURE_API_VERSION`). CLI: `yats setup --provider azure
+  --endpoint <url> --api-key <key> [--model <deployment>]`.
+- **Custom endpoint URLs for OpenAI-compatible providers.** The wizard can
+  optionally ask for a custom endpoint URL for OpenAI/Mistral/Voyage (proxies,
+  self-hosted gateways, SageMaker vLLM endpoints…) — leave empty for the
+  provider default. Persisted as `EMBEDDING_OPENAI_BASE_URL` /
+  `EMBEDDING_MISTRAL_BASE_URL` / `EMBEDDING_VOYAGE_BASE_URL`; the connection
+  test runs against the custom URL. The compose templates (setup-embedded and
+  repo dev compose) now pass all embedding env vars through, including the
+  previously missing Mistral/Voyage keys.
+- **Java and Rust analyzers.** `@yats/analyzer-java` (JavaParser +
+  JavaSymbolSolver, shaded jar) and `@yats/analyzer-rust` (rust-analyzer LSP
+  driver with regex fallback) join the analyzer suite; the Docker image builds
+  the Java bridge (Maven) and downloads rust-analyzer.
+- **PHP NameResolver bridge.** The PHP analyzer now resolves names (imports,
+  aliases, namespaces) instead of relying on raw syntax only.
+- **Incremental re-indexing via file hashes.** The server exposes
+  `GET /index/state` (per-file content hash + analyzer version), the indexer
+  records file state per repository, and the CLI (`yats index`) diffs against
+  the last indexed content: unchanged files are skipped, deleted files are
+  removed, and a pipeline/analyzer version bump re-analyzes everything.
+
 ## [0.5.1] - 2026-09-21
 
 ### Added

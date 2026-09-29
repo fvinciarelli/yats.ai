@@ -35,6 +35,32 @@ RUN if [ "$INCLUDE_CSHARP" = "true" ]; then \
     fi
 
 # ============================================================
+# Stage 1b: Java bridge builder (optional)
+# ============================================================
+FROM maven:3.9-eclipse-temurin-21-alpine AS java-builder
+ARG INCLUDE_JAVA=true
+WORKDIR /java-bridge
+COPY packages/analyzers/analyzer-java/src/java-bridge/pom.xml .
+COPY packages/analyzers/analyzer-java/src/java-bridge/src ./src
+RUN if [ "$INCLUDE_JAVA" = "true" ]; then \
+      mvn -q -DskipTests package; \
+    else \
+      mkdir -p target && touch target/yats-java-bridge.jar; \
+    fi
+
+# ============================================================
+# Stage 1c: rust-analyzer download (optional)
+# ============================================================
+FROM alpine:3.20 AS rust-analyzer-fetcher
+ARG INCLUDE_RUST=true
+RUN if [ "$INCLUDE_RUST" = "true" ]; then \
+      wget -qO /tmp/ra.gz https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-unknown-linux-gnu.gz && \
+      gunzip /tmp/ra.gz && mv /tmp/ra /rust-analyzer && chmod +x /rust-analyzer; \
+    else \
+      touch /rust-analyzer; \
+    fi
+
+# ============================================================
 # Stage 2: Node.js TypeScript build
 # ============================================================
 FROM node:22-alpine AS node-builder
@@ -59,6 +85,8 @@ COPY packages/analyzers/analyzer-php/package.json packages/analyzers/analyzer-ph
 COPY packages/analyzers/analyzer-python/package.json packages/analyzers/analyzer-python/
 COPY packages/analyzers/analyzer-csharp/package.json packages/analyzers/analyzer-csharp/
 COPY packages/analyzers/analyzer-treesitter/package.json packages/analyzers/analyzer-treesitter/
+COPY packages/analyzers/analyzer-java/package.json packages/analyzers/analyzer-java/
+COPY packages/analyzers/analyzer-rust/package.json packages/analyzers/analyzer-rust/
 COPY packages/yats-toolkit/package.json packages/yats-toolkit/
 
 RUN pnpm install --frozen-lockfile --prod=false
@@ -89,6 +117,10 @@ COPY packages/analyzers/analyzer-csharp/src packages/analyzers/analyzer-csharp/s
 COPY packages/analyzers/analyzer-csharp/tsconfig.json packages/analyzers/analyzer-csharp/
 COPY packages/analyzers/analyzer-treesitter/src packages/analyzers/analyzer-treesitter/src
 COPY packages/analyzers/analyzer-treesitter/tsconfig.json packages/analyzers/analyzer-treesitter/
+COPY packages/analyzers/analyzer-java/src packages/analyzers/analyzer-java/src
+COPY packages/analyzers/analyzer-java/tsconfig.json packages/analyzers/analyzer-java/
+COPY packages/analyzers/analyzer-rust/src packages/analyzers/analyzer-rust/src
+COPY packages/analyzers/analyzer-rust/tsconfig.json packages/analyzers/analyzer-rust/
 
 RUN pnpm build
 
@@ -103,6 +135,7 @@ RUN apk add --no-cache curl
 # Optional: install PHP and Python runtimes for bridge scripts
 ARG INCLUDE_PHP=true
 ARG INCLUDE_PYTHON=true
+ARG INCLUDE_JAVA=true
 
 RUN if [ "$INCLUDE_PHP" = "true" ]; then \
       apk add --no-cache php83 php83-json php83-mbstring; \
@@ -111,6 +144,17 @@ RUN if [ "$INCLUDE_PHP" = "true" ]; then \
 RUN if [ "$INCLUDE_PYTHON" = "true" ]; then \
       apk add --no-cache python3 py3-pip; \
       pip3 install --break-system-packages libcst; \
+    fi
+
+RUN if [ "$INCLUDE_JAVA" = "true" ]; then \
+      apk add --no-cache openjdk21-jre-headless; \
+    fi
+
+# rust-analyzer is a glibc binary on a musl base — gcompat + libgcc/libstdc++
+# provide the loader and unwind runtime it needs.
+ARG INCLUDE_RUST=true
+RUN if [ "$INCLUDE_RUST" = "true" ]; then \
+      apk add --no-cache gcompat libgcc libstdc++; \
     fi
 
 RUN addgroup -S yats && adduser -S yats -G yats
@@ -125,6 +169,8 @@ COPY --from=node-builder /app/package.json ./
 # Copy compiled bridge binaries
 COPY --from=go-builder /go-bridge/yats-go-bridge /usr/local/bin/yats-go-bridge
 COPY --from=csharp-builder /csharp-bridge/out /usr/local/lib/yats-csharp-bridge
+COPY --from=java-builder /java-bridge/target/yats-java-bridge.jar /usr/local/lib/yats-java-bridge/yats-java-bridge.jar
+COPY --from=rust-analyzer-fetcher /rust-analyzer /usr/local/bin/rust-analyzer
 
 # If PHP/Python bridges exist, copy them as scripts (they run via php/python interpreters)
 COPY packages/analyzers/analyzer-php/src/php-bridge /usr/local/lib/yats-php-bridge

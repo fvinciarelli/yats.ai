@@ -12,15 +12,21 @@ import type {
   Symbol,
   Relationship,
 } from "@yats/shared";
+import { createHash } from "node:crypto";
 import { AnalyzerFactory } from "@yats/analyzer-interface";
 import { MemorySymbolStore } from "@yats/infra";
 import { FileWalker } from "../../infrastructure/file-walker.js";
 import { detectLanguage } from "../../infrastructure/language-detector.js";
-import { hashContent, type RelationshipKind } from "@yats/shared";
+import { hashContent, ANALYSIS_SCHEMA_VERSION, type RelationshipKind } from "@yats/shared";
 import { GlobalSymbolTable, resolveRelationships, type SymbolTableEntry } from "./global-symbol-table.js";
 import { IncrementalIndexerService } from "./incremental-indexer.service.js";
 import { PendingRelationshipStore } from "./pending-relationships.js";
 import { synchronizeFileSymbols } from "./file-symbol-sync.js";
+
+/** SHA-256 of the raw file content — identity of the last successful analysis. */
+function hashFileContent(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline
@@ -87,6 +93,7 @@ export class IndexerService implements Indexer {
     // Provider-specific defaults
     const defaults: Record<string, { concurrency: number; embedBatch: number; batchAnalyzer: number }> = {
       openai:   { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
+      azure:    { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
       mistral:  { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
       voyage:   { concurrency: 4,  embedBatch: 50,  batchAnalyzer: 50  },
       ollama:   { concurrency: 4,  embedBatch: 4,   batchAnalyzer: 50  },
@@ -127,6 +134,14 @@ export class IndexerService implements Indexer {
    * timer after indexing quiets down, or explicitly via POST /index/complete.
    */
   async finalizeRepository(repositoryName: string): Promise<{ stored: number; filtered: number; rewritten: number }> {
+    // Commit the analysis pipeline version at the repo level. This is the
+    // END of the run — per-file hashes carry their own version, so a version
+    // bump re-analyzes everything while an unchanged repo skips fast.
+    try {
+      await this.deps.graphRepository.setAnalyzerVersion(repositoryName, ANALYSIS_SCHEMA_VERSION);
+    } catch {
+      // Non-fatal — file-level versions still drive the skip logic.
+    }
     // Final flush: the symbol table is complete by now — resolve everything
     // held back and drop whatever is still unresolvable (imports, builtins).
     return this.pendingRelationships.flush(repositoryName, { final: true });
@@ -682,14 +697,26 @@ export class IndexerService implements Indexer {
     filePath: string,
   ): Promise<void> {
     const content = await this.deps.fileSystem.readFile(filePath);
-    return this.indexFileContent(repositoryName, filePath, content);
+    await this.indexFileContent(repositoryName, filePath, content);
   }
 
   async indexFileContent(
     repositoryName: string,
     filePath: string,
     content: string,
-  ): Promise<void> {
+    clientHash?: string,
+  ): Promise<{ status: "indexed" | "skipped" }> {
+    const hash = clientHash ?? hashFileContent(content);
+
+    // Skip unchanged files — but only when THIS file was analyzed with the
+    // current pipeline version (per-file version, not the repo-level one:
+    // the repo version is only committed at /index/complete, so a mid-run
+    // write can never turn a version-bump re-analysis into a no-op).
+    const stored = await this.deps.graphRepository.getFileState(repositoryName, filePath);
+    if (stored.analyzerVersion === ANALYSIS_SCHEMA_VERSION && stored.contentHash === hash) {
+      return { status: "skipped" };
+    }
+
     // Route documentation files to the doc pipeline — indexed from the content
     // received over the network (not from the server filesystem). Respect
     // INDEX_DOCS=false exactly like the full pipeline does (P4): docs sent
@@ -698,14 +725,23 @@ export class IndexerService implements Indexer {
       if (process.env.INDEX_DOCS !== "false") {
         await this.indexDocFileContent(filePath, repositoryName, content);
       }
-      return;
+      await this.recordFileState(repositoryName, filePath, hash);
+      return { status: "indexed" };
     }
 
     const language = detectLanguage(filePath, content);
-    if (!language) return;
+    if (!language) {
+      // Not analyzable (ignored extension, non-code). Record state so the
+      // next run's diff skips it instead of re-sending a no-op every time.
+      await this.recordFileState(repositoryName, filePath, hash);
+      return { status: "indexed" };
+    }
 
     const analyzer = this.deps.analyzerFactory.getAnalyzer(language);
-    if (!analyzer) return;
+    if (!analyzer) {
+      await this.recordFileState(repositoryName, filePath, hash);
+      return { status: "indexed" };
+    }
 
     const result = await analyzer.analyze(filePath, content, repositoryName);
 
@@ -762,6 +798,50 @@ export class IndexerService implements Indexer {
         })),
       );
     }
+
+    await this.recordFileState(repositoryName, filePath, hash);
+    return { status: "indexed" };
+  }
+
+  /** Persist the per-file hash + pipeline version after a successful analysis. */
+  private async recordFileState(
+    repositoryName: string,
+    filePath: string,
+    contentHash: string,
+  ): Promise<void> {
+    // Per-file only — the repo-level analyzer version is committed when the
+    // indexing run finalizes (finalizeRepository), so a version bump always
+    // re-analyzes every file instead of being defeated by the first write.
+    await this.deps.graphRepository.upsertFileHash(
+      repositoryName,
+      filePath,
+      contentHash,
+      ANALYSIS_SCHEMA_VERSION,
+    );
+  }
+
+  /**
+   * File-hash state for the host CLI's diff plan: which files were analyzed
+   * with which content, and whether the analyzer version forces a full pass.
+   */
+  async getIndexState(repositoryName: string): Promise<{
+    files: Record<string, string>;
+    storedAnalyzerVersion: number | null;
+    analyzerVersion: number;
+    reanalyzeAll: boolean;
+  }> {
+    const [files, stored] = await Promise.all([
+      // Only files analyzed at the CURRENT version count as up-to-date;
+      // stale-version entries are omitted so the CLI re-sends them.
+      this.deps.graphRepository.getFileHashes(repositoryName, ANALYSIS_SCHEMA_VERSION),
+      this.deps.graphRepository.getAnalyzerVersion(repositoryName),
+    ]);
+    return {
+      files,
+      storedAnalyzerVersion: stored,
+      analyzerVersion: ANALYSIS_SCHEMA_VERSION,
+      reanalyzeAll: stored !== ANALYSIS_SCHEMA_VERSION,
+    };
   }
 
   // ============================================================
@@ -773,6 +853,7 @@ export class IndexerService implements Indexer {
     filePath: string,
   ): Promise<{ removed: number }> {
     const count = await this.removeFileSymbols(repositoryName, filePath);
+    await this.deps.graphRepository.removeFileHash(repositoryName, filePath);
     return { removed: count };
   }
 

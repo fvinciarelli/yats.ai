@@ -105,6 +105,14 @@ export class Neo4jGraphRepository implements GraphRepository {
 
     await this.connection.write(
       `
+      MATCH (f:File {repo: $repository})
+      DETACH DELETE f
+      `,
+      { repository },
+    );
+
+    await this.connection.write(
+      `
       MATCH (r:Repository)
       WHERE r.rootPath = $repository OR r.name = $repository
       DELETE r
@@ -662,6 +670,72 @@ export class Neo4jGraphRepository implements GraphRepository {
     );
   }
 
+  // ============================================================
+  // File content-hash state + analyzer version (skip-unchanged)
+  // ============================================================
+
+  async getFileHashes(rootPath: string, analyzerVersion: number): Promise<Record<string, string>> {
+    const results = await this.connection.read<{ path: string; contentHash: string }>(
+      `MATCH (f:File {repo: $rootPath})
+       WHERE f.analyzerVersion = $version
+       RETURN f.path AS path, f.contentHash AS contentHash`,
+      { rootPath, version: analyzerVersion },
+    );
+    const out: Record<string, string> = {};
+    for (const r of results) out[(r as any).path] = (r as any).contentHash;
+    return out;
+  }
+
+  async getFileState(
+    rootPath: string,
+    relativePath: string,
+  ): Promise<{ contentHash: string | null; analyzerVersion: number | null }> {
+    const results = await this.connection.read<{ contentHash: string | null; analyzerVersion: number | null }>(
+      `MATCH (f:File {repo: $rootPath, path: $path})
+       RETURN f.contentHash AS contentHash, f.analyzerVersion AS analyzerVersion`,
+      { rootPath, path: relativePath },
+    );
+    return {
+      contentHash: (results[0] as any)?.contentHash ?? null,
+      analyzerVersion: (results[0] as any)?.analyzerVersion ?? null,
+    };
+  }
+
+  async upsertFileHash(
+    rootPath: string,
+    relativePath: string,
+    contentHash: string,
+    analyzerVersion: number,
+  ): Promise<void> {
+    await this.connection.write(
+      `MERGE (f:File {repo: $rootPath, path: $path})
+       SET f.contentHash = $contentHash, f.analyzerVersion = $analyzerVersion`,
+      { rootPath, path: relativePath, contentHash, analyzerVersion },
+    );
+  }
+
+  async removeFileHash(rootPath: string, relativePath: string): Promise<void> {
+    await this.connection.write(
+      `MATCH (f:File {repo: $rootPath, path: $path}) DETACH DELETE f`,
+      { rootPath, path: relativePath },
+    );
+  }
+
+  async getAnalyzerVersion(rootPath: string): Promise<number | null> {
+    const results = await this.connection.read<{ version: number | null }>(
+      `MATCH (r:Repository {rootPath: $rootPath}) RETURN r.analyzerVersion AS version`,
+      { rootPath },
+    );
+    return (results[0] as any)?.version ?? null;
+  }
+
+  async setAnalyzerVersion(rootPath: string, version: number): Promise<void> {
+    await this.connection.write(
+      `MATCH (r:Repository {rootPath: $rootPath}) SET r.analyzerVersion = $version`,
+      { rootPath, version },
+    );
+  }
+
   async deleteRepositoryNode(name: string): Promise<void> {
     await this.connection.write(
       `MATCH (r:Repository {name: $name}) DETACH DELETE r`,
@@ -681,7 +755,13 @@ export class Neo4jGraphRepository implements GraphRepository {
     const labels: string[] = [];
     // Capitalize first letter for Neo4j convention
     const label = kind.charAt(0).toUpperCase() + kind.slice(1);
-    labels.push(label);
+    // "Repository" is reserved for repo-metadata nodes (unique constraint on
+    // Repository.name). Symbol nodes must never carry it — a class named
+    // e.g. Neo4jGraphRepository (kind=repository) would collide with the
+    // constraint and pollute listRepositories with phantoms.
+    if (label !== "Repository") {
+      labels.push(label);
+    }
     return labels;
   }
 

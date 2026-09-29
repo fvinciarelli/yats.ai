@@ -81,7 +81,7 @@ function processFiles(array $files, string $repoName): array
             $ast = $traverser->traverse($ast);
 
             // Extract symbols
-            $extractor = new SymbolExtractor($repoName, $filePath);
+            $extractor = new SymbolExtractor($repoName, $filePath, $code);
             $traverser = new NodeTraverser();
             $traverser->addVisitor($extractor);
             $traverser->traverse($ast);
@@ -99,7 +99,7 @@ function processFiles(array $files, string $repoName): array
         } catch (Error $e) {
             $allErrors[] = [
                 'line' => $e->getStartLine() ?? 1,
-                'column' => $e->getStartColumn() ?? 0,
+                'column' => $e->hasColumnInfo() ? $e->getStartColumn($code) : 0,
                 'message' => $e->getMessage(),
                 'severity' => 'error',
             ];
@@ -123,17 +123,44 @@ class SymbolExtractor extends NodeVisitorAbstract
     private array $relationships = [];
     private string $repo;
     private string $filePath;
+    private string $code;
+    private array $lineStarts = [];
     private string $namespace = '';
     private ?string $currentClass = null;
 
-    public function __construct(string $repo, string $filePath)
+    public function __construct(string $repo, string $filePath, string $code)
     {
         $this->repo = $repo;
         $this->filePath = $filePath;
+        $this->code = $code;
+
+        // Precompute line-start offsets for column calculation
+        $this->lineStarts = [0];
+        $pos = 0;
+        while (($pos = strpos($code, "\n", $pos)) !== false) {
+            $this->lineStarts[] = $pos + 1;
+            $pos++;
+        }
     }
 
     public function getSymbols(): array { return $this->symbols; }
     public function getRelationships(): array { return $this->relationships; }
+
+    public function leaveNode(Node $node)
+    {
+        // Reset class context when leaving the class-like that set it.
+        // Anonymous classes (name === null) never set it, so they can't clear it.
+        if (
+            $node instanceof Node\Stmt\Class_
+            || $node instanceof Node\Stmt\Interface_
+            || $node instanceof Node\Stmt\Trait_
+            || $node instanceof Node\Stmt\Enum_
+        ) {
+            if ($node->name && $this->currentClass === $node->name->toString()) {
+                $this->currentClass = null;
+            }
+        }
+    }
 
     public function enterNode(Node $node)
     {
@@ -148,7 +175,7 @@ class SymbolExtractor extends NodeVisitorAbstract
             $symbol = $this->baseSymbol([
                 'id' => $id,
                 'name' => $node->name->toString(),
-                'kind' => $node->isAbstract() ? 'interface_like' : 'class',
+                'kind' => 'class',
                 'namespace' => $this->namespace,
             ], $node, 'class');
 
@@ -221,18 +248,34 @@ class SymbolExtractor extends NodeVisitorAbstract
                 'name' => $node->name->toString(),
                 'kind' => 'class', // Traits are mapped to class
                 'namespace' => $this->namespace,
-                'metadata' => (object)['isTrait' => true],
+                'metadata' => ['isTrait' => true],
             ], $node, 'trait');
+
+            $this->currentClass = $node->name->toString();
         }
 
         // Enum
         if ($node instanceof Node\Stmt\Enum_ && $node->name) {
+            $id = $this->makeId($node->name->toString());
             $this->symbols[] = $this->baseSymbol([
-                'id' => $this->makeId($node->name->toString()),
+                'id' => $id,
                 'name' => $node->name->toString(),
                 'kind' => 'enum',
                 'namespace' => $this->namespace,
             ], $node, 'enum');
+
+            $this->currentClass = $node->name->toString();
+
+            foreach ($node->implements as $iface) {
+                $targetId = $this->makeId($iface->toString());
+                $this->relationships[] = [
+                    'id' => "{$id}--[IMPLEMENTS]-->{$targetId}",
+                    'sourceSymbolId' => $id,
+                    'targetSymbolId' => $targetId,
+                    'kind' => 'IMPLEMENTS',
+                    'metadata' => (object)[],
+                ];
+            }
         }
 
         // Method
@@ -316,6 +359,8 @@ class SymbolExtractor extends NodeVisitorAbstract
                 'namespace' => $this->namespace,
                 'signature' => $this->getSignature($node),
             ], $node, 'function');
+
+            $this->extractCalls($node, $id);
         }
 
         // Use statements (imports)
@@ -373,16 +418,47 @@ class SymbolExtractor extends NodeVisitorAbstract
             {
                 if ($node instanceof Node\Expr\MethodCall) {
                     $calleeName = $node->name->name ?? null;
-                    if ($calleeName && $node->var instanceof Node\Expr\Variable) {
+                    if ($calleeName) {
+                        $meta = [];
+                        if ($node->var instanceof Node\Expr\Variable) {
+                            $meta['receiver'] = $node->var->name ?? null;
+                        }
                         $targetId = "{$this->repo}::{$this->filePath}::{$calleeName}";
                         $this->calls[] = [
                             'id' => "{$this->callerId}--[CALLS]-->{$targetId}",
                             'sourceSymbolId' => $this->callerId,
                             'targetSymbolId' => $targetId,
                             'kind' => 'CALLS',
-                            'metadata' => (object)[],
+                            'metadata' => (object)$meta,
                         ];
                     }
+                }
+                if ($node instanceof Node\Expr\StaticCall && $node->class instanceof Node\Name) {
+                    $calleeName = $node->name->name ?? null;
+                    if ($calleeName) {
+                        $targetId = "{$this->repo}::{$this->filePath}::{$calleeName}";
+                        $this->calls[] = [
+                            'id' => "{$this->callerId}--[CALLS]-->{$targetId}",
+                            'sourceSymbolId' => $this->callerId,
+                            'targetSymbolId' => $targetId,
+                            'kind' => 'CALLS',
+                            'metadata' => (object)['className' => $node->class->toString()],
+                        ];
+                    }
+                }
+                if ($node instanceof Node\Expr\New_ && $node->class instanceof Node\Name) {
+                    $fullName = $node->class->toString();
+                    $shortName = str_contains($fullName, '\\')
+                        ? substr($fullName, strrpos($fullName, '\\') + 1)
+                        : $fullName;
+                    $targetId = "{$this->repo}::{$this->filePath}::{$shortName}";
+                    $this->calls[] = [
+                        'id' => "{$this->callerId}--[CALLS]-->{$targetId}",
+                        'sourceSymbolId' => $this->callerId,
+                        'targetSymbolId' => $targetId,
+                        'kind' => 'CALLS',
+                        'metadata' => (object)['className' => $fullName],
+                    ];
                 }
                 if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Node\Name) {
                     $funcName = $node->name->toString();
@@ -417,9 +493,21 @@ class SymbolExtractor extends NodeVisitorAbstract
             'relativePath' => $this->filePath,
             'startLine' => $node->getStartLine(),
             'endLine' => $node->getEndLine(),
-            'startColumn' => $node->getStartFilePos(),
-            'endColumn' => $node->getEndFilePos(),
+            'startColumn' => $this->columnOf($node->getStartFilePos()),
+            'endColumn' => $this->columnOf($node->getEndFilePos()),
         ];
+    }
+
+    /** 1-based column from a byte offset, using precomputed line starts. */
+    private function columnOf(int $pos): int
+    {
+        if ($pos < 0) return 0;
+        $last = 0;
+        foreach ($this->lineStarts as $ls) {
+            if ($ls > $pos) break;
+            $last = $ls;
+        }
+        return $pos - $last + 1;
     }
 
     private function baseSymbol(array $overrides, Node $node, string $kind): array
@@ -431,14 +519,18 @@ class SymbolExtractor extends NodeVisitorAbstract
             'docComment' => $node->getDocComment()?->getText() ?? null,
             'sourceSnippet' => substr($text, 0, 2000),
             'contentHash' => hash('sha256', $text),
-            'metadata' => (object)[],
+            'metadata' => [],
         ], $overrides);
     }
 
     private function getNodeText(Node $node): string
     {
-        // Best-effort: use start/end positions
-        return "{$node->getStartLine()}:{$node->getEndLine()}";
+        $start = $node->getStartFilePos();
+        $end = $node->getEndFilePos();
+        if ($start >= 0 && $end > $start) {
+            return substr($this->code, $start, $end - $start + 1);
+        }
+        return '';
     }
 
     private function getSignature(Node\FunctionLike $node): string
@@ -463,7 +555,7 @@ class SymbolExtractor extends NodeVisitorAbstract
             elseif ($node->isPrivate()) $visibility = 'private ';
         }
 
-        $static = $node->isStatic() ? 'static ' : '';
+        $static = ($node instanceof Node\Stmt\ClassMethod && $node->isStatic()) ? 'static ' : '';
         $name = $node->name->toString() ?? 'anonymous';
 
         return "{$visibility}{$static}function {$name}(" . implode(', ', $params) . "){$returnStr}";

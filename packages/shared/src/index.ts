@@ -4,6 +4,7 @@
 export * from "./domain/enums.js";
 export * from "./domain/models.js";
 export * from "./domain/value-objects.js";
+export * from "./domain/analysis-version.js";
 
 // Ports (interfaces)
 export * from "./ports/language-analyzer.interface.js";

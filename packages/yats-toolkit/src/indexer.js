@@ -21,6 +21,7 @@ import { readFileSync, statSync, readdirSync, readSync } from "node:fs";
 import { join, relative } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const YATS_URL = process.env.YATS_URL || "http://localhost:5555";
 
@@ -38,6 +39,45 @@ export const IGNORED = new Set([
 ]);
 
 export const DEFAULT_DOC_EXTENSIONS = ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme";
+
+/**
+ * Diff plan for one index run.
+ *
+ * @param walkedFiles [{path, hash}] — files found on disk with their content hash
+ * @param state          server state from GET /index/state: {files, reanalyzeAll}
+ * @param options.force  re-analyze everything (skips the state diff)
+ *
+ * send: files to POST /index/file (changed, new, or forced)
+ * remove: paths present in the server state but gone from disk
+ * unchanged: files skipped because hash + analyzer version match
+ */
+export function planIndex(walkedFiles, state, { force = false } = {}) {
+  const files = state?.files ?? {};
+  const reanalyzeAll = !!state?.reanalyzeAll;
+  const send = [];
+  const remove = [];
+  let unchanged = 0;
+  const seen = new Set();
+
+  for (const f of walkedFiles) {
+    seen.add(f.path);
+    if (force || reanalyzeAll || files[f.path] !== f.hash) {
+      send.push(f.path);
+    } else {
+      unchanged++;
+    }
+  }
+
+  // Deletion detection: state entries not on disk anymore. Skipped on forced
+  // runs (state is not fetched) — the next normal run cleans them up.
+  if (!force) {
+    for (const p of Object.keys(files)) {
+      if (!seen.has(p)) remove.push(p);
+    }
+  }
+
+  return { send, remove, unchanged };
+}
 
 /**
  * Read the YATS config written by `yats setup` (~/.yats/.env), so the CLI
@@ -247,6 +287,7 @@ async function walk(dir, ignored) {
 export default async function indexRepo(args, options = {}) {
   const skipDocsFlag = options.skipDocs || false;
   const noConfig = options.noConfig || false;
+  const force = options.force === true;
   const repoPath = args[0];
   if (!repoPath) {
     console.error("Usage: npx yats index <path> [--skip-docs] [--no-config]");
@@ -288,14 +329,11 @@ export default async function indexRepo(args, options = {}) {
     process.exit(1);
   }
 
-  // Walk and send files
+  // Walk the tree and hash every file up front — reading + sha256 is cheap;
+  // it lets us diff against the server state instead of re-sending everything.
   console.log(`Indexing ${repoPath}...`);
-  const files = await walk(repoPath, ignoredDirs);
-  // Send files concurrently in batches
-  const CONCURRENCY = 10;
-  const batch = [];
-
-  for (const file of files) {
+  const walked = [];
+  for (const file of await walk(repoPath, ignoredDirs)) {
     const relPath = relative(repoPath, file);
     if (shouldSkipFile(relPath, {
       skipDocs,
@@ -303,38 +341,107 @@ export default async function indexRepo(args, options = {}) {
       skipExtensions: effective.skipExtensions,
       docPatterns: effective.docPatterns,
     })) continue;
-    batch.push(file);
+    try {
+      const content = readFileSync(file, "utf-8");
+      if (content.includes("\0") || content.length > 1_000_000) continue;
+      walked.push({
+        file,
+        relPath,
+        content,
+        hash: createHash("sha256").update(content).digest("hex"),
+      });
+    } catch {
+      // Unreadable file — skip it.
+    }
+  }
+
+  // Server state: which files were analyzed with which content hash, and
+  // whether the analyzer version forces a full re-analysis pass.
+  let state = { files: {}, reanalyzeAll: true };
+  if (!force) {
+    try {
+      const res = await fetch(
+        `${YATS_URL}/index/state?repository=${encodeURIComponent(repoName)}`,
+      );
+      if (res.ok) state = await res.json();
+    } catch {
+      // Server unreachable or endpoint missing — full pass.
+    }
+  }
+
+  const plan = planIndex(
+    walked.map((w) => ({ path: w.relPath, hash: w.hash })),
+    state,
+    { force },
+  );
+  const byPath = new Map(walked.map((w) => [w.relPath, w]));
+
+  // Remove files that disappeared since the last index
+  let removed = 0;
+  for (const relPath of plan.remove) {
+    try {
+      const res = await fetch(`${YATS_URL}/index/remove`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repository: repoName, path: relPath }),
+      });
+      if (res.ok) removed++;
+    } catch {
+      // Non-fatal — the next run retries.
+    }
   }
 
   let sent = 0;
   let errors = 0;
+  let serverSkipped = 0;
+  const failedPaths = [];
+  const CONCURRENCY = 10;
+  const batch = plan.send.map((p) => byPath.get(p));
   const total = batch.length;
 
   for (let i = 0; i < batch.length; i += CONCURRENCY) {
     const chunk = batch.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(chunk.map(async (file) => {
-      const relPath = relative(repoPath, file);
+    const results = await Promise.all(chunk.map(async (entry) => {
+      const relPath = entry.relPath;
       try {
-        const content = readFileSync(file, "utf-8");
-        if (content.includes("\0") || content.length > 1_000_000) return { ok: true, skipped: true };
         const res = await fetch(`${YATS_URL}/index/file`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repoName, filePath: relPath, content }),
+          body: JSON.stringify({
+            repoName,
+            filePath: relPath,
+            content: entry.content,
+            contentHash: entry.hash,
+          }),
         });
-        return { ok: res.ok, skipped: false };
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, serverSkipped: data.skipped === true };
       } catch {
-        return { ok: false, skipped: false };
+        return { ok: false, serverSkipped: false };
       }
     }));
-    
+
     for (const r of results) {
-      if (r.ok) sent++;
-      else if (!r.skipped) errors++;
+      if (r.ok && !r.serverSkipped) sent++;
+      else if (r.ok) serverSkipped++;
+      else errors++;
+    }
+    for (const entry of chunk) {
+      const r = results[chunk.indexOf(entry)];
+      if (r && !r.ok) failedPaths.push(entry.relPath);
     }
     process.stdout.write(`\r  ${sent + errors}/${total} files`);
   }
-  console.log(`\r  ✓ ${sent} files indexed${errors > 0 ? `, ${errors} skipped` : ""}`);
+  console.log(
+    `\r  ✓ ${sent} files indexed` +
+    `${serverSkipped > 0 ? `, ${serverSkipped} skipped by server` : ""}` +
+    `${plan.unchanged > 0 ? `, ${plan.unchanged} unchanged` : ""}` +
+    `${removed > 0 ? `, ${removed} removed` : ""}` +
+    `${errors > 0 ? `, ${errors} failed` : ""}`,
+  );
+  if (failedPaths.length > 0) {
+    console.log(`  ! failed: ${failedPaths.slice(0, 5).join(", ")}${failedPaths.length > 5 ? ` (+${failedPaths.length - 5} more)` : ""}`);
+  }
 
   // Finalize: resolve cross-file references and store relationships.
   // The server also flushes automatically after a quiet period, but an

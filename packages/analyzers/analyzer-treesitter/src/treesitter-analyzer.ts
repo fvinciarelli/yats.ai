@@ -36,6 +36,7 @@ const EXT_LANG_MAP: Record<string, Language> = {
   ".pyi": Language.PYTHON,
   ".go": Language.GO,
   ".java": Language.JAVA,
+  ".rs": Language.RUST,
 };
 
 const ALL_EXTENSIONS = new Set(Object.keys(EXT_LANG_MAP));

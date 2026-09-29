@@ -298,11 +298,21 @@ export class PhpAnalyzer extends AbstractAnalyzer {
   // Normalization
   // ============================================================
 
+  /** Map legacy/unknown bridge kinds. Null-prototype: plain objects expose
+   *  inherited keys like "constructor", which would shadow real lookups. */
+  private static readonly KIND_ALIASES: Record<string, SymbolKind> = Object.assign(
+    Object.create(null),
+    {
+      // Legacy bridge value for abstract classes — they are classes.
+      interface_like: SymbolKind.CLASS,
+    },
+  );
+
   private normalizeSymbols(raw: RawPhpSymbol[]): Symbol[] {
     return raw.map((r) => ({
       id: r.id,
       name: r.name,
-      kind: (r.kind as SymbolKind) || SymbolKind.CLASS,
+      kind: PhpAnalyzer.KIND_ALIASES[r.kind] ?? ((r.kind as SymbolKind) || SymbolKind.CLASS),
       language: Language.PHP,
       location: r.location ?? {
         repository: "",

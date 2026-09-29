@@ -28,6 +28,7 @@ const EXTENSION_MAP: Record<string, Language> = {
   ".go": Language.GO,
   ".java": Language.JAVA,
   ".jar": Language.JAVA,
+  ".rs": Language.RUST,
 };
 
 const SHEBANG_MAP: Record<string, Language> = {

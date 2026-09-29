@@ -26,6 +26,8 @@ import { GoAnalyzer } from "@yats/analyzer-go";
 import { CSharpAnalyzer } from "@yats/analyzer-csharp";
 import { PythonAnalyzer } from "@yats/analyzer-python";
 import { PhpAnalyzer } from "@yats/analyzer-php";
+import { JavaAnalyzer } from "@yats/analyzer-java";
+import { RustAnalyzer } from "@yats/analyzer-rust";
 import { IndexerService } from "@yats/indexing";
 import { RetrieverService } from "@yats/retrieval";
 import { McpServer } from "@yats/mcp-server";
@@ -104,6 +106,8 @@ async function start(args: string[]) {
     analyzerFactory.register(new CSharpAnalyzer());
     analyzerFactory.register(new PythonAnalyzer());
     analyzerFactory.register(new PhpAnalyzer());
+    analyzerFactory.register(new JavaAnalyzer());
+    analyzerFactory.register(new RustAnalyzer());
 
     await initializeConnections();
 

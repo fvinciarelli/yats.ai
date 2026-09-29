@@ -212,4 +212,129 @@ class UserServiceTest
     const result = await analyzer.analyze("empty.php", "", "test-repo");
     assert.equal(result.errors.length, 0);
   });
+
+  it("abstract classes are CLASS kind, not interface-like", async () => {
+    const code = `<?php
+
+namespace App;
+
+abstract class AbstractStorage
+{
+    abstract public function find(int $id): mixed;
+}
+`;
+    const result = await analyzer.analyze("AbstractStorage.php", code, "test-repo");
+
+    const classSym = result.symbols.find((s) => s.name === "AbstractStorage");
+    assert.ok(classSym, "BaseRepository symbol missing");
+    assert.equal(classSym.kind, SymbolKind.CLASS);
+    assert.equal(classSym.metadata?.isAbstract, true);
+  });
+
+  it("enum and trait methods are extracted with parentClass", async () => {
+    const code = `<?php
+
+enum Status: string
+{
+    case Open = 'open';
+
+    public function label(): string
+    {
+        return $this->value;
+    }
+}
+
+trait Loggable
+{
+    public function log(string $msg): void
+    {
+        echo $msg;
+    }
+}
+`;
+    const result = await analyzer.analyze("Status.php", code, "test-repo");
+
+    const methods = result.symbols.filter((s) => s.kind === SymbolKind.METHOD);
+    assert.equal(methods.length, 2, `Expected 2 methods, got ${methods.length}`);
+
+    const enumMethod = methods.find((m) => m.name === "label");
+    const traitMethod = methods.find((m) => m.name === "log");
+    assert.equal(enumMethod?.parentClass, "Status");
+    assert.equal(traitMethod?.parentClass, "Loggable");
+  });
+
+  it("global function after a class is still extracted", async () => {
+    const code = `<?php
+
+class Helper
+{
+    public function run(): void {}
+}
+
+function bootstrap(): void
+{
+    Helper::run();
+}
+`;
+    const result = await analyzer.analyze("helpers.php", code, "test-repo");
+
+    const func = result.symbols.find((s) => s.name === "bootstrap");
+    assert.ok(func, "bootstrap() missing — currentClass was not reset");
+    assert.equal(func.kind, SymbolKind.FUNCTION);
+  });
+
+  it("extracts static, method and new calls", async () => {
+    const code = `<?php
+
+class OrderProcessor
+{
+    public function process(): void
+    {
+        $logger = new Logger();
+        $logger->info("processing");
+        self::validate();
+        $this->finish();
+    }
+}
+`;
+    const result = await analyzer.analyze("OrderProcessor.php", code, "test-repo");
+
+    const calls = result.relationships.filter((r) => r.kind === RelationshipKind.CALLS);
+    assert.equal(calls.length, 4, `Expected 4 CALLS, got ${calls.length}`);
+  });
+
+  it("sourceSnippet contains real code text", async () => {
+    const code = `<?php
+
+class SnippetDemo
+{
+    public function hello(): string
+    {
+        return 'hi';
+    }
+}
+`;
+    const result = await analyzer.analyze("SnippetDemo.php", code, "test-repo");
+
+    const sym = result.symbols.find((s) => s.name === "SnippetDemo");
+    assert.ok(sym, "SnippetDemo missing");
+    assert.ok(sym.sourceSnippet.includes("class SnippetDemo"), `snippet: ${sym.sourceSnippet}`);
+    assert.ok(!/^\d+:\d+$/.test(sym.sourceSnippet.trim()), `snippet looks like a line range: ${sym.sourceSnippet}`);
+  });
+
+  it("extracts attributes (PHP 8+)", async () => {
+    const code = `<?php
+
+namespace App;
+
+#[Route('/api')]
+class ApiController
+{
+}
+`;
+    const result = await analyzer.analyze("ApiController.php", code, "test-repo");
+
+    const attrs = result.symbols.filter((s) => s.kind === SymbolKind.ATTRIBUTE);
+    assert.equal(attrs.length, 1);
+  });
 });

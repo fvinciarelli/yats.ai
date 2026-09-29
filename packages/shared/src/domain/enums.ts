@@ -113,6 +113,7 @@ export enum Language {
   JAVASCRIPT = "javascript",
   PHP = "php",
   PYTHON = "python",
+  RUST = "rust",
   TYPESCRIPT = "typescript",
 }
 

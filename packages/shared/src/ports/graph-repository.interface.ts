@@ -82,5 +82,22 @@ export interface GraphRepository {
   findRepositoryByPath(rootPath: string): Promise<RepositoryInfo | null>;
   getLastIndexedCommit(name: string): Promise<string | null>;
   setLastIndexedCommit(name: string, commit: string): Promise<void>;
+  /** Per-file content hashes (relativePath → sha256) analyzed at the given pipeline version. */
+  getFileHashes(repository: string, analyzerVersion: number): Promise<Record<string, string>>;
+  /** Content hash + analyzer version of one file's last successful analysis. */
+  getFileState(
+    repository: string,
+    relativePath: string,
+  ): Promise<{ contentHash: string | null; analyzerVersion: number | null }>;
+  upsertFileHash(
+    repository: string,
+    relativePath: string,
+    contentHash: string,
+    analyzerVersion: number,
+  ): Promise<void>;
+  removeFileHash(repository: string, relativePath: string): Promise<void>;
+  /** Analysis pipeline version that produced the indexed symbols (see ANALYSIS_SCHEMA_VERSION). */
+  getAnalyzerVersion(repository: string): Promise<number | null>;
+  setAnalyzerVersion(repository: string, version: number): Promise<void>;
   deleteRepositoryNode(name: string): Promise<void>;
 }

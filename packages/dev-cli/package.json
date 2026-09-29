@@ -29,6 +29,8 @@
     "@yats/analyzer-csharp": "workspace:^",
     "@yats/analyzer-python": "workspace:^",
     "@yats/analyzer-php": "workspace:^",
+    "@yats/analyzer-java": "workspace:^",
+    "@yats/analyzer-rust": "workspace:^",
     "@yats/indexing": "workspace:^",
     "@yats/infra": "workspace:^",
     "@yats/mcp-server": "workspace:^",
