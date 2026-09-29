@@ -79,6 +79,8 @@ describe("agent templates (shipped in the package)", () => {
     const content = renderContent("connect/copilot/instructions.md");
     assert.ok(content, "instructions template must resolve");
     assert.ok(!content.includes("__REPO_PATH__"));
-    assert.match(content, /yats index \/home\/franco\/cosas\/code_indexer/);
+    // The replacement is the caller's working directory — must never be
+    // hardcoded (CI runs from a different path).
+    assert.ok(content.includes(`yats index ${process.cwd()}`));
   });
 });
