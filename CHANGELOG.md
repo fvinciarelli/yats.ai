@@ -5,6 +5,43 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-10-22
+
+### Fixed
+- **Installation broke whenever the wizard chose Ollama.** The generated
+  `~/.yats/docker-compose.yml` emitted the ollama service misindented (nested
+  inside the qdrant service, `mapping key "image" already defined`) and left a
+  stray `ollama-models` service while never defining the volume. The embedded
+  template placeholders are now indentation-safe and the volume is only added
+  in container mode. The generated compose is validated by YAML-parsed tests
+  for every provider.
+- **`yats setup` on Windows could corrupt the user PATH.** `setx` truncates
+  values over 1024 chars, stores the literal `%PATH%` (no shell expansion under
+  CreateProcess), and rewrites `REG_EXPAND_SZ` as `REG_SZ`. The USER `Path` is
+  now updated through PowerShell/.NET registry APIs: no truncation, no literal
+  `%PATH%`, `REG_EXPAND_SZ` preserved, and idempotent (skips if already set).
+
+### Added
+- **Support for an existing Ollama installation.** The wizard detects an
+  Ollama already answering on `localhost:11434` (native app, systemd, or the
+  client's own container) and offers: use the existing one, run the bundled
+  container, or point at a custom URL. Host-local URLs are rewritten to
+  `host.docker.internal` and the yats service gets `host.docker.internal:
+  host-gateway` via `extra_hosts`, so it works on Linux, Docker Desktop,
+  Windows and macOS. With a host Ollama, the chosen embedding model is pulled
+  best-effort (`ollama pull`) during setup.
+- `--ollama-url` CLI flag for non-interactive installs.
+
+### Changed
+- **BREAKING (wizard flow):** a new "Step 2 — Ollama" question appears when
+  Ollama is chosen and subsequent steps are renumbered; `OLLAMA_URL` is now the
+  canonical variable (interpolated from `~/.yats/.env`, default
+  `http://ollama:11434`) in both the generated and the repo compose files;
+  the repo compose now uses `EMBEDDING_OLLAMA_MODEL` / interpolated `YATS_PORT`
+  to match what the wizard writes. **Existing installs must re-run the setup
+  wizard** (`npx yats-toolkit`) to regenerate a correct `~/.yats/
+  docker-compose.yml` — `yats update` does not regenerate it.
+
 ## [0.7.0] - 2026-09-29
 
 ### Fixed
