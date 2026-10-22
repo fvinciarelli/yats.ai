@@ -37,9 +37,6 @@ const DEFAULT_DOC_EXTENSIONS = ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme";
 const DEFAULT_SKIP_EXTENSIONS = ".exe,.dll,.so,.o,.a,.bin,.zip,.tar,.gz,.bz2,.xz,.7z,.rar,.png,.jpg,.jpeg,.gif,.ico,.webp,.bmp,.svg,.woff,.woff2,.ttf,.eot,.otf,.mp3,.mp4,.avi,.mov,.mkv,.flv,.wmv,.webm,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.lock,.log,.map,.min.js,.min.css";
 const DEFAULT_IGNORED_DIRS = "node_modules,.git,dist,build,.next,__pycache__,vendor,target,bin,obj,.venv,venv,.yarn,.pnpm";
 
-const GITHUB_COMPOSE_URL =
-  "https://raw.githubusercontent.com/fvinciarelli/yats.ai/main/docker/docker-compose.yml";
-
 const B = "\x1b[1m";
 const D = "\x1b[2m";
 const R = "\x1b[0m";
@@ -80,7 +77,11 @@ const PROVIDER_MODELS = {
 
 const DEFAULT_MODEL = { openai: "text-embedding-3-small", azure: "text-embedding-3-small", mistral: "mistral-embed", voyage: "voyage-code-2", ollama: "nomic-embed-text" };
 
-// Minimal embedded docker-compose as fallback
+// Default Ollama URL when the bundled container is used. External Ollama
+// deployments (host or remote) set OLLAMA_URL in ~/.yats/.env instead.
+const DEFAULT_OLLAMA_URL = "http://ollama:11434";
+
+// Embedded docker-compose template (this is what `yats setup` installs)
 const EMBEDDED_COMPOSE = `services:
   neo4j:
     image: neo4j:5.26-community
@@ -118,17 +119,19 @@ const EMBEDDED_COMPOSE = `services:
       retries: 5
       start_period: 5s
     restart: unless-stopped
-  __OLLAMA_PLACEHOLDER__
+__OLLAMA_PLACEHOLDER__
   yats:
     image: ghcr.io/fvinciarelli/yats.ai:latest
     ports: ["__MCP_PORT__:__MCP_PORT__"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=\${NEO4J_PASSWORD:-password}
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDING_PROVIDER=\${EMBEDDING_PROVIDER:-ollama}
-      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_URL=\${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=\${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text}
       - OPENAI_API_KEY=\${EMBEDDING_OPENAI_API_KEY:-}
       - OPENAI_MODEL=\${EMBEDDING_OPENAI_MODEL:-text-embedding-3-small}
@@ -165,6 +168,7 @@ volumes:
   neo4j-data:
   neo4j-logs:
   qdrant-storage:
+__OLLAMA_VOLUME__
 `;
 
 const OLLAMA_SERVICE = `  ollama:
@@ -182,7 +186,6 @@ const OLLAMA_SERVICE = `  ollama:
         sleep 5
         ollama pull \${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text} 2>/dev/null || true
         wait
-  ollama-models:
 `;
 
 // ============================================================
@@ -369,17 +372,48 @@ async function checkYatsRunning() {
   });
 }
 
+async function checkOllama() {
+  // Is an Ollama server already answering on this machine (native app,
+  // systemd service, or the client's own container with a published port)?
+  try {
+    const res = await fetch("http://localhost:11434/api/tags", {
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// From inside the YATS container, "localhost" is the container itself, so
+// rewrite host-local URLs to the Docker host gateway.
+function normalizeOllamaUrl(url) {
+  return url.replace(/^(https?):\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i, "http://host.docker.internal$3");
+}
+
 // ============================================================
 // Compose file generation
 // ============================================================
 
-function generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles) {
+// Generate ~/.yats/docker-compose.yml from the embedded template.
+//
+// Placeholder indentation matters: __OLLAMA_PLACEHOLDER__ sits at column 0
+// because OLLAMA_SERVICE carries its own indentation, and __OLLAMA_VOLUME__
+// sits inside the top-level volumes: section. Do not "align" them.
+export function generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles, ollamaUrl = "") {
   let compose = EMBEDDED_COMPOSE;
 
-  if (provider === "ollama") {
-    compose = compose.replace("__OLLAMA_PLACEHOLDER__", OLLAMA_SERVICE);
+  // The bundled Ollama container is used only when no external Ollama was
+  // chosen (the in-container default URL counts as "bundled").
+  const useOllamaContainer = provider === "ollama" && (!ollamaUrl || ollamaUrl === DEFAULT_OLLAMA_URL);
+  if (useOllamaContainer) {
+    compose = compose
+      .replace("__OLLAMA_PLACEHOLDER__", OLLAMA_SERVICE)
+      .replace("__OLLAMA_VOLUME__", "  ollama-models:");
   } else {
-    compose = compose.replace("__OLLAMA_PLACEHOLDER__", "");
+    compose = compose
+      .replace("__OLLAMA_PLACEHOLDER__", "")
+      .replace("__OLLAMA_VOLUME__", "");
   }
 
   compose = compose
@@ -449,7 +483,7 @@ async function loadEnv() {
 //   api key  → EMBEDDING_<PROVIDER>_API_KEY
 //   model    → EMBEDDING_<PROVIDER>_MODEL (Azure: deployment name)
 //   url      → EMBEDDING_<PROVIDER>_BASE_URL / EMBEDDING_AZURE_ENDPOINT
-export function applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion }) {
+export function applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion, ollamaUrl }) {
   envMap.EMBEDDING_PROVIDER = provider;
   envMap.YATS_PROVIDER = provider;
   if (provider === "openai" && apiKey) envMap.EMBEDDING_OPENAI_API_KEY = apiKey;
@@ -470,6 +504,12 @@ export function applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVers
   }
   const modelVar = { openai: "EMBEDDING_OPENAI_MODEL", azure: "EMBEDDING_AZURE_MODEL", mistral: "EMBEDDING_MISTRAL_MODEL", voyage: "EMBEDDING_VOYAGE_MODEL", ollama: "EMBEDDING_OLLAMA_MODEL" }[provider];
   if (model && modelVar) envMap[modelVar] = model;
+  if (provider === "ollama") {
+    // Container mode uses the default URL baked into docker-compose; only
+    // persist a URL when an external Ollama was chosen.
+    if (ollamaUrl && ollamaUrl !== DEFAULT_OLLAMA_URL) envMap.OLLAMA_URL = ollamaUrl;
+    else delete envMap.OLLAMA_URL;
+  }
   for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"]) {
     if (!(k in envMap)) envMap[k] = "";
   }
@@ -477,6 +517,14 @@ export function applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVers
   if (!envMap.SKIP_EXTENSIONS) envMap.SKIP_EXTENSIONS = DEFAULT_SKIP_EXTENSIONS;
   if (!envMap.IGNORED_DIRS) envMap.IGNORED_DIRS = DEFAULT_IGNORED_DIRS;
   return envMap;
+}
+
+// PowerShell one-liner that appends <binDir> to the USER Path registry value:
+// no 1024-char truncation (setx), no literal "%PATH%" (spawn passes args
+// without shell expansion), keeps REG_EXPAND_SZ, and skips when already set.
+export function windowsPathPowerShell(binDir) {
+  const p = binDir.replace(/'/g, "''");
+  return `$p=[string][Environment]::GetEnvironmentVariable('Path','User'); if (-not $p.Contains('${p}')) { [Microsoft.Win32.Registry]::SetValue('HKEY_CURRENT_USER\\Environment','Path', ($p.TrimEnd(';') + ';' + '${p}'), 'ExpandString') }`;
 }
 
 // Verify a provider's connection before writing anything.
@@ -543,6 +591,7 @@ async function main(options = {}) {
     batch: options.batch ? parseInt(options.batch, 10) : null,
     noDocs: options.noDocs || false,
     skipConfirm: options.skipConfirm || false,
+    ollamaUrl: options.ollamaUrl || env.OLLAMA_URL || null,
   };
 
   header();
@@ -616,6 +665,41 @@ async function main(options = {}) {
       { label: "Mistral (cloud, needs API key)", value: "mistral" },
       { label: "Voyage AI (cloud, optimized for code, needs API key)", value: "voyage" },
     ]);
+  }
+
+  // Ollama: bundled container vs. an existing installation
+  let ollamaUrl = "";
+  if (provider === "ollama") {
+    if (nonInteractive) {
+      ollamaUrl = prefill.ollamaUrl || "";
+      if (ollamaUrl) ollamaUrl = normalizeOllamaUrl(ollamaUrl);
+      console.log(`  Ollama: ${ollamaUrl && ollamaUrl !== DEFAULT_OLLAMA_URL ? ollamaUrl : "bundled Docker container"}`);
+    } else {
+      const hasOllama = await checkOllama();
+      step("Step 2 — Ollama");
+      const ollamaOptions = [];
+      if (hasOllama) {
+        ollamaOptions.push({ label: "Use my existing Ollama (detected on this machine)", value: "host" });
+      }
+      ollamaOptions.push({ label: "Run Ollama in Docker (bundled, ~3GB download)", value: "container" });
+      ollamaOptions.push({ label: "Use an existing Ollama at a custom URL", value: "custom" });
+      const ollamaMode = await choose("How should YATS connect to Ollama?", ollamaOptions);
+      if (ollamaMode === "host") {
+        ollamaUrl = "http://host.docker.internal:11434";
+        console.log(`  ${G}✓${R} Using the Ollama already running on this machine.`);
+      } else if (ollamaMode === "custom") {
+        const rlUrl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await ask(rlUrl, `  ${B}Ollama URL (e.g. http://192.168.1.20:11434):${R} `);
+        rlUrl.close();
+        ollamaUrl = normalizeOllamaUrl(answer.trim());
+        if (!ollamaUrl) {
+          console.log(`  ${Y}⚠${R}  No URL given — falling back to the bundled Ollama container.`);
+        } else {
+          console.log(`  ${G}✓${R} Using Ollama at ${ollamaUrl}`);
+        }
+      }
+      console.log("");
+    }
   }
 
   const providerNames = { openai: "OpenAI", azure: "Azure OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
@@ -742,12 +826,26 @@ async function main(options = {}) {
     if (nonInteractive) {
       console.log(`  Embedding model: ${model}`);
     } else {
-      step(provider === "ollama" ? "Step 2 — Embedding model" : "Step 3 — Embedding model");
+      step("Step 3 — Embedding model");
       model = await choose("Which embedding model?", PROVIDER_MODELS[provider]);
       console.log("");
     }
   } else if (nonInteractive) {
     console.log(`  Azure deployment: ${model}`);
+  }
+
+  // Existing-host Ollama: best-effort pull of the chosen model so indexing
+  // works right away (skipped when Ollama lives elsewhere).
+  if (provider === "ollama" && ollamaUrl === "http://host.docker.internal:11434" && !nonInteractive) {
+    const sPull = spinner(`Pulling ${model} into your existing Ollama...`);
+    try {
+      await runCmd("ollama", ["pull", model]);
+      sPull.done(true);
+    } catch {
+      sPull.done(false);
+      console.log(`  ${Y}⚠${R}  Could not run 'ollama pull'. Make sure ${B}${model}${R} is available in your Ollama (e.g. docker exec <container> ollama pull ${model}).`);
+    }
+    console.log("");
   }
 
   // Step 4: Embedding batch size
@@ -805,7 +903,7 @@ async function main(options = {}) {
   // Optional: pre-index directories
   const pathsToIndex = [];
   if (!nonInteractive) {
-    step("Step 5 — Pre-index (optional)");
+    step("Step 6 — Pre-index (optional)");
     console.log(`  ${D}Indexing happens automatically on first search.${R}`);
     console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
     console.log("");
@@ -857,12 +955,13 @@ async function main(options = {}) {
 
   // Confirm
   if (!nonInteractive && !prefill.skipConfirm) {
-    step(`Step ${pathsToIndex.length ? "6" : "5"} — Confirm`);
+    step(`Step ${pathsToIndex.length ? "7" : "6"} — Confirm`);
     const providerName = provider === "ollama" || provider === "azure"
       ? `${provider === "ollama" ? "Ollama" : providerNames[provider]} (${model})`
       : providerNames[provider];
     box([
       `${B}Provider:${R}     ${providerName}`,
+      ...(ollamaUrl && ollamaUrl !== DEFAULT_OLLAMA_URL ? [`${B}Ollama:${R}        ${ollamaUrl}`] : []),
       ...(baseUrl ? [`${B}Endpoint:${R}     ${baseUrl}`] : []),
       `${B}Port:${R}         ${String(mcpPort)}`,
       ...(pathsToIndex.length ? [`${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)")}`] : []),
@@ -893,7 +992,7 @@ async function main(options = {}) {
   mkdirSync(REPOS_DIR, { recursive: true });
 
   // Generate and write docker-compose
-  const compose = generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles);
+  const compose = generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles, ollamaUrl);
   writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
@@ -902,7 +1001,7 @@ async function main(options = {}) {
 
   // Persist keys to ~/.yats/.env — canonical source (embedding + benchmark keys).
   const envMap = loadEnv();
-  applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion });
+  applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion, ollamaUrl });
   writeFileSync(ENV_FILE, Object.entries(envMap).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 
   // Pull the YATS Docker image from GitHub Container Registry
@@ -996,10 +1095,12 @@ async function main(options = {}) {
         }
       }
     } else {
-      // Windows: use setx (no visual feedback needed for the spinner)
-      // setx is best-effort; user may need admin
+      // Windows: update the USER Path via the registry through PowerShell.
+      // setx would truncate values >1024 chars, store the literal "%PATH%"
+      // (no shell expansion happens under CreateProcess), and rewrite the
+      // REG_EXPAND_SZ value as REG_SZ — corrupting the user's PATH.
       try {
-        await runCmd("setx", ["PATH", `${YATS_BIN_DIR};%PATH%`]);
+        await runCmd("powershell", ["-NoProfile", "-NonInteractive", "-Command", windowsPathPowerShell(YATS_BIN_DIR)]);
       } catch {}
     }
 

@@ -75,7 +75,7 @@ services:
       - |
         ollama serve &
         sleep 5
-        ollama pull nomic-embed-text 2>/dev/null || true
+        ollama pull ${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text} 2>/dev/null || true
         wait
 
 volumes:

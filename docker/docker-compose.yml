@@ -72,7 +72,7 @@ services:
       - |
         ollama serve &
         sleep 5
-        ollama pull nomic-embed-text 2>/dev/null || true
+        ollama pull ${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text} 2>/dev/null || true
         wait
 
   # ============================================
@@ -91,14 +91,16 @@ services:
     #     INCLUDE_PHP: "${INCLUDE_PHP:-true}"
     ports:
       - "${YATS_PORT:-5555}:5555"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
-      - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-nomic-embed-text}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text}
       - OPENAI_API_KEY=${EMBEDDING_OPENAI_API_KEY:-}
       - OPENAI_MODEL=${EMBEDDING_OPENAI_MODEL:-text-embedding-3-small}
       - OPENAI_BASE_URL=${EMBEDDING_OPENAI_BASE_URL:-}
@@ -114,7 +116,7 @@ services:
       - AZURE_OPENAI_API_VERSION=${EMBEDDING_AZURE_API_VERSION:-2024-02-01}
       - AZURE_OPENAI_EMBEDDING_DIMENSIONS=${EMBEDDING_AZURE_EMBEDDING_DIMENSIONS:-}
       - REPOSITORIES_PATH=/repos
-      - YATS_PORT=5555
+      - YATS_PORT=${YATS_PORT:-5555}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - INDEXER_CONCURRENCY=${INDEXER_CONCURRENCY:-4}
       - INDEX_DOCS=${INDEX_DOCS:-true}

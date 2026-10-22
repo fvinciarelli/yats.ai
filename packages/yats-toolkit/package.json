@@ -52,6 +52,9 @@
     "test": "node --test --test-concurrency=1 src/*.test.js"
   },
   "dependencies": {},
+  "devDependencies": {
+    "yaml": "^2.7.0"
+  },
   "engines": {
     "node": ">=18.0.0"
   }
