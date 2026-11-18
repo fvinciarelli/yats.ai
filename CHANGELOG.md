@@ -5,6 +5,39 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-11-18
+
+### Fixed
+- **The same folder could be indexed as two different repositories.** Identity was
+  the raw string the caller typed, so `yats index .` registered a repository
+  named `.`, Git Bash `/c/Users/...` and Windows `C:\Users\...` were unrelated,
+  and a trailing slash created a second index. Symbols are keyed by that prefix,
+  so the graph silently split and queries only saw half of it. Repository paths
+  are now canonicalized (absolute, forward slashes, uppercase drive, no trailing
+  slash, `\\?\` prefixes and MSYS `/c/...` handled) on the CLI and on the
+  server, stores a `rootKey` for lookups, keeps legacy indexes working by
+  comparing canonical forms, and **never rewrites an existing `rootPath`**
+  (which would orphan its symbols). Indexing from a different shell or agent no
+  longer splits the index.
+- **`yats index` kept going when the repository could not be registered.**
+  Files were streamed for a repo that did not exist, leaving symbols with no
+  `Repository` node. It now aborts with the server's error.
+- **Two repositories with the same folder name failed to register.** The
+  `repository_name_unique` constraint rejected the second one *after* its files
+  were streamed. Names are now disambiguated (`parent/name`, then the full path).
+
+### Added
+- `list_repositories` flags duplicates (`duplicateOf`) when the same folder is
+  indexed under another spelling. Nothing is merged automatically.
+- **`yats watch` is single-instance per repository.** IDE tasks, terminals and
+  git hooks can all launch it; only the first one wins and the rest exit as a
+  no-op, so the same files are never indexed twice.
+- **`yats connect --install vscode` writes `.vscode/tasks.json`** with a task
+  bound to `runOptions.runOn: folderOpen` that runs `yats watch . --live`: the
+  working tree (branch switches, uncommitted edits) stays indexed without any
+  manual command. The merge preserves existing tasks and never duplicates the
+  YATS entry.
+
 ## [0.8.1] - 2026-11-18
 
 ### Fixed
