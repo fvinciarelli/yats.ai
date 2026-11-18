@@ -5,6 +5,22 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-11-18
+
+### Fixed
+- **`find_references` returned an empty array for C# types** (e.g. `public
+  sealed record` classes with static constructors). The C# bridge never
+  created edges targeting type symbols — `new X()` produced nothing — and the
+  constructor symbol shared its name with the type, so name-based lookup could
+  bind to the always-empty constructor node. The bridge now emits
+  `INSTANTIATES` edges for object creations (exact IDs for types declared in
+  the same file, tentative IDs for cross-file types resolved against the
+  global symbol table), constructors are named `X.ctor` to remove the name
+  twin (signatures unchanged), and `resolveRelationships` handles
+  `INSTANTIATES`: exact same-file targets are never rewritten, unambiguous
+  cross-file names resolve to the type symbol, and ambiguous names are
+  dropped rather than guessed.
+
 ## [0.8.0] - 2026-10-22
 
 ### Fixed
