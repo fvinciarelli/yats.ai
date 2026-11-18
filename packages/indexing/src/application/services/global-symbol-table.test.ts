@@ -247,4 +247,110 @@ describe("resolveRelationships", () => {
       "qa::services/ticket-sync/app/strategies/__init__.py::services.ticket-sync.app.strategies.__init__.build_strategy",
     );
   });
+
+  it("rewrites cross-file INSTANTIATES targets to the type symbol (C# new X())", () => {
+    const csharpEntries: SymbolTableEntry[] = [
+      {
+        id: "r::Models/Person.cs::App.Models.Person",
+        name: "Person",
+        namespace: "App.Models",
+        relativePath: "Models/Person.cs",
+      },
+      {
+        // Constructor twin renamed to X.ctor by the bridge — must not
+        // compete with the type in name-based INSTANTIATES resolution.
+        id: "r::Models/Person.cs::App.Models.Person.Person.ctor",
+        name: "Person.ctor",
+        namespace: "App.Models.Person",
+        relativePath: "Models/Person.cs",
+      },
+      {
+        id: "r::Services/Factory.cs::App.Services.Factory.Make",
+        name: "Make",
+        namespace: "App.Services.Factory",
+        relativePath: "Services/Factory.cs",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(csharpEntries);
+
+    // `new Person("x")` inside Factory.Make (cross-file) — bridge emits a
+    // tentative target scoped to the caller.
+    const raw = "r::Services/Factory.cs::App.Services.Factory.Person";
+    const r = rel("INSTANTIATES" as RelationshipKind, csharpEntries[2]!.id, raw);
+    r.metadata = { typeName: "Person" };
+    const { resolved, rewritten } = resolveRelationships([r], t);
+    assert.equal(rewritten, 1);
+    assert.equal(resolved[0]!.targetSymbolId, csharpEntries[0]!.id);
+  });
+
+  it("keeps same-file INSTANTIATES targets with exact IDs unchanged", () => {
+    const csharpEntries: SymbolTableEntry[] = [
+      {
+        id: "r::Models/Person.cs::App.Models.Person",
+        name: "Person",
+        namespace: "App.Models",
+        relativePath: "Models/Person.cs",
+      },
+      {
+        // Same-named type in ANOTHER file — must never steal the exact
+        // same-file target.
+        id: "r::Other/Person.cs::App.Other.Person",
+        name: "Person",
+        namespace: "App.Other",
+        relativePath: "Other/Person.cs",
+      },
+      {
+        id: "r::Models/Person.cs::App.Models.Person.Empty",
+        name: "Empty",
+        namespace: "App.Models.Person",
+        relativePath: "Models/Person.cs",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(csharpEntries);
+
+    // `return new Person(...)` inside Person.Empty — the bridge emitted the
+    // exact same-file type ID; it must not be rewritten to App.Other.Person.
+    const exact = csharpEntries[0]!.id;
+    const r = rel("INSTANTIATES" as RelationshipKind, csharpEntries[2]!.id, exact);
+    r.metadata = { typeName: "Person" };
+    const { resolved, rewritten, skipped } = resolveRelationships([r], t);
+    assert.equal(rewritten, 0);
+    assert.equal(skipped, 1);
+    assert.equal(resolved[0]!.targetSymbolId, exact);
+  });
+
+  it("does NOT guess INSTANTIATES targets when the type name is ambiguous", () => {
+    const csharpEntries: SymbolTableEntry[] = [
+      {
+        id: "r::Models/Person.cs::App.Models.Person",
+        name: "Person",
+        namespace: "App.Models",
+        relativePath: "Models/Person.cs",
+      },
+      {
+        id: "r::Other/Person.cs::App.Other.Person",
+        name: "Person",
+        namespace: "App.Other",
+        relativePath: "Other/Person.cs",
+      },
+      {
+        id: "r::Services/Factory.cs::App.Services.Factory.Make",
+        name: "Make",
+        namespace: "App.Services.Factory",
+        relativePath: "Services/Factory.cs",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(csharpEntries);
+
+    // Two unrelated `Person` types — a wrong edge is worse than a missing one.
+    const raw = "r::Services/Factory.cs::App.Services.Factory.Person";
+    const r = rel("INSTANTIATES" as RelationshipKind, csharpEntries[2]!.id, raw);
+    r.metadata = { typeName: "Person" };
+    const { resolved, rewritten } = resolveRelationships([r], t);
+    assert.equal(rewritten, 0);
+    assert.equal(resolved[0]!.targetSymbolId, raw);
+  });
 });

@@ -73,6 +73,15 @@ export class GlobalSymbolTable {
   }
 
   /**
+   * Whether the table already contains a symbol with this exact ID.
+   * Used by INSTANTIATES resolution: targets the bridge resolved to a
+   * same-file type ID are final and must never be rewritten.
+   */
+  hasExactId(id: string): boolean {
+    return this.byId.has(id);
+  }
+
+  /**
    * Resolve a CALLS relationship target.
    *
    * Priority order (most deterministic first):
@@ -361,6 +370,18 @@ export function resolveRelationships(
         rel.sourceSymbolId,
         rel.metadata,
       );
+    } else if (rel.kind === ("INSTANTIATES" as RelationshipKind)) {
+      // `new X()` — the target is a TYPE symbol. The bridge emits exact IDs
+      // for types declared in the same file (never rewrite those) and
+      // tentative IDs for cross-file types, resolved by unambiguous name
+      // match; ambiguous ones stay raw and are dropped by the endpoint filter.
+      newTargetId = table.hasExactId(rel.targetSymbolId)
+        ? rel.targetSymbolId
+        : table.resolveCallTarget(
+            rel.targetSymbolId,
+            rel.sourceSymbolId,
+            rel.metadata,
+          );
     } else if (rel.kind === ("IMPORTS" as RelationshipKind)) {
       newTargetId = table.resolveImportTarget(
         rel.targetSymbolId,

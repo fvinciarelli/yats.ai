@@ -101,3 +101,114 @@ describe("CSharpAnalyzer (Roslyn bridge)", () => {
     assert.ok(kinds.has("service" as any), `expected SERVICE kind, got ${[...kinds]}`);
   });
 });
+
+// ============================================================
+// Record + static constructor — find_references regression
+// ============================================================
+
+const RECORD_FIXTURE = `namespace App.Models
+{
+    public sealed record Person(string Name)
+    {
+        static Person()
+        {
+            Cache.Register(typeof(Person));
+        }
+
+        public static Person Empty()
+        {
+            return new Person(string.Empty);
+        }
+    }
+
+    public class Factory
+    {
+        public Person Make()
+        {
+            return new Person("x");
+        }
+    }
+
+    public static class Cache
+    {
+        public static void Register(System.Type t) { }
+    }
+}
+`;
+
+describe("CSharpAnalyzer (Roslyn bridge) — records with static constructors", () => {
+  it("indexes the record type as a class symbol with isRecord metadata", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const record = result.symbols.find(
+      (s) => s.id === "repo::Models/Person.cs::App.Models.Person",
+    );
+    assert.ok(record, "record type symbol should be indexed");
+    assert.equal(record.kind, "class" as any);
+    assert.equal(record.metadata?.isRecord, true);
+  });
+
+  it("names the static constructor X.ctor — no name twin with the type", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const ctor = result.symbols.find((s) => s.kind === "constructor" as any);
+    assert.ok(ctor, "constructor symbol should be indexed");
+    assert.equal(ctor.name, "Person.ctor");
+    assert.equal(ctor.id, "repo::Models/Person.cs::App.Models.Person.Person.ctor");
+    // The signature keeps the source-level shape.
+    assert.equal(ctor.signature, "Person()");
+
+    // No symbol other than the type itself is named exactly "Person".
+    const persons = result.symbols.filter((s) => s.name === "Person");
+    assert.equal(persons.length, 1);
+    assert.equal(persons[0]!.kind, "class" as any);
+  });
+
+  it("emits INSTANTIATES edges from new X(...) to the record type", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const instantiates = result.relationships.filter(
+      (r) => r.kind === ("INSTANTIATES" as any),
+    );
+    const recordId = "repo::Models/Person.cs::App.Models.Person";
+
+    // `new Person(string.Empty)` inside the static factory Empty
+    const fromEmpty = instantiates.find(
+      (r) => r.sourceSymbolId === "repo::Models/Person.cs::App.Models.Person.Empty",
+    );
+    assert.ok(fromEmpty, "Empty() should instantiate the record");
+    assert.equal(fromEmpty.targetSymbolId, recordId);
+    assert.equal(fromEmpty.metadata?.typeName, "Person");
+
+    // `new Person("x")` inside Factory.Make
+    const fromMake = instantiates.find(
+      (r) => r.sourceSymbolId === "repo::Models/Person.cs::App.Models.Factory.Make",
+    );
+    assert.ok(fromMake, "Factory.Make() should instantiate the record");
+    assert.equal(fromMake.targetSymbolId, recordId);
+
+    // `typeof(Person)` is not an instantiation.
+    const fromCtor = instantiates.filter(
+      (r) => r.sourceSymbolId.includes("Person.ctor"),
+    );
+    assert.equal(fromCtor.length, 0);
+  });
+
+  it("keeps CALLS from the static constructor working", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const calls = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.CALLS,
+    );
+    const fromCtor = calls.find((r) =>
+      r.sourceSymbolId.includes("Person.ctor"),
+    );
+    assert.ok(fromCtor, "static ctor should still emit CALLS");
+    assert.equal(fromCtor.metadata?.receiverType, "Cache");
+    assert.equal(fromCtor.metadata?.receiverExpr, "Cache");
+  });
+});

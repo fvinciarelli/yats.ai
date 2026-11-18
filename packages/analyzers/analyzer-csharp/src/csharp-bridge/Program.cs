@@ -123,6 +123,12 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
     /** Type names declared in this file (classes, interfaces, structs, records, enums). */
     private readonly HashSet<string> _declaredTypes = new();
 
+    /** Type name → full symbol ID for types declared in this file (exact INSTANTIATES targets). */
+    private readonly Dictionary<string, string> _declaredTypeIds = new();
+
+    /** Innermost member whose body is being walked — source of CALLS/INSTANTIATES edges. */
+    private string? _currentCallerId;
+
     /**
      * Syntax-level type map for the current type scope:
      * identifier → (simple type name, kind: field | property | parameter | local).
@@ -170,6 +176,7 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var sym = MakeSymbol(name, "CLASS", node);
         DetectConvention(sym, name);
         _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         // Track parent for CONTAINS
         var previousParent = _currentParentId;
@@ -210,6 +217,7 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "INTERFACE", node);
         _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         var previousParent = _currentParentId;
         _currentParentId = sym.Id;
@@ -245,6 +253,7 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "ENUM", node);
         _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         // Enum members
         foreach (var member in node.Members)
@@ -264,6 +273,7 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "STRUCT", node);
         _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         var previousParent = _currentParentId;
         _currentParentId = sym.Id;
@@ -285,6 +295,7 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var sym = MakeSymbol(name, kind, node);
         sym.Metadata["isRecord"] = true;
         _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         var previousParent = _currentParentId;
         _currentParentId = sym.Id;
@@ -303,6 +314,7 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "DELEGATE", node);
         _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
         sym.Signature = node.ToString().Split('{', ';')[0].Trim();
         Symbols.Add(sym);
     }
@@ -364,15 +376,22 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         SyntaxNode? callScope = node.Body != null ? node.Body : node.ExpressionBody;
         ExtractMethodCalls(callScope, sym.Id, CollectLocals(node.Body));
 
+        // Walk the body with this method as the referencing context — object
+        // creations inside it become INSTANTIATES edges attributed to it.
+        var previousCaller = _currentCallerId;
+        _currentCallerId = sym.Id;
         base.VisitMethodDeclaration(node);
+        _currentCallerId = previousCaller;
     }
 
     public override void VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
     {
         var name = node.Identifier.Text;
-        // Use .ctor suffix to avoid ID collision with the class itself
+        // Use .ctor suffix to avoid ID collision with the class itself, and
+        // name the symbol "X.ctor" so find_references/find_symbol by name
+        // never confuse the constructor with the type it constructs.
         var ctorId = MakeId($"{name}.ctor");
-        var sym = MakeMemberSymbol(name, "CONSTRUCTOR", node, ctorId);
+        var sym = MakeMemberSymbol($"{name}.ctor", "CONSTRUCTOR", node, ctorId);
         var parameters = node.ParameterList?.ToString() ?? "()";
         sym.Signature = $"{name}{parameters}";
         Symbols.Add(sym);
@@ -389,7 +408,12 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
 
         SyntaxNode? callScope = node.Body != null ? node.Body : node.ExpressionBody;
         ExtractMethodCalls(callScope, sym.Id, CollectLocals(node.Body));
+
+        // Walk the body with this constructor as the referencing context.
+        var previousCaller = _currentCallerId;
+        _currentCallerId = sym.Id;
         base.VisitConstructorDeclaration(node);
+        _currentCallerId = previousCaller;
     }
 
     public override void VisitDestructorDeclaration(DestructorDeclarationSyntax node)
@@ -476,6 +500,39 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
                 Relationships.Add(MakeContains(_currentParentId, sym.Id));
         }
         base.VisitEventFieldDeclaration(node);
+    }
+
+    // ============================================================
+    // Object creation — INSTANTIATES edges
+    // ============================================================
+
+    public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
+    {
+        // `new X(...)` — record an INSTANTIATES edge from the innermost member
+        // (or its containing type, for field/property initializers) to X.
+        // This is what makes find_references(X) answer "who instantiates X".
+        var typeName = ExtractSimpleName(node.Type.ToString());
+        var callerId = _currentCallerId ?? _currentParentId;
+
+        if (!string.IsNullOrEmpty(typeName) && callerId != null)
+        {
+            // Same-file type → exact target ID. Otherwise a tentative ID that
+            // the cross-file resolver rewrites against the symbol table.
+            var targetId = _declaredTypeIds.TryGetValue(typeName, out var knownId)
+                ? knownId
+                : MakeId(typeName);
+
+            Relationships.Add(new BridgeRelationship
+            {
+                Id = $"{callerId}|instantiates|{targetId}",
+                SourceSymbolId = callerId,
+                TargetSymbolId = targetId,
+                Kind = "INSTANTIATES",
+                Metadata = new Dictionary<string, object?> { ["typeName"] = typeName }
+            });
+        }
+
+        base.VisitObjectCreationExpression(node);
     }
 
     // ============================================================
