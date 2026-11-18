@@ -22,6 +22,7 @@ import { join, relative } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { canonicalRepoPath } from "./repo-path.js";
 
 const YATS_URL = process.env.YATS_URL || "http://localhost:5555";
 
@@ -288,15 +289,17 @@ export default async function indexRepo(args, options = {}) {
   const skipDocsFlag = options.skipDocs || false;
   const noConfig = options.noConfig || false;
   const force = options.force === true;
-  const repoPath = args[0];
-  if (!repoPath) {
+  const rawPath = args[0];
+  if (!rawPath) {
     console.error("Usage: npx yats index <path> [--skip-docs] [--no-config]");
     process.exit(1);
   }
 
-  // The repository identity is its full path (two clones of the same repo are
-  // two distinct indexes) — never the basename.
-  const repoName = repoPath;
+  // The repository identity is its canonical full path
+  // (`C:\Repo\`, `C:/Repo` and `/c/Repo` are the same repo) — never the
+  // basename, and never the raw string the user typed: `yats index .` used to
+  // register a repo literally named ".", which split the index in two.
+  const repoPath = canonicalRepoPath(rawPath);
   let stat;
   try {
     stat = statSync(repoPath);
@@ -317,13 +320,33 @@ export default async function indexRepo(args, options = {}) {
   const skipDocs = skipDocsFlag || effective.indexDocs === false;
   const ignoredDirs = new Set([...IGNORED, ...effective.ignoredDirs]);
 
-  // Register repo
+  // Register repo. The server owns the identity: it canonicalizes the path and
+  // answers with the rootPath already stored for this folder. That keeps a
+  // legacy index (indexed under another spelling) working instead of creating
+  // a duplicate, and `yats index .` / `yats watch .` agree on the same repo.
+  //
+  // Older servers answer with the *basename* instead of the full rootPath, so
+  // only trust the field when it looks like an absolute path (a CLI upgrade can
+  // land before the server image does).
+  let repoName = repoPath;
   try {
-    await fetch(`${YATS_URL}/index`, {
+    const res = await fetch(`${YATS_URL}/index`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: repoPath }),
     });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      console.error(
+        `Cannot register repository: ${data?.error ?? `HTTP ${res.status}`}`,
+      );
+      process.exit(1);
+    }
+    if (data?.warning) console.warn(`\n  ⚠ ${data.warning}\n`);
+    const answered = typeof data?.repository === "string" ? data.repository : "";
+    if (answered && (answered.includes("/") || answered.includes("\\"))) {
+      repoName = answered;
+    }
   } catch {
     console.error(`Cannot reach YATS at ${YATS_URL}. Is it running?`);
     process.exit(1);

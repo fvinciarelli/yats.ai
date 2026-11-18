@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from "@yats/shared";
+import { createLogger, type Logger, canonicalRepoPath } from "@yats/shared";
 import * as http from "node:http";
 import * as crypto from "node:crypto";
 import {
@@ -9,6 +9,7 @@ import {
   type McpDependencies,
 } from "./tools/all-tools.js";
 import { validateArgs } from "./middleware/validation.js";
+import { decideRegistration, uniqueRepositoryName } from "./repository-identity.js";
 
 // ============================================================
 // Types
@@ -496,8 +497,8 @@ export class McpServer {
   ): Promise<void> {
     const body = await this.readBody(req);
     try {
-      const { path: repoPath } = JSON.parse(body);
-      if (!repoPath) {
+      const { path: rawPath } = JSON.parse(body);
+      if (!rawPath) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "path is required" }));
         return;
@@ -505,10 +506,35 @@ export class McpServer {
       // The CLI walks the host filesystem and streams files via /index/file —
       // the server only registers the repo metadata here (it may run in a
       // container without access to host paths).
-      const repoName = repoPath.split("/").pop() || repoPath;
-      await this.indexer.registerRepository(repoName, repoPath);
+      //
+      // Identity: the path is canonicalized (`C:\\Repo\\`, `C:/Repo` and
+      // `/c/Repo` are the same folder) and an existing repository always wins,
+      // so indexing from another shell/agent spelling can never split the index
+      // in two. Legacy entries (e.g. indexed as ".") are returned as-is with a
+      // warning instead of being duplicated.
+      const canonical = canonicalRepoPath(rawPath, { cwd: "" });
+      // Look up with the raw spelling too: legacy entries are stored verbatim
+      // (e.g. with a trailing slash) and the exact match is what finds them.
+      const existing = await this.graphRepository.findRepositoryByPath(rawPath);
+      const decision = decideRegistration(rawPath, existing);
+
+      if (decision.register) {
+        const repos = await this.graphRepository.listRepositories();
+        const desired = decision.repository.split("/").pop() || decision.repository;
+        const repoName = uniqueRepositoryName(desired, decision.repository, repos);
+        await this.indexer.registerRepository(repoName, decision.repository);
+      }
+
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, repository: repoName, path: repoPath, registered: true }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          repository: decision.repository,
+          path: canonical,
+          registered: decision.register,
+          ...(decision.warning ? { warning: decision.warning } : {}),
+        }),
+      );
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));

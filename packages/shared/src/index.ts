@@ -28,4 +28,5 @@ export * from "./dto/graph.dto.js";
 // Utils
 export * from "./utils/hash.js";
 export * from "./utils/id-generator.js";
+export * from "./utils/repo-path.js";
 export * from "./utils/logger.js";

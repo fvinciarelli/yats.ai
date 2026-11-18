@@ -1,6 +1,7 @@
 import { createLogger, type Logger } from "@yats/shared";
 import type { GraphRepository, VectorRepository, EmbeddingGenerator, FileSystem, Retriever, Indexer } from "@yats/shared";
 import { Language, SymbolKind, RelationshipKind, CollectionName } from "@yats/shared";
+import { markDuplicateRepositories } from "../repository-identity.js";
 import type { RankedContextItem, RetrievalQuery } from "@yats/shared";
 import * as path from "node:path";
 
@@ -843,7 +844,11 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   // Repository management
   handlers.set("list_repositories", async () => {
     const repos = await deps.graphRepository.listRepositories();
-    return { content: [{ type: "text", text: JSON.stringify(repos, null, 2) }] };
+    // Flag duplicate indexes of the same folder (legacy entries indexed under
+    // another spelling, e.g. "." or a path with a trailing slash). Never merge
+    // them automatically — the caller decides which one to keep.
+    const result = markDuplicateRepositories(repos);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
 
   handlers.set("delete_repository", async (args) => {

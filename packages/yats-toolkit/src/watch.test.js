@@ -10,11 +10,11 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, rmSync, existsSync, mkdtempSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
-import { parseNameStatus, applyDiff } from "./watch.js";
+import { parseNameStatus, applyDiff, acquireWatchLock, releaseWatchLock, watchLockPath } from "./watch.js";
 import { mergeRepoConfig } from "./indexer.js";
 
 function git(cwd, cmd) {
@@ -193,5 +193,67 @@ describe("applyDiff — commit-based sync (P1)", () => {
       .map((r) => r.body.filePath)
       .sort();
     assert.deepEqual(sentPaths, ["docs/api.md"], "only docs matching the whitelist are sent");
+  });
+});
+
+describe("watch lock — one watcher per repo", () => {
+  const originalHome = process.env.YATS_HOME;
+  let home;
+
+  before(() => {
+    home = mkdtempSync(join(tmpdir(), "yats-lock-"));
+    process.env.YATS_HOME = home;
+  });
+
+  after(() => {
+    if (originalHome === undefined) delete process.env.YATS_HOME;
+    else process.env.YATS_HOME = originalHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("keyes the lock by resolved path and creates the run dir", () => {
+    const a = watchLockPath("/tmp/some/repo");
+    const b = watchLockPath("/tmp/some/repo/");
+    assert.equal(a, b);
+    assert.ok(a.startsWith(join(home, "run")));
+  });
+
+  it("first caller acquires, second one is a no-op that reports the owner", () => {
+    const repo = join(home, "repo-a");
+
+    const first = acquireWatchLock(repo);
+    assert.equal(first.acquired, true);
+    assert.ok(existsSync(watchLockPath(repo)));
+
+    const second = acquireWatchLock(repo);
+    assert.equal(second.acquired, false);
+    assert.equal(second.pid, process.pid);
+
+    releaseWatchLock(repo);
+    assert.ok(!existsSync(watchLockPath(repo)), "release removes the lock");
+  });
+
+  it("replaces a stale lock left behind by a dead PID", () => {
+    const repo = join(home, "repo-b");
+    mkdirSync(join(home, "run"), { recursive: true });
+    writeFileSync(
+      watchLockPath(repo),
+      JSON.stringify({ pid: 999999999, repoPath: repo, startedAt: new Date().toISOString() }),
+    );
+
+    const acquired = acquireWatchLock(repo);
+    assert.equal(acquired.acquired, true, "dead PID must not block the watcher");
+
+    releaseWatchLock(repo);
+  });
+
+  it("does not release a lock owned by another process", () => {
+    const repo = join(home, "repo-c");
+    mkdirSync(join(home, "run"), { recursive: true });
+    const lockPath = watchLockPath(repo);
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid + 1, repoPath: repo }));
+
+    releaseWatchLock(repo);
+    assert.ok(existsSync(lockPath), "another PID's lock must survive");
   });
 });

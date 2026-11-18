@@ -3,7 +3,7 @@
  * Wraps the MCP delete_repository tool, accepting a directory path
  * instead of requiring the exact repo name.
  */
-import { resolve } from "node:path";
+import { canonicalRepoPath } from "./repo-path.js";
 
 const YATS_URL = process.env.YATS_URL || "http://localhost:5555";
 
@@ -29,7 +29,7 @@ export default async function remove(args) {
     process.exit(1);
   }
 
-  const repoPath = resolve(rawPath);
+  const repoPath = canonicalRepoPath(rawPath);
 
   try {
     // Step 1: ask for confirmation (using path, server resolves to repo)

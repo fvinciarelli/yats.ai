@@ -1,7 +1,7 @@
 import type { Symbol, Relationship, SymbolKind, RelationshipKind } from "@yats/shared";
 import type { GraphSymbol, Subgraph, RepositorySummary, SymbolLite } from "@yats/shared";
 import type { GraphRepository } from "@yats/shared";
-import { createLogger, type Logger } from "@yats/shared";
+import { createLogger, type Logger, canonicalRepoPath, repoPathKey } from "@yats/shared";
 import { Neo4jConnection } from "./neo4j-connection.js";
 
 // ============================================================
@@ -631,13 +631,20 @@ export class Neo4jGraphRepository implements GraphRepository {
 
   async upsertRepositoryMetadata(name: string, rootPath: string): Promise<void> {
     // The repository identity is its rootPath — the name is display metadata
-    // (two clones of the same repo are two distinct indexes).
+    // (two clones of the same repo are two distinct indexes). `rootKey` is the
+    // canonical form used for lookups, so every spelling of the same folder
+    // (`C:\Repo\`, `C:/Repo`, `/c/Repo`) resolves to this node.
     await this.connection.write(
       `
       MERGE (r:Repository {rootPath: $rootPath})
-      SET r.name = $name, r.updatedAt = $updatedAt
+      SET r.name = $name, r.rootKey = $rootKey, r.updatedAt = $updatedAt
       `,
-      { name, rootPath, updatedAt: new Date().toISOString() },
+      {
+        name,
+        rootPath,
+        rootKey: repoPathKey(rootPath, { cwd: "" }),
+        updatedAt: new Date().toISOString(),
+      },
     );
   }
 
@@ -649,11 +656,34 @@ export class Neo4jGraphRepository implements GraphRepository {
   }
 
   async findRepositoryByPath(rootPath: string): Promise<{name: string, rootPath: string} | null> {
+    // Match on the canonical key first (so `C:\Repo\`, `C:/Repo` and `/c/Repo`
+    // are the same repository), then fall back to the exact stored string for
+    // legacy entries indexed before path canonicalization (e.g. `"."` or a
+    // path with a trailing slash).
+    const canonical = canonicalRepoPath(rootPath, { cwd: "" });
+    const key = repoPathKey(rootPath, { cwd: "" });
     const results = await this.connection.read<{name: string, rootPath: string}>(
-      `MATCH (r:Repository {rootPath: $rootPath}) RETURN r.name AS name, r.rootPath AS rootPath`,
-      { rootPath },
+      `
+      MATCH (r:Repository)
+      WHERE r.rootPath = $canonical
+         OR r.rootPath = $exact
+         OR coalesce(r.rootKey, '') = $key
+      RETURN r.name AS name, r.rootPath AS rootPath
+      ORDER BY CASE WHEN r.rootPath = $canonical THEN 0 ELSE 1 END
+      LIMIT 1
+      `,
+      { canonical, exact: rootPath, key },
     );
-    return results.length > 0 ? { name: (results[0] as any).name, rootPath: (results[0] as any).rootPath } : null;
+    if (results.length > 0) {
+      return { name: (results[0] as any).name, rootPath: (results[0] as any).rootPath };
+    }
+
+    // Legacy entries were stored before canonicalization existed (trailing
+    // slash, another case, Git Bash spelling). Compare canonical forms without
+    // rewriting the stored path: symbols are keyed by that prefix.
+    const all = await this.listRepositories();
+    const legacy = all.find((r) => repoPathKey(r.rootPath, { cwd: "" }) === key);
+    return legacy ? { name: legacy.name, rootPath: legacy.rootPath } : null;
   }
 
   async getLastIndexedCommit(rootPath: string): Promise<string | null> {

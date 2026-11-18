@@ -24,9 +24,19 @@
  * may live in a container without git).
  */
 
-import { watch as fsWatch, statSync, readFileSync } from "node:fs";
-import { resolve, relative } from "node:path";
+import {
+  watch as fsWatch,
+  statSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+} from "node:fs";
+import { resolve, relative, join, dirname } from "node:path";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import indexRepo, {
   IGNORED,
   loadYatsEnv,
@@ -34,6 +44,7 @@ import indexRepo, {
   resolveRepoConfig,
   shouldSkipFile,
 } from "./indexer.js";
+import { canonicalRepoPath } from "./repo-path.js";
 
 // ============================================================
 // Config
@@ -51,6 +62,79 @@ const SKIP_PATTERNS = [
   /dist\//,
   /\.yarn\//,
 ];
+
+// ============================================================
+// Single-instance lock — one watcher per repo
+// ============================================================
+
+/** Root of YATS host state (`YATS_HOME` overrides it, used by tests). */
+function yatsHome() {
+  return process.env.YATS_HOME ?? join(homedir(), ".yats");
+}
+
+/**
+ * Lock file for a repo. Keyed by the resolved path so `yats watch .`,
+ * `yats watch /abs/path` and an IDE task pointing at the same folder share it.
+ */
+export function watchLockPath(repoPath) {
+  const key = createHash("sha1").update(resolve(repoPath)).digest("hex").slice(0, 12);
+  return join(yatsHome(), "run", `watch-${key}.json`);
+}
+
+/** True when `pid` is a live process (EPERM means it exists but isn't ours). */
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
+/**
+ * Take the per-repo watcher lock.
+ *
+ * Any number of triggers (IDE folderOpen task, terminal command, git hook)
+ * may launch `yats watch` for the same folder; only the first one wins and the
+ * rest exit as a no-op. Locks left behind by a dead PID are replaced.
+ */
+export function acquireWatchLock(repoPath) {
+  const lockPath = watchLockPath(repoPath);
+  mkdirSync(dirname(lockPath), { recursive: true });
+
+  if (existsSync(lockPath)) {
+    try {
+      const held = JSON.parse(readFileSync(lockPath, "utf-8"));
+      if (pidAlive(held.pid)) {
+        return { acquired: false, pid: held.pid, repoPath: held.repoPath ?? repoPath, lockPath };
+      }
+    } catch {
+      /* corrupt or unreadable lock — treat it as stale */
+    }
+  }
+
+  writeFileSync(
+    lockPath,
+    JSON.stringify(
+      { pid: process.pid, repoPath: resolve(repoPath), startedAt: new Date().toISOString() },
+      null,
+      2,
+    ) + "\n",
+  );
+  return { acquired: true, lockPath };
+}
+
+/** Release the lock, but only when this process owns it. */
+export function releaseWatchLock(repoPath) {
+  const lockPath = watchLockPath(repoPath);
+  try {
+    const held = JSON.parse(readFileSync(lockPath, "utf-8"));
+    if (held.pid === process.pid) unlinkSync(lockPath);
+  } catch {
+    /* nothing to release */
+  }
+}
 
 // ============================================================
 // git helpers (host side — the server container has no git)
@@ -118,11 +202,6 @@ function post(baseUrl, path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-}
-
-/** The repository identity is its full path — never the basename. */
-function repoNameFor(repoPath) {
-  return repoPath;
 }
 
 async function getRecordedCommit(baseUrl, repoName) {
@@ -303,7 +382,10 @@ export default async function watchRepo(args = []) {
   const baseUrl = process.env.YATS_URL ?? DEFAULT_URL;
   const cleanArgs = args.filter((a) => a !== "--live" && a !== "--repo" && a !== "--no-config");
 
-  const repoPath = resolve(cleanArgs[0] ?? process.cwd());
+  // Canonical path (`C:\Repo\`, `C:/Repo`, `/c/Repo`, `.` all collapse to one
+  // identity) so `yats index` and `yats watch` — and the IDE task — agree on
+  // the same repo.
+  const repoPath = canonicalRepoPath(cleanArgs[0] ?? process.cwd());
 
   if (!cleanArgs[0] || cleanArgs[0] === "--help" || cleanArgs[0] === "-h") {
     console.log("Usage: yats watch <path> [--live] [--no-config]");
@@ -320,7 +402,23 @@ export default async function watchRepo(args = []) {
     process.exit(1);
   }
 
-  const repoName = repoNameFor(repoPath);
+  // One watcher per repo: IDE tasks, terminals and hooks may all try to start
+  // this, but a second process would re-index the same files (double embeddings
+  // cost) and race on the same files.
+  const lock = acquireWatchLock(repoPath);
+  if (!lock.acquired) {
+    console.log(`👀 Already watching: ${repoPath}`);
+    console.log(`   PID ${lock.pid} owns this repo — this invocation is a no-op.`);
+    return;
+  }
+  const releaseLock = () => releaseWatchLock(repoPath);
+  process.on("exit", releaseLock);
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      releaseLock();
+      process.exit(0);
+    });
+  }
 
   // Server reachability
   try {
@@ -328,6 +426,30 @@ export default async function watchRepo(args = []) {
   } catch {
     console.error(`Cannot reach YATS at ${baseUrl}. Is it running?`);
     process.exit(1);
+  }
+
+  // Register before watching: the server owns the identity and answers with the
+  // rootPath already stored for this folder, so a legacy index keeps working
+  // (and gets a warning) instead of being duplicated under a new spelling.
+  let repoName = repoPath;
+  try {
+    const res = await post(baseUrl, "/index", { path: repoPath });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      // Never watch a repo the server could not register: files would be
+      // indexed without a Repository node and queries would not find them.
+      console.error(`Cannot register repository: ${data?.error ?? `HTTP ${res.status}`}`);
+      releaseLock();
+      process.exit(1);
+    }
+    if (data?.warning) console.log(`\n  ⚠ ${data.warning}\n`);
+    // Older servers answer with the basename — only trust full paths.
+    const answered = typeof data?.repository === "string" ? data.repository : "";
+    if (answered && (answered.includes("/") || answered.includes("\\"))) {
+      repoName = answered;
+    }
+  } catch {
+    /* non-fatal: watching still works, it just re-registers on the next run */
   }
 
   // P6 — same config resolution as `yats index`: a malformed
@@ -344,12 +466,6 @@ export default async function watchRepo(args = []) {
   const gitOk = isGitRepo(repoPath);
 
   if (live) {
-    // Ensure metadata registration so the repo shows up in list_repositories
-    try {
-      await post(baseUrl, "/index", { path: repoPath });
-    } catch {
-      /* non-fatal */
-    }
     startLiveWatch(repoPath, repoName, baseUrl, effective);
   }
 
