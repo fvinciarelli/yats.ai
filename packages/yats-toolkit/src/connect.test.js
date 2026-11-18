@@ -10,7 +10,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { mergeServerConfig, renderContent } from "./connect.js";
+import { mergeServerConfig, mergeTasksConfig, renderContent } from "./connect.js";
 
 describe("mergeServerConfig", () => {
   it("merges mcpServers entries, preserving existing servers", () => {
@@ -82,5 +82,57 @@ describe("agent templates (shipped in the package)", () => {
     // The replacement is the caller's working directory — must never be
     // hardcoded (CI runs from a different path).
     assert.ok(content.includes(`yats index ${process.cwd()}`));
+  });
+
+  it("vscode tasks template runs `yats watch . --live` on folder open", () => {
+    const content = renderContent("connect/vscode/tasks.json");
+    assert.ok(content, "tasks template must resolve");
+    const tpl = JSON.parse(content);
+    const task = tpl.tasks.find((t) => t.label === "YATS: watch");
+    assert.ok(task, "task must be present");
+    assert.equal(task.command, "yats");
+    assert.deepEqual(task.args, ["watch", ".", "--live"]);
+    assert.equal(task.runOptions.runOn, "folderOpen");
+    assert.equal(task.presentation.reveal, "never");
+  });
+});
+
+describe("mergeTasksConfig — .vscode/tasks.json is never clobbered", () => {
+  const yatsTask = {
+    label: "YATS: watch",
+    type: "shell",
+    command: "yats",
+    args: ["watch", ".", "--live"],
+    runOptions: { runOn: "folderOpen" },
+  };
+
+  it("preserves the user's tasks and appends the YATS one", () => {
+    const existing = {
+      version: "2.0.0",
+      tasks: [{ label: "build", type: "shell", command: "make" }],
+    };
+
+    const merged = mergeTasksConfig(existing, { version: "2.0.0", tasks: [yatsTask] });
+
+    assert.deepEqual(merged.tasks.map((t) => t.label), ["build", "YATS: watch"]);
+    assert.deepEqual(merged.tasks[0], existing.tasks[0]);
+    assert.equal(merged.version, "2.0.0");
+  });
+
+  it("does not duplicate the YATS task on re-install", () => {
+    const once = mergeTasksConfig({}, { version: "2.0.0", tasks: [yatsTask] });
+    const twice = mergeTasksConfig(once, { version: "2.0.0", tasks: [yatsTask] });
+
+    assert.equal(twice.tasks.length, 1);
+    assert.equal(twice.tasks[0].label, "YATS: watch");
+  });
+
+  it("keeps the user's version and keys when the template lacks them", () => {
+    const existing = { version: "2.0.0", inputs: [{ id: "x" }], tasks: [] };
+    const merged = mergeTasksConfig(existing, { tasks: [yatsTask] });
+
+    assert.equal(merged.version, "2.0.0");
+    assert.deepEqual(merged.inputs, [{ id: "x" }]);
+    assert.equal(merged.tasks.length, 1);
   });
 });

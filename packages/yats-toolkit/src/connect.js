@@ -67,6 +67,9 @@ const AGENTS = {
     files: [
       // Native VS Code workspace MCP config (servers format).
       { src: "connect/vscode/mcp.json", dest: ".vscode/mcp.json", type: "json" },
+      // Keeps the index in sync with the working tree: `yats watch . --live`
+      // runs on folder open (VS Code asks once for "Allow Automatic Tasks").
+      { src: "connect/vscode/tasks.json", dest: ".vscode/tasks.json", type: "json", merge: "tasks" },
     ],
     url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/vscode",
   },
@@ -188,6 +191,27 @@ export function mergeServerConfig(existing, template) {
 }
 
 /**
+ * Merge an editor tasks file (`.vscode/tasks.json`) without clobbering the
+ * user's tasks: existing entries are kept in order and a task whose label is
+ * already present is never duplicated (re-running `yats connect --install` is
+ * a no-op).
+ */
+export function mergeTasksConfig(existing, template) {
+  const out = { ...existing };
+  for (const key of Object.keys(template)) {
+    if (key === "tasks") continue;
+    out[key] = template[key];
+  }
+
+  const current = Array.isArray(existing.tasks) ? existing.tasks : [];
+  const labels = new Set(current.map((t) => t && t.label).filter(Boolean));
+  const added = (template.tasks ?? []).filter((t) => t && !labels.has(t.label));
+
+  out.tasks = [...current, ...added];
+  return out;
+}
+
+/**
  * Install one agent's JSON config file from its template.
  * The template is the source of truth (correct format + transport per
  * agent: stdio bridge for copilot/claude/gemini/vscode, HTTP for cursor) —
@@ -218,7 +242,9 @@ function installJsonFile(file) {
       console.log(`  ${Y}⚠${R} ${destPath} exists but is not valid JSON — left untouched.`);
       return false;
     }
-    merged = mergeServerConfig(existing, templateObj);
+    merged = file.merge === "tasks"
+      ? mergeTasksConfig(existing, templateObj)
+      : mergeServerConfig(existing, templateObj);
   }
 
   mkdirSync(dirname(destPath), { recursive: true });
@@ -462,7 +488,11 @@ function showConfig(agentKey) {
         try {
           const tpl = JSON.parse(templateContent);
           const existing = existsSync(file.dest) ? readJsonObject(file.dest) : null;
-          const preview = existing ? mergeServerConfig(existing, tpl) : tpl;
+          const preview = existing
+            ? (file.merge === "tasks"
+              ? mergeTasksConfig(existing, tpl)
+              : mergeServerConfig(existing, tpl))
+            : tpl;
           console.log(`  ${D}${JSON.stringify(preview, null, 2).replace(/\n/g, "\n  ")}${R}`);
         } catch {
           console.log(`  ${D}${templateContent.replace(/\n/g, "\n  ")}${R}`);
