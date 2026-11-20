@@ -4,6 +4,16 @@ import type { SymbolKind, RelationshipKind } from "../domain/enums.js";
 export interface GraphSymbol extends Symbol {
   nodeId: number;
   labels: string[];
+  /**
+   * Reference queries aggregate every edge between a source symbol and the
+   * target, so a single row can carry more than one relation type
+   * (e.g. CALLS + USES_TYPE for `X.Create()`).
+   */
+  relations?: string[];
+  /** Lines where the source symbol uses the target (USES_TYPE/INSTANTIATES). */
+  lines?: number[];
+  /** Number of recorded usage lines (=== lines.length when present). */
+  occurrences?: number;
 }
 
 export interface Subgraph {
@@ -29,6 +39,8 @@ export interface RepositoryInfo {
 export interface SymbolLite {
   id: string;
   name: string;
+  /** Symbol kind — resolution uses it to tell types from members with the same name. */
+  kind?: string | null;
   namespace: string;
   relativePath: string;
   /** Containing class, when known (used for deterministic CALLS resolution). */

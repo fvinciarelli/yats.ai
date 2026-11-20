@@ -248,6 +248,7 @@ export class IndexerService implements Indexer {
             symbolTableEntries.push({
               id: symbol.id,
               name: symbol.name,
+              kind: symbol.kind,
               namespace: symbol.namespace,
               relativePath: symbol.location.relativePath,
               parentClass: symbol.parentClass ?? undefined,

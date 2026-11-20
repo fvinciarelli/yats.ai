@@ -112,7 +112,12 @@ const FIND_SYMBOL: ToolDefinition = {
 
 const FIND_REFERENCES: ToolDefinition = {
   name: "find_references",
-  description: "Find all symbols that reference the given symbol. Provide either symbolId or name+repository.",
+  description:
+    "Find every symbol that references the given symbol, grouped per referencing symbol. " +
+    "Each result lists the relation types (CALLS, INSTANTIATES, USES_TYPE, REFERENCES, IMPORTS) " +
+    "and, for type usages/instantiations, the `lines` where the symbol appears — so a DTO used " +
+    "40 times shows up as its real usages instead of a single collapsed row. " +
+    "Provide either symbolId or name+repository.",
   inputSchema: {
     type: "object",
     properties: {
@@ -958,6 +963,11 @@ function formatSymbol(s: any): any {
     signature: s.signature,
     parentClass: s.parentClass,
   };
+  // Reference queries aggregate edges per referencing symbol; surface the
+  // relation types and every recorded usage line (USES_TYPE/INSTANTIATES).
+  if (s.relations != null) out.relations = s.relations;
+  if (s.occurrences != null) out.occurrences = s.occurrences;
+  if (s.lines != null && s.lines.length > 0) out.lines = s.lines;
   // Routes carry their HTTP method + path (P5) — surfaced for find_routes.
   if (s.httpMethod != null || s.routePath != null) {
     out.method = s.httpMethod ?? null;

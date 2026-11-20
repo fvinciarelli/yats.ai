@@ -83,6 +83,13 @@ export enum RelationshipKind {
   CALLS = "CALLS",
   REFERENCES = "REFERENCES",
   INSTANTIATES = "INSTANTIATES",
+  /**
+   * A type is mentioned by a symbol without being instantiated: field/property/
+   * parameter/return/local type, generic argument, cast, `typeof`, `is`/`as`,
+   * or a static member access. This is what makes "who uses this DTO?" answerable
+   * for data types, which are referenced far more often than they are called.
+   */
+  USES_TYPE = "USES_TYPE",
 
   // ——— Data Flow ———
   RETURNS = "RETURNS",

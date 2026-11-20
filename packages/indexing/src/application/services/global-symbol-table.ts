@@ -1,5 +1,30 @@
 import type { Relationship, RelationshipKind } from "@yats/shared";
-import { createLogger, type Logger } from "@yats/shared";
+import { createLogger, type Logger, SymbolKind } from "@yats/shared";
+
+/**
+ * Kinds that name a *member* of a type rather than a type.
+ * Type resolution must never pick one of these when rewriting a
+ * USES_TYPE/INSTANTIATES target: a method called `Order` is not the
+ * `Order` class, and picking it would create a wrong edge.
+ * Types that were reclassified by convention (SERVICE, DTO, TEST, …) are
+ * intentionally absent: they are still types.
+ */
+const MEMBER_KINDS = new Set<string>([
+  SymbolKind.METHOD,
+  SymbolKind.FUNCTION,
+  SymbolKind.CONSTRUCTOR,
+  SymbolKind.PROPERTY,
+  SymbolKind.FIELD,
+  SymbolKind.VARIABLE,
+  SymbolKind.CONSTANT,
+  SymbolKind.PARAMETER,
+  SymbolKind.ROUTE,
+  SymbolKind.DECORATOR,
+  SymbolKind.EXTERNAL,
+  SymbolKind.NAMESPACE,
+  SymbolKind.MODULE,
+  SymbolKind.PACKAGE,
+]);
 
 // ============================================================
 // GlobalSymbolTable — cross-file reference resolver
@@ -180,6 +205,72 @@ export class GlobalSymbolTable {
     return targetId;
   }
 
+  /**
+   * Resolve a USES_TYPE / INSTANTIATES target (a *type*, not a member).
+   *
+   * Resolution order, most deterministic first:
+   * 1. Exact ID already in the table — the bridge emitted a same-file type ID,
+   *    which is final and must never be rewritten.
+   * 2. Same namespace as the referencing file (C# resolves the enclosing
+   *    namespace before any using directive).
+   * 3. Namespace imported by the file's `using` directives.
+   * 4. A single candidate in the whole repository.
+   * Anything else is left unresolved on purpose (the endpoint filter drops it):
+   * an edge to the wrong type is worse than a missing one.
+   */
+  resolveTypeTarget(
+    targetId: string,
+    sourceId: string,
+    metadata: Record<string, unknown> = {},
+  ): string {
+    if (this.byId.has(targetId)) return targetId;
+
+    const typeName = this.extractCalleeName(targetId);
+    if (!typeName) return targetId;
+
+    const ids = this.byName.get(typeName);
+    if (!ids || ids.size === 0) return targetId;
+
+    // Members with the same name as a type must never be picked.
+    const candidates = [...ids].filter((id) => {
+      const entry = this.byId.get(id);
+      if (!entry) return false;
+      return !MEMBER_KINDS.has(entry.kind ?? "");
+    });
+    if (candidates.length === 0) return targetId;
+    if (candidates.length === 1) return candidates[0]!;
+
+    const explicitNamespace = metadata["namespace"] as string | undefined;
+    const sourceFile = this.extractFilePath(sourceId);
+    const sourceNamespace = explicitNamespace ??
+      (sourceFile ? this.pathToNamespace.get(sourceFile) : undefined);
+
+    // 1. Declared in the referencing file's own namespace.
+    if (sourceNamespace) {
+      const sameNamespace = candidates.filter(
+        (id) => this.byId.get(id)?.namespace === sourceNamespace,
+      );
+      if (sameNamespace.length === 1) return sameNamespace[0]!;
+    }
+
+    // 2. Imported by a using directive (`using MyApp.Models;`).
+    const usings = Array.isArray(metadata["usings"])
+      ? (metadata["usings"] as unknown[]).filter((u): u is string => typeof u === "string")
+      : [];
+    if (usings.length > 0) {
+      const imported = candidates.filter((id) => {
+        const ns = this.byId.get(id)?.namespace ?? "";
+        return ns.length > 0 && usings.includes(ns);
+      });
+      if (imported.length === 1) return imported[0]!;
+    }
+
+    this.logger.debug(
+      `Ambiguous type target "${typeName}": ${candidates.length} candidates — not rewriting`,
+    );
+    return targetId;
+  }
+
   /** Receiver type from explicit bridge metadata (C#/Go receiverType, PHP className, Java resolved). */
   private receiverTypeFromMetadata(metadata: Record<string, unknown>): string | null {
     const rt = metadata["receiverType"] as string | undefined;
@@ -334,6 +425,8 @@ export class GlobalSymbolTable {
 export interface SymbolTableEntry {
   id: string;
   name: string;
+  /** Symbol kind — type resolution rejects members that share a type's name. */
+  kind?: string;
   namespace: string;
   relativePath: string;
   /** Containing class (Java/PHP members), when known. */
@@ -370,18 +463,17 @@ export function resolveRelationships(
         rel.sourceSymbolId,
         rel.metadata,
       );
-    } else if (rel.kind === ("INSTANTIATES" as RelationshipKind)) {
-      // `new X()` — the target is a TYPE symbol. The bridge emits exact IDs
-      // for types declared in the same file (never rewrite those) and
-      // tentative IDs for cross-file types, resolved by unambiguous name
-      // match; ambiguous ones stay raw and are dropped by the endpoint filter.
-      newTargetId = table.hasExactId(rel.targetSymbolId)
-        ? rel.targetSymbolId
-        : table.resolveCallTarget(
-            rel.targetSymbolId,
-            rel.sourceSymbolId,
-            rel.metadata,
-          );
+    } else if (
+      rel.kind === ("INSTANTIATES" as RelationshipKind) ||
+      rel.kind === ("USES_TYPE" as RelationshipKind)
+    ) {
+      // Type targets: same-file IDs are final; cross-file is resolved by
+      // namespace + using directives before falling back to a unique name.
+      newTargetId = table.resolveTypeTarget(
+        rel.targetSymbolId,
+        rel.sourceSymbolId,
+        rel.metadata,
+      );
     } else if (rel.kind === ("IMPORTS" as RelationshipKind)) {
       newTargetId = table.resolveImportTarget(
         rel.targetSymbolId,

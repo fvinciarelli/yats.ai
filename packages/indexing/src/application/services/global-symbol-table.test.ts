@@ -354,3 +354,93 @@ describe("resolveRelationships", () => {
     assert.equal(resolved[0]!.targetSymbolId, raw);
   });
 });
+
+// ============================================================
+// USES_TYPE — type usages (declarations, generics, casts, typeof…)
+// ============================================================
+
+describe("GlobalSymbolTable — USES_TYPE resolution", () => {
+  const types: SymbolTableEntry[] = [
+    {
+      id: "r::Models/Profile.cs::App.Models.ProfileDto",
+      name: "ProfileDto",
+      kind: "dto",
+      namespace: "App.Models",
+      relativePath: "Models/Profile.cs",
+    },
+    {
+      id: "r::Views/Profile.cs::App.Views.ProfileDto",
+      name: "ProfileDto",
+      kind: "class",
+      namespace: "App.Views",
+      relativePath: "Views/Profile.cs",
+    },
+  ];
+
+  function usesType(sourceId: string, metadata: Record<string, unknown>): Relationship {
+    const r = rel("USES_TYPE" as RelationshipKind, sourceId, "r::Services/S.cs::App.Services.ProfileDto");
+    r.metadata = { typeName: "ProfileDto", ...metadata };
+    return r;
+  }
+
+  it("picks the type declared in the referencing file's own namespace", () => {
+    const t = new GlobalSymbolTable();
+    t.index(types);
+    const source = "r::Services/S.cs::App.Services.Service.Load";
+    const { resolved, rewritten } = resolveRelationships(
+      [usesType(source, { namespace: "App.Views" })],
+      t,
+    );
+    assert.equal(rewritten, 1);
+    assert.equal(resolved[0]!.targetSymbolId, types[1]!.id);
+  });
+
+  it("picks the type imported by a using directive", () => {
+    const t = new GlobalSymbolTable();
+    t.index(types);
+    const source = "r::Services/S.cs::App.Services.Service.Load";
+    const { resolved } = resolveRelationships(
+      [usesType(source, { namespace: "App.Services", usings: ["System", "App.Models"] })],
+      t,
+    );
+    assert.equal(resolved[0]!.targetSymbolId, types[0]!.id);
+  });
+
+  it("never resolves a type usage to a member with the same name", () => {
+    const entries: SymbolTableEntry[] = [
+      ...types,
+      {
+        id: "r::Services/Factory.cs::App.Services.Factory.ProfileDto",
+        name: "ProfileDto",
+        kind: "method",
+        namespace: "App.Services.Factory",
+        relativePath: "Services/Factory.cs",
+      },
+    ];
+    const t = new GlobalSymbolTable();
+    t.index(entries);
+    const source = "r::Services/S.cs::App.Services.Service.Load";
+    const { resolved } = resolveRelationships(
+      [usesType(source, { namespace: "App.Services", usings: ["App.Views"] })],
+      t,
+    );
+    // The method is filtered out before matching, so the using wins.
+    assert.equal(resolved[0]!.targetSymbolId, types[1]!.id);
+  });
+
+  it("keeps same-file USES_TYPE exact IDs unchanged", () => {
+    const t = new GlobalSymbolTable();
+    t.index(types);
+    const exactTarget = types[0]!.id;
+    const r = rel(
+      "USES_TYPE" as RelationshipKind,
+      "r::Models/Profile.cs::App.Models.ProfileDto.Name",
+      exactTarget,
+    );
+    r.metadata = { typeName: "ProfileDto", namespace: "App.Models" };
+    const { resolved, rewritten, skipped } = resolveRelationships([r], t);
+    assert.equal(rewritten, 0);
+    assert.equal(skipped, 1);
+    assert.equal(resolved[0]!.targetSymbolId, exactTarget);
+  });
+});

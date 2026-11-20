@@ -62,7 +62,9 @@ export const schemas = {
     name: z.string().max(500).optional(),
     path: safePath.optional(),
     repository: safeRepoName.optional(),
-    limit: z.number().int().min(1).max(50).optional(),
+    // Occurrence-level results: a heavily used type can have 100+ referencing
+    // symbols, and each row now carries its usage lines.
+    limit: z.number().int().min(1).max(200).optional(),
   }),
 
   find_callers: z.object({

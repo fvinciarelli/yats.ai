@@ -236,13 +236,14 @@ export class Neo4jGraphRepository implements GraphRepository {
     const rows = await this.connection.read<any>(
       `
       MATCH (s:Symbol {repository: $repository})
-      RETURN s.id AS id, s.name AS name, s.namespace AS namespace, s.relativePath AS relativePath, s.parentClass AS parentClass
+      RETURN s.id AS id, s.name AS name, s.kind AS kind, s.namespace AS namespace, s.relativePath AS relativePath, s.parentClass AS parentClass
       `,
       { repository },
     );
     return rows.map((r) => ({
       id: r.id,
       name: r.name ?? "",
+      kind: r.kind ?? null,
       namespace: r.namespace ?? "",
       relativePath: r.relativePath ?? "",
       parentClass: r.parentClass ?? null,
@@ -292,17 +293,45 @@ export class Neo4jGraphRepository implements GraphRepository {
     symbolId: string,
     limit = 20,
   ): Promise<GraphSymbol[]> {
+    // One row per (source, relation). Rows are aggregated below so a single
+    // source symbol that uses the target 40 times is one result with 40 lines
+    // — not 40 results that blow up LIMIT, and not one result with the count
+    // lost (the previous `RETURN DISTINCT source` hid every extra usage).
     const rows = await this.connection.read<any>(
       `
       MATCH (target:Symbol {id: $symbolId})
-      MATCH (source:Symbol)-[r:REFERENCES|CALLS|IMPORTS|INSTANTIATES]->(target)
-      RETURN DISTINCT source AS s, labels(source) AS labels, id(source) AS nodeId, type(r) AS relType
-      LIMIT $limit
+      MATCH (source:Symbol)-[r:REFERENCES|CALLS|IMPORTS|INSTANTIATES|USES_TYPE]->(target)
+      RETURN source AS s, labels(source) AS labels, id(source) AS nodeId,
+             type(r) AS relType, r.lines AS lines
+      ORDER BY source.id
+      LIMIT 5000
       `,
-      { symbolId, limit },
+      { symbolId },
     );
 
-    return rows.map((r) => this.rowToGraphSymbol(r));
+    const merged = new Map<string, GraphSymbol>();
+    for (const row of rows) {
+      const sym = this.rowToGraphSymbol(row);
+      const rowLines = Array.isArray(row.lines)
+        ? row.lines.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+        : [];
+      const existing = merged.get(sym.id);
+      if (!existing) {
+        merged.set(sym.id, {
+          ...sym,
+          relations: [row.relType],
+          lines: [...rowLines].sort((a, b) => a - b),
+          occurrences: rowLines.length,
+        });
+        continue;
+      }
+      existing.relations = [...new Set([...(existing.relations ?? []), row.relType])].sort();
+      const lineSet = new Set([...(existing.lines ?? []), ...rowLines]);
+      existing.lines = [...lineSet].sort((a, b) => a - b);
+      existing.occurrences = existing.lines.length;
+    }
+
+    return [...merged.values()].slice(0, limit);
   }
 
   async findCallers(

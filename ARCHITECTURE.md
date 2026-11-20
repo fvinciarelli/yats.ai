@@ -177,7 +177,15 @@ Every symbol is a node with label `:Symbol` plus a kind-specific label (`:Class`
 Key relationship types:
 - **Structural:** `CONTAINS`, `DECLARES`, `BELONGS_TO`
 - **OOP:** `INHERITS`, `IMPLEMENTS`, `OVERRIDES`
-- **Dependencies:** `IMPORTS`, `CALLS`, `REFERENCES`, `INSTANTIATES`
+- **Dependencies:** `IMPORTS`, `CALLS`, `REFERENCES`, `INSTANTIATES`, `USES_TYPE`
+
+`USES_TYPE` is what makes data types queryable: a DTO/record is mentioned by
+field/property/parameter/return/local declarations, generic arguments, casts,
+`typeof`, `is`/`as`, patterns, `nameof` and static member access far more often
+than it is instantiated. Each edge aggregates every usage line of one
+(referencing symbol → type) pair, so `find_references` reports real usages
+instead of a single collapsed row. Cross-file targets are resolved by
+directory namespace and `using` directives before falling back to a unique name.
 - **Architectural:** `ROUTES_TO`, `HANDLES`, `TESTS`
 
 Route nodes store `httpMethod` and `routePath` as indexed properties;

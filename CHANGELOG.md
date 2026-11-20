@@ -5,6 +5,30 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`USES_TYPE` edges: `find_references` now answers for data types.** A DTO,
+  record or entity is mentioned by field/property/parameter/return/local
+  declarations, generic arguments (`Task<List<Dto>>`), casts, `typeof`, `is`/`as`,
+  patterns, `nameof` and static member access — far more often than it is
+  instantiated. The C# bridge previously emitted only `CALLS` (and `INSTANTIATES`
+  since 0.8.1), so `find_references(Dto)` returned a single collapsed row while
+  `rg` found dozens of real usages. Each edge aggregates every usage line of one
+  (referencing symbol → type) pair.
+- **`find_references` returns occurrences, not just sources.** Results now carry
+  `relations` (CALLS / INSTANTIATES / USES_TYPE / …), `lines` (every usage line)
+  and `occurrences`. The old `RETURN DISTINCT source` hid every extra usage of
+  the same symbol and never reported where the usage was.
+
+### Changed
+- Cross-file **type** resolution uses the referencing file's namespace and
+  `using` directives before falling back to a unique name, and refuses to pick a
+  member (method/field) that shares a type's name. Ambiguous targets are still
+  left unresolved: a wrong edge is worse than a missing one.
+- `ANALYSIS_SCHEMA_VERSION` 3 → 4: the next `yats index` re-analyzes every file
+  so existing repositories get the new edges automatically.
+
 ## [0.8.2] - 2026-11-18
 
 ### Fixed

@@ -212,3 +212,172 @@ describe("CSharpAnalyzer (Roslyn bridge) — records with static constructors", 
     assert.equal(fromCtor.metadata?.receiverExpr, "Cache");
   });
 });
+
+// ============================================================
+// USES_TYPE — data types referenced without being instantiated
+// ============================================================
+
+const DTO_USAGE_FIXTURE = `using MyApp.Models;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace MyApp.Services;
+
+public sealed record ProfileDto(int Id, string Name)
+{
+    public static ProfileDto Empty { get; } = new(0, "");
+}
+
+public class ProfileService
+{
+    private readonly ProfileDto _empty;
+    private List<ProfileDto> _cache = new();
+    private string _name = ProfileDto.Empty.Name;
+
+    public ProfileService(ProfileDto seed) { _empty = seed; }
+
+    public ProfileDto? Fetch(int id)
+    {
+        var dto = _empty;
+        if (dto is null) return null;
+        ProfileDto copy = (ProfileDto)dto;
+        var list = new List<ProfileDto>();
+        var type = typeof(ProfileDto);
+        object boxed = dto as ProfileDto;
+        var name = nameof(ProfileDto);
+        return copy;
+    }
+
+    public Task<List<ProfileDto>> All() => Task.FromResult(new List<ProfileDto>());
+}
+`;
+
+describe("CSharpAnalyzer (Roslyn bridge) — USES_TYPE edges", () => {
+  it("emits a USES_TYPE edge for every way a type can be mentioned", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Services/ProfileService.cs", DTO_USAGE_FIXTURE, "repo");
+
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    // Every edge targets the same-file record by its exact ID.
+    const record = result.symbols.find((s) => s.name === "ProfileDto" && s.kind !== "property");
+    assert.ok(record, "record symbol missing");
+    for (const u of uses) {
+      assert.equal(u.targetSymbolId, record!.id, `wrong target for ${u.sourceSymbolId}`);
+      assert.equal(u.metadata?.typeName, "ProfileDto");
+    }
+
+    const bySource = new Map(uses.map((u) => [u.sourceSymbolId, u.metadata ?? {}]));
+
+    // Field type + generic argument (List<ProfileDto> → ProfileDto, not List)
+    const field = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService._empty");
+    assert.ok(field, "field declaration should use the type");
+    assert.deepEqual(field!.lines, [14]);
+
+    const genericField = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService._cache");
+    assert.ok(genericField, "generic argument should be recorded");
+    assert.equal(genericField!.typeName, "ProfileDto");
+
+    // Static member access: ProfileDto.Empty
+    const member = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService");
+    assert.ok(member, "static member access should record the type");
+    assert.deepEqual(member!.usageKinds, ["member"]);
+
+    // Constructor parameter
+    const ctor = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService.ProfileService.ctor");
+    assert.ok(ctor, "ctor parameter should use the type");
+    assert.deepEqual(ctor!.usageKinds, ["parameter"]);
+
+    // Return type + local + cast + typeof + as + nameof + new, all on Fetch
+    const fetch = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService.Fetch");
+    assert.ok(fetch, "Fetch should use the type");
+    const kinds = fetch!.usageKinds as string[];
+    for (const expected of ["return", "local", "cast", "typeof", "as", "nameof", "new"]) {
+      assert.ok(kinds.includes(expected), `Fetch missing usage kind ${expected} (got ${kinds})`);
+    }
+    assert.ok((fetch!.lines as number[]).length >= 6, "Fetch should carry several lines");
+    assert.equal(fetch!.count, (fetch!.lines as number[]).length);
+
+    // Task<List<ProfileDto>> return type keeps the argument, drops BCL containers
+    const all = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService.All");
+    assert.ok(all, "All() should use the type");
+    assert.ok((all!.usageKinds as string[]).includes("return"));
+
+    // using directives travel with the edge so cross-file resolution can
+    // pick the right namespace when two types share a name.
+    assert.ok((uses[0]!.metadata?.usings as string[]).includes("MyApp.Models"));
+
+    // BCL containers are filtered — no edge named List/Task.
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "List"));
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "Task"));
+  });
+
+  it("records one edge per (source, type) with all usage lines", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Services/ProfileService.cs", DTO_USAGE_FIXTURE, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    const ids = uses.map((u) => u.id);
+    assert.equal(new Set(ids).size, ids.length, "USES_TYPE edge ids must be unique");
+    for (const u of uses) {
+      const lines = u.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0, "every edge needs lines");
+      assert.deepEqual(lines, [...lines].sort((a, b) => a - b), "lines must be sorted");
+      assert.equal(u.metadata?.count, lines.length);
+    }
+  });
+});
+
+const SIGNATURE_USAGE_FIXTURE = `using System;
+using System.Collections.Generic;
+
+namespace App.Delegates;
+
+public sealed class PayloadDto
+{
+    public string Body { get; set; } = "";
+}
+
+public delegate void PayloadHandler(PayloadDto payload, IReadOnlyList<PayloadDto> all);
+
+public class Dispatcher
+{
+    public void Run()
+    {
+        void Handle(PayloadDto single)
+        {
+            Console.WriteLine(single.Body);
+        }
+
+        var empty = Array.Empty<PayloadDto>();
+        Handle(new PayloadDto());
+    }
+}
+`;
+
+describe("CSharpAnalyzer (Roslyn bridge) — signature-only type usages", () => {
+  it("records delegate signatures, local functions and generic method arguments", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Delegates/Dispatcher.cs", SIGNATURE_USAGE_FIXTURE, "repo");
+
+    const uses = result.relationships.filter((r) => r.kind === RelationshipKind.USES_TYPE);
+    const kindsFor = (sourceSuffix: string) => {
+      const edge = uses.find((u) => u.sourceSymbolId.endsWith(sourceSuffix));
+      assert.ok(edge, `missing USES_TYPE edge for ${sourceSuffix}`);
+      return edge!.metadata?.usageKinds as string[];
+    };
+
+    // Delegate: parameter + generic argument of the parameter type.
+    assert.ok(kindsFor("App.Delegates.PayloadHandler").includes("parameter"));
+
+    // Local function inside Run(): its parameter type is attributed to Run.
+    assert.ok(kindsFor("App.Delegates.Dispatcher.Run").includes("parameter"));
+
+    // Array.Empty<PayloadDto>() — generic method type argument.
+    assert.ok(kindsFor("App.Delegates.Dispatcher.Run").includes("generic"));
+  });
+});
