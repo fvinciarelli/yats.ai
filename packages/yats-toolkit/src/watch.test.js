@@ -17,6 +17,16 @@ import { tmpdir } from "node:os";
 import { parseNameStatus, applyDiff, acquireWatchLock, releaseWatchLock, watchLockPath } from "./watch.js";
 import { mergeRepoConfig } from "./indexer.js";
 
+// The watcher reports progress with console.log (`↻ Indexing: x`, `✓ Done: x`).
+// Node's test runner uses the child process stdout channel to deliver
+// serialized results, so raw text on stdout can corrupt that stream — seen in
+// CI as "Unable to deserialize cloned data due to invalid or unsupported
+// version" (an uncaughtException that fails the whole file). These tests
+// assert on the HTTP calls the watcher makes, never on its logs: silence it.
+console.log = () => {};
+console.info = () => {};
+console.warn = () => {};
+
 function git(cwd, cmd) {
   return execSync(`git ${cmd}`, { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
 }
