@@ -93,3 +93,61 @@ describe("JavaAnalyzer", () => {
     );
   });
 });
+
+describe("JavaAnalyzer — USES_TYPE edges", () => {
+  it("records fields, params, returns, casts, instanceof and new", async () => {
+    const analyzer = new JavaAnalyzer();
+    const code = `package com.acme.services;
+
+import com.acme.models.ProfileDto;
+import java.util.List;
+
+public class ProfileService {
+    private final ProfileDto seed;
+    private List<ProfileDto> cache;
+
+    public ProfileService(ProfileDto seed) {
+        this.seed = seed;
+    }
+
+    public ProfileDto get(int id) {
+        ProfileDto found = null;
+        if (seed instanceof ProfileDto) {
+            found = (ProfileDto) seed;
+        }
+        return found;
+    }
+
+    public ProfileDto build() {
+        return new ProfileDto();
+    }
+}
+`;
+    const result = await analyzer.analyze("com/acme/services/ProfileService.java", code, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    for (const edge of uses) {
+      assert.equal(edge.metadata?.typeName, "ProfileDto");
+      const lines = edge.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0);
+      assert.ok(lines.every((l) => l > 1), `real line numbers expected, got ${lines}`);
+    }
+
+    // Same-file? No — ProfileDto is external here, so targets stay name-based
+    // (the resolver rewrites them against the symbol table).
+    assert.ok(uses.every((u) => u.targetSymbolId.includes("ProfileDto")));
+    assert.ok(uses.some((u) => (u.metadata?.usings as string[])?.includes("com.acme.models")));
+
+    const kinds = new Set<string>();
+    for (const edge of uses) {
+      for (const kind of (edge.metadata?.usageKinds as string[]) ?? []) kinds.add(kind);
+    }
+    for (const expected of ["declaration", "parameter", "return", "cast", "instanceof", "new"]) {
+      assert.ok(kinds.has(expected), `missing usage kind ${expected} (got ${[...kinds]})`);
+    }
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "List"));
+  });
+});

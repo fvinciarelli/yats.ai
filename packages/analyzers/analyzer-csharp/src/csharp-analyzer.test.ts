@@ -381,3 +381,39 @@ describe("CSharpAnalyzer (Roslyn bridge) — signature-only type usages", () => 
     assert.ok(kindsFor("App.Delegates.Dispatcher.Run").includes("generic"));
   });
 });
+
+describe("CSharpAnalyzer (Roslyn bridge) — top-level statements", () => {
+  it("attributes usages from global statements to a file-level symbol", async () => {
+    const code = `using System.Collections.Generic;
+
+var profile = new ProfileDto { Name = "x" };
+var list = new List<ProfileDto>();
+ProfileDto current = profile;
+System.Console.WriteLine(ProfileDto.Empty.Name);
+
+public sealed class ProfileDto
+{
+    public static ProfileDto Empty { get; } = new();
+    public string Name { get; set; } = "";
+}
+`;
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Program.cs", code, "repo");
+
+    const topLevel = result.symbols.find((s) => s.name === "Program.cs");
+    assert.ok(topLevel, "file-level symbol for top-level statements missing");
+    assert.equal(topLevel!.metadata?.isTopLevel, true);
+
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE && r.sourceSymbolId === topLevel!.id,
+    );
+    assert.ok(uses.length > 0, "top-level type usages must be attributed");
+    assert.deepEqual(uses[0]!.metadata?.lines, [3, 4, 5, 6]);
+    assert.ok((uses[0]!.metadata?.usageKinds as string[]).includes("new"));
+
+    const instantiates = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.INSTANTIATES && r.sourceSymbolId === topLevel!.id,
+    );
+    assert.ok(instantiates.length > 0, "new at top level must emit INSTANTIATES");
+  });
+});

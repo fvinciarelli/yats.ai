@@ -224,3 +224,62 @@ func main() {
     assert.equal(create.metadata["routePath"], "/orders");
   });
 });
+
+describe("GoAnalyzer — USES_TYPE edges", () => {
+  it("records struct fields, params, returns, composites and assertions", async () => {
+    const analyzer = new GoAnalyzer();
+    const code = `package services
+
+type ProfileDto struct {
+	ID   int
+	Name string
+}
+
+type ProfileService struct {
+	cache map[string]*ProfileDto
+}
+
+func (s *ProfileService) Get(id int) (*ProfileDto, error) {
+	var found *ProfileDto
+	if dto, ok := interface{}(found).(*ProfileDto); ok {
+		found = dto
+	}
+	item := &ProfileDto{ID: id}
+	return item, nil
+}
+
+func Build() ProfileDto {
+	return ProfileDto{Name: "x"}
+}
+
+func Save(dto ProfileDto) error {
+	return nil
+}
+`;
+    const result = await analyzer.analyze("services/profile.go", code, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    const profile = result.symbols.find((s) => s.name === "ProfileDto");
+    assert.ok(profile, "ProfileDto symbol missing");
+
+    for (const edge of uses) {
+      if (edge.metadata?.typeName !== "ProfileDto") continue;
+      assert.equal(edge.targetSymbolId, profile!.id, `exact same-file target expected from ${edge.sourceSymbolId}`);
+      const lines = edge.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0);
+      assert.ok(lines.every((l) => l > 1), `real line numbers expected, got ${lines}`);
+    }
+
+    const kinds = new Set<string>();
+    for (const edge of uses) {
+      for (const kind of (edge.metadata?.usageKinds as string[]) ?? []) kinds.add(kind);
+    }
+    for (const expected of ["declaration", "parameter", "return", "composite", "assert"]) {
+      assert.ok(kinds.has(expected), `missing usage kind ${expected} (got ${[...kinds]})`);
+    }
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "int"));
+  });
+});

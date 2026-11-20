@@ -226,3 +226,55 @@ class PaymentEntity:
     assert.equal(result.errors.length, 0);
   });
 });
+
+describe("PythonAnalyzer — USES_TYPE edges", () => {
+  it("records annotations, generics and isinstance", async () => {
+    const code = `
+from dataclasses import dataclass
+from typing import List, Optional
+
+@dataclass
+class ProfileDto:
+    id: int
+    name: str
+
+class ProfileService:
+    def __init__(self, seed: ProfileDto):
+        self.seed = seed
+        self.cache: List[ProfileDto] = []
+
+    def get(self, profile_id: int) -> Optional[ProfileDto]:
+        found: ProfileDto = self.seed
+        if isinstance(found, ProfileDto):
+            return found
+        return None
+`;
+    const result = await analyzer.analyze("services/profiles.py", code, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    const profile = result.symbols.find((s) => s.name === "ProfileDto");
+    assert.ok(profile, "ProfileDto symbol missing");
+
+    for (const edge of uses) {
+      assert.equal(edge.metadata?.typeName, "ProfileDto");
+      const lines = edge.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0);
+      assert.ok(lines.every((l) => l > 1), `lines should be real positions, got ${lines}`);
+    }
+
+    const targetIds = new Set(uses.map((u) => u.targetSymbolId));
+    assert.ok(targetIds.has(profile!.id), `same-file target must be exact, got ${[...targetIds]}`);
+
+    const kinds = new Set<string>();
+    for (const edge of uses) {
+      for (const kind of (edge.metadata?.usageKinds as string[]) ?? []) kinds.add(kind);
+    }
+    for (const expected of ["parameter", "return", "declaration", "isinstance"]) {
+      assert.ok(kinds.has(expected), `missing usage kind ${expected} (got ${[...kinds]})`);
+    }
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "List"));
+  });
+});

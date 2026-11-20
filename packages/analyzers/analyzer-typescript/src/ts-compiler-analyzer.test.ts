@@ -252,3 +252,57 @@ function createUser(): string {
     assert.equal(postRoute.metadata["routePath"], "/users");
   });
 });
+
+describe("TypeScriptAnalyzer — USES_TYPE edges", () => {
+  it("records annotations, generics, casts, instanceof and new", async () => {
+    const code = `
+export class ProfileDto {
+  id = 0;
+  name = "";
+}
+
+export class ProfileStore {
+  private cache = new Map<string, ProfileDto>();
+
+  get(id: number): ProfileDto | null {
+    return this.cache.get(String(id)) ?? null;
+  }
+
+  save(dto: ProfileDto): void {
+    if (dto instanceof ProfileDto) {
+      const copy = dto as ProfileDto;
+      const list: ProfileDto[] = [];
+      list.push(copy, new ProfileDto());
+    }
+  }
+}
+`;
+    const result = await analyzer.analyze("src/profiles.ts", code, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    const profile = result.symbols.find((s) => s.name === "ProfileDto");
+    assert.ok(profile, "ProfileDto symbol missing");
+    for (const edge of uses) {
+      assert.equal(edge.targetSymbolId, profile!.id, `wrong target from ${edge.sourceSymbolId}`);
+      assert.equal(edge.metadata?.typeName, "ProfileDto");
+      const lines = edge.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0);
+      assert.equal(edge.metadata?.count, lines.length);
+    }
+
+    const kinds = new Set<string>();
+    for (const edge of uses) {
+      for (const kind of (edge.metadata?.usageKinds as string[]) ?? []) kinds.add(kind);
+    }
+    for (const expected of ["declaration", "generic", "return", "parameter", "cast", "instanceof", "new"]) {
+      assert.ok(kinds.has(expected), `missing usage kind ${expected} (got ${[...kinds]})`);
+    }
+
+    // The store class keeps the generic argument, not the BCL container.
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "Map"));
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "String"));
+  });
+});

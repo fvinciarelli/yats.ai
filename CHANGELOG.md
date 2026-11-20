@@ -5,6 +5,32 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`USES_TYPE` for TypeScript, Go, Java, Python and PHP.** The C# bridge was
+  only the first half: every analyzer now emits the type usages its AST can see
+  without a compiler —
+  - TypeScript: annotations (params, returns, properties, aliases), generic
+    arguments, `as`/`satisfies`/`<T>` casts, `instanceof`, `new`, `typeof`.
+  - Go: struct fields, interface signatures, params/results/receivers, composite
+    literals (`T{}`), type assertions, conversions and `new(T)`.
+  - Java: fields, params, returns, generic args, casts, `instanceof`, `new`.
+  - Python: parameter/return annotations, annotated assignments, `isinstance`
+    and `typing.cast`.
+  - PHP: property types, params, returns, `new`, `instanceof`, `catch` and
+    `X::class`.
+- **C# top-level statements** get a file-level symbol (`Program.cs`, kind
+  `function`, `isTopLevel`): CALLS/INSTANTIATES/USES_TYPE emitted by global
+  statements are no longer lost (they had no source symbol before).
+- **Python symbols and usages now carry real line numbers.** libcst nodes have no
+  positions without `PositionProvider`, so every Python symbol was reported at
+  line 1 and `lines` would have been useless.
+
+### Changed
+- `ANALYSIS_SCHEMA_VERSION` 4 → 5: the next `yats index` re-analyzes every file
+  so repositories get the new edges for all languages.
+
 ## [0.8.3] - 2026-11-20
 
 ### Added

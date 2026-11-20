@@ -44,6 +44,7 @@ var tree = CSharpSyntaxTree.ParseText(code);
 var root = tree.GetCompilationUnitRoot();
 
 var analyzer = new CSharpAnalyzer(repoName, filePath);
+analyzer.PrepareTopLevel(root);
 analyzer.Visit(root);
 analyzer.FlushTypeUsages();
 
@@ -171,6 +172,26 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         // Full repo-relative path (not basename) — two files with the same name
         // in different folders must not collide in symbol IDs or resolution.
         _relPath = filePath.Replace('\\', '/').TrimStart('.', '/');
+    }
+
+    // ============================================================
+    // Top-level statements (Program.cs style)
+    //
+    // A file with top-level statements has no enclosing symbol, so its CALLS /
+    // INSTANTIATES / USES_TYPE edges had no source and were dropped. Create a
+    // file-level symbol (kind FUNCTION, name = file name) and attribute them.
+    // ============================================================
+
+    public void PrepareTopLevel(CompilationUnitSyntax root)
+    {
+        if (!root.Members.OfType<GlobalStatementSyntax>().Any()) return;
+
+        var fileName = _relPath.Split('/').LastOrDefault() ?? _relPath;
+        var sym = MakeSymbol(fileName, "FUNCTION", root);
+        sym.Signature = "top-level statements";
+        sym.Metadata["isTopLevel"] = true;
+        Symbols.Add(sym);
+        _currentCallerId = sym.Id;
     }
 
     // ============================================================

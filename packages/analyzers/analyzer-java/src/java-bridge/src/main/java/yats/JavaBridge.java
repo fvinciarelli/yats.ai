@@ -37,6 +37,13 @@ public class JavaBridge {
     private final List<Map<String, Object>> symbols = new ArrayList<>();
     private final List<Map<String, Object>> relationships = new ArrayList<>();
 
+    /** type name -> exact symbol id, for same-file USES_TYPE targets */
+    private final Map<String, String> declaredTypes = new LinkedHashMap<>();
+    /** callerId \u0000 typeName -> {lines, kinds} */
+    private final Map<String, Map<String, Object>> typeUsages = new LinkedHashMap<>();
+    /** packages of imported classes (used by the resolver to disambiguate) */
+    private final Set<String> importedPackages = new LinkedHashSet<>();
+
     public static void main(String[] args) throws Exception {
         String file = null, repo = null;
         boolean stdin = false;
@@ -105,9 +112,22 @@ public class JavaBridge {
                         "message", p.getMessage(),
                         "severity", "error")));
 
+        for (com.github.javaparser.ast.ImportDeclaration imp : cu.getImports()) {
+            if (imp.isStatic()) continue;
+            String name = imp.getNameAsString();
+            if (imp.isAsterisk()) {
+                importedPackages.add(name);
+            } else {
+                int lastDot = name.lastIndexOf('.');
+                if (lastDot > 0) importedPackages.add(name.substring(0, lastDot));
+            }
+        }
+
         for (TypeDeclaration<?> type : cu.getTypes()) {
             collectType(type, pkg);
         }
+
+        flushTypeUsages();
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("symbols", symbols);
@@ -129,6 +149,7 @@ public class JavaBridge {
         }
 
         symbols.add(baseSymbol(type, id, name, kind, pkg, null, signatureOf(type), metadata));
+        declaredTypes.put(name, id);
         detectConvention(symbols.get(symbols.size() - 1));
 
         // extends / implements
@@ -164,12 +185,14 @@ public class JavaBridge {
                     signatureOf(m), Map.of()));
             relationships.add(rel(parentId, memberId, "CONTAINS"));
             collectCalls(m, memberId);
+            collectTypeUsages(m, memberId);
         } else if (member instanceof ConstructorDeclaration c) {
             String memberId = makeId(parentFqn + "." + parent.getNameAsString());
             symbols.add(baseSymbol(c, memberId, parent.getNameAsString(), "constructor", pkg,
                     parent.getNameAsString(), signatureOf(c), Map.of()));
             relationships.add(rel(parentId, memberId, "CONTAINS"));
             collectCalls(c, memberId);
+            collectTypeUsages(c, memberId);
         } else if (member instanceof FieldDeclaration f) {
             for (VariableDeclarator var : f.getVariables()) {
                 String fieldName = var.getNameAsString();
@@ -177,6 +200,7 @@ public class JavaBridge {
                 symbols.add(baseSymbol(f, memberId, fieldName, "field", pkg,
                         parent.getNameAsString(), null, Map.of()));
                 relationships.add(rel(parentId, memberId, "CONTAINS"));
+                recordTypeNode(memberId, var.getType(), "declaration");
             }
         } else if (member instanceof EnumConstantDeclaration ec) {
             String memberId = makeId(parentFqn + "." + ec.getNameAsString());
@@ -185,6 +209,116 @@ public class JavaBridge {
             relationships.add(rel(parentId, memberId, "CONTAINS"));
         } else if (member instanceof TypeDeclaration<?> nested) {
             collectType(nested, parentFqn);
+        }
+    }
+
+
+    // ========================================================
+    // Type usages — USES_TYPE edges
+    // ========================================================
+
+    private static final Set<String> BUILTIN_TYPES = Set.of(
+            "int", "long", "short", "byte", "char", "float", "double", "boolean",
+            "void", "var", "String", "Object", "Integer", "Long", "Short", "Byte",
+            "Character", "Float", "Double", "Boolean", "Number", "CharSequence",
+            "List", "ArrayList", "LinkedList", "Map", "HashMap", "LinkedHashMap",
+            "TreeMap", "Set", "HashSet", "LinkedHashSet", "TreeSet", "Collection",
+            "Collections", "Optional", "Stream", "Iterable", "Iterator", "Arrays",
+            "Objects", "Math", "System", "Exception", "RuntimeException",
+            "Throwable", "StringBuilder", "StringBuffer", "BigDecimal", "BigInteger",
+            "LocalDate", "LocalDateTime", "LocalTime", "Instant", "Duration",
+            "Period", "Class", "Enum", "Comparable", "Serializable", "Override",
+            "Autowired", "Component", "Service", "Repository", "Bean", "Entity",
+            "Deprecated", "SuppressWarnings", "FunctionalInterface");
+
+    private void recordTypeUsage(String callerId, String typeName, int line, String kind) {
+        if (callerId == null || typeName == null || typeName.isEmpty()
+                || BUILTIN_TYPES.contains(typeName)) {
+            return;
+        }
+        String key = callerId + "\u0000" + typeName;
+        Map<String, Object> usage = typeUsages.computeIfAbsent(key, k -> {
+            Map<String, Object> created = new LinkedHashMap<>();
+            created.put("caller", callerId);
+            created.put("name", typeName);
+            created.put("lines", new TreeSet<Integer>());
+            created.put("kinds", new TreeSet<String>());
+            return created;
+        });
+        @SuppressWarnings("unchecked")
+        Set<Integer> lines = (Set<Integer>) usage.get("lines");
+        @SuppressWarnings("unchecked")
+        Set<String> kinds = (Set<String>) usage.get("kinds");
+        lines.add(line);
+        kinds.add(kind);
+    }
+
+    private void recordTypeNode(String callerId, com.github.javaparser.ast.type.Type type, String kind) {
+        if (type == null) return;
+        int line = type.getBegin().map(p -> p.line).orElse(1);
+        for (ClassOrInterfaceType t : type.findAll(ClassOrInterfaceType.class)) {
+            recordTypeUsage(callerId, t.getNameAsString(), line, kind);
+        }
+    }
+
+    /** All class types mentioned inside a method/constructor body or signature. */
+    private void collectTypeUsages(Node scope, String callerId) {
+        for (ClassOrInterfaceType type : scope.findAll(ClassOrInterfaceType.class)) {
+            Node parent = type.getParentNode().orElse(null);
+            String kind = "type";
+            if (parent instanceof Parameter) {
+                kind = "parameter";
+            } else if (parent instanceof MethodDeclaration) {
+                kind = "return";
+            } else if (parent instanceof FieldDeclaration || parent instanceof VariableDeclarator) {
+                kind = "declaration";
+            } else if (parent instanceof ObjectCreationExpr) {
+                kind = "new";
+            } else if (parent instanceof CastExpr) {
+                kind = "cast";
+            } else if (parent instanceof InstanceOfExpr) {
+                kind = "instanceof";
+            } else if (parent instanceof ClassOrInterfaceDeclaration
+                    || parent instanceof RecordDeclaration
+                    || parent instanceof EnumDeclaration) {
+                // extends/implements already emit INHERITS/IMPLEMENTS
+                continue;
+            }
+            int line = type.getBegin().map(p -> p.line).orElse(1);
+            recordTypeUsage(callerId, type.getNameAsString(), line, kind);
+        }
+    }
+
+    private void flushTypeUsages() {
+        List<String> keys = new ArrayList<>(typeUsages.keySet());
+        Collections.sort(keys);
+        for (String key : keys) {
+            Map<String, Object> usage = typeUsages.get(key);
+            String caller = (String) usage.get("caller");
+            String name = (String) usage.get("name");
+            @SuppressWarnings("unchecked")
+            Set<Integer> lineSet = (Set<Integer>) usage.get("lines");
+            @SuppressWarnings("unchecked")
+            Set<String> kindSet = (Set<String>) usage.get("kinds");
+            List<Integer> lines = new ArrayList<>(lineSet);
+            List<String> kinds = new ArrayList<>(kindSet);
+
+            String target = declaredTypes.getOrDefault(name, makeId(name));
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("typeName", name);
+            meta.put("namespace", packageName);
+            meta.put("usings", new ArrayList<>(importedPackages));
+            meta.put("lines", lines);
+            meta.put("count", lines.size());
+            meta.put("usageKinds", kinds);
+
+            Map<String, Object> rel = new LinkedHashMap<>();
+            rel.put("id", caller + "|uses_type|" + target);
+            rel.put("sourceSymbolId", caller);
+            rel.put("targetSymbolId", target);
+            rel.put("kind", "USES_TYPE");
+            rel.put("metadata", meta);
+            relationships.add(rel);
         }
     }
 

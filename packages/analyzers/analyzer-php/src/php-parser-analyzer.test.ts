@@ -338,3 +338,60 @@ class ApiController
     assert.equal(attrs.length, 1);
   });
 });
+
+describe("PhpAnalyzer — USES_TYPE edges", () => {
+  it("records property types, params, returns, instanceof and new", async () => {
+    const code = `<?php
+namespace App\\Services;
+
+class ProfileDto
+{
+    public string $name = "";
+}
+
+class ProfileService
+{
+    private ProfileDto $seed;
+
+    public function __construct(ProfileDto $seed)
+    {
+        $this->seed = $seed;
+    }
+
+    public function get(int $id): ?ProfileDto
+    {
+        $found = $this->seed;
+        if ($found instanceof ProfileDto) {
+            return $found;
+        }
+        return new ProfileDto();
+    }
+}
+`;
+    const result = await analyzer.analyze("Services/ProfileService.php", code, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    const profile = result.symbols.find((s) => s.name === "ProfileDto");
+    assert.ok(profile, "ProfileDto symbol missing");
+
+    for (const edge of uses) {
+      assert.equal(edge.metadata?.typeName, "ProfileDto");
+      const lines = edge.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0);
+      assert.ok(lines.every((l) => l > 1), `real line numbers expected, got ${lines}`);
+      assert.equal(edge.targetSymbolId, profile!.id, `same-file target must be exact for ${edge.sourceSymbolId}`);
+    }
+
+    const kinds = new Set<string>();
+    for (const edge of uses) {
+      for (const kind of (edge.metadata?.usageKinds as string[]) ?? []) kinds.add(kind);
+    }
+    for (const expected of ["declaration", "parameter", "return", "instanceof", "new"]) {
+      assert.ok(kinds.has(expected), `missing usage kind ${expected} (got ${[...kinds]})`);
+    }
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "string"));
+  });
+});

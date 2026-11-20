@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -126,12 +127,15 @@ func analyzeNode(fset *token.FileSet, node *ast.File, repo, path string) (*Resul
 		path:    path,
 		relPath: relPath,
 		pkgName: pkgName,
-		fset:    fset,
-		symbols: []Symbol{},
-		relns:   []Relationship{},
+		fset:          fset,
+		declaredTypes: map[string]string{},
+		typeUsages:    map[string]*typeUsage{},
+		symbols:       []Symbol{},
+		relns:         []Relationship{},
 	}
 
 	ast.Walk(a, node)
+	a.flushTypeUsages()
 
 	// Route detection pass (P5) — runs after the full walk so handler
 	// symbols exist regardless of declaration order.
@@ -153,6 +157,8 @@ type analyzer struct {
 	currentStruct string
 	structFields  map[string][]string // struct name -> field names
 	pkgNames      map[string]bool     // imported package names (aliases + last path segment)
+	declaredTypes map[string]string   // type name -> exact symbol ID (same file)
+	typeUsages    map[string]*typeUsage
 
 	symbols []Symbol
 	relns   []Relationship
@@ -178,6 +184,7 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 			a.detectGoConvention(&sym)
 			a.symbols = append(a.symbols, sym)
 			a.currentStruct = name
+			a.declaredTypes[name] = sym.ID
 
 			// Extract fields as properties
 			for _, field := range t.Fields.List {
@@ -187,11 +194,13 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 					fieldSym.Namespace = a.pkgName + "." + name
 					a.symbols = append(a.symbols, fieldSym)
 				}
+				a.recordTypeNode(sym.ID, field.Type, field.Type.Pos(), "declaration")
 			}
 
 		case *ast.InterfaceType:
 			sym := a.makeSymbol(name, "interface", n.Pos(), n.End())
 			a.symbols = append(a.symbols, sym)
+			a.declaredTypes[name] = sym.ID
 
 			// Extract interface methods
 			for _, method := range t.Methods.List {
@@ -201,7 +210,15 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 					methSym.Namespace = a.pkgName + "." + name
 					a.symbols = append(a.symbols, methSym)
 				}
+				a.recordTypeNode(sym.ID, method.Type, method.Type.Pos(), "declaration")
 			}
+
+		default:
+			// Aliases and named types: `type UserID string`, `type Alias = Other`
+			sym := a.makeSymbol(name, "type_alias", n.Pos(), n.End())
+			a.symbols = append(a.symbols, sym)
+			a.declaredTypes[name] = sym.ID
+			a.recordTypeNode(sym.ID, n.Type, n.Type.Pos(), "alias")
 		}
 
 	// ---- Function declarations ----
@@ -245,10 +262,28 @@ func (a *analyzer) Visit(node ast.Node) ast.Visitor {
 		}
 		a.symbols = append(a.symbols, sym)
 
+		// Signature types (params, results, receiver) are usages of this symbol.
+		if n.Recv != nil {
+			for _, field := range n.Recv.List {
+				a.recordTypeNode(sym.ID, field.Type, field.Type.Pos(), "receiver")
+			}
+		}
+		if n.Type.Params != nil {
+			for _, field := range n.Type.Params.List {
+				a.recordTypeNode(sym.ID, field.Type, field.Type.Pos(), "parameter")
+			}
+		}
+		if n.Type.Results != nil {
+			for _, field := range n.Type.Results.List {
+				a.recordTypeNode(sym.ID, field.Type, field.Type.Pos(), "return")
+			}
+		}
+
 		// Extract calls within function body (with receiver type map)
 		if n.Body != nil {
 			scope := a.collectFuncScope(n)
 			a.extractCalls(n.Body, sym.ID, scope)
+			a.extractTypeUsagesBody(n.Body, sym.ID)
 		}
 
 	// ---- Import declarations ----
@@ -514,6 +549,176 @@ func (a *analyzer) collectFuncScope(fn *ast.FuncDecl) map[string]scopeEntry {
 	}
 
 	return scope
+}
+
+
+// ============================================================
+// Type usages — USES_TYPE edges
+// ============================================================
+
+type typeUsage struct {
+	caller string
+	name   string
+	lines  map[int]bool
+	kinds  map[string]bool
+}
+
+var goBuiltinTypes = map[string]bool{
+	"bool": true, "string": true, "error": true, "byte": true, "rune": true,
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"uintptr": true, "float32": true, "float64": true, "complex64": true,
+	"complex128": true, "any": true, "comparable": true, "nil": true,
+	"true": true, "false": true, "struct": true, "interface": true,
+	"map": true, "chan": true, "func": true,
+}
+
+func (a *analyzer) recordTypeUsage(caller, name string, pos token.Pos, kind string) {
+	if caller == "" || name == "" || goBuiltinTypes[name] {
+		return
+	}
+	key := caller + "\x00" + name
+	usage := a.typeUsages[key]
+	if usage == nil {
+		usage = &typeUsage{caller: caller, name: name, lines: map[int]bool{}, kinds: map[string]bool{}}
+		a.typeUsages[key] = usage
+	}
+	usage.lines[a.fset.Position(pos).Line] = true
+	usage.kinds[kind] = true
+}
+
+func (a *analyzer) recordTypeNode(caller string, expr ast.Expr, pos token.Pos, kind string) {
+	if expr == nil {
+		return
+	}
+	for _, name := range a.typeNames(expr) {
+		a.recordTypeUsage(caller, name, pos, kind)
+	}
+}
+
+// typeNames flattens a type expression into the simple names it mentions.
+func (a *analyzer) typeNames(expr ast.Expr) []string {
+	names := []string{}
+	switch t := expr.(type) {
+	case *ast.Ident:
+		names = append(names, t.Name)
+	case *ast.SelectorExpr:
+		names = append(names, t.Sel.Name)
+	case *ast.StarExpr:
+		names = append(names, a.typeNames(t.X)...)
+	case *ast.ArrayType:
+		names = append(names, a.typeNames(t.Elt)...)
+	case *ast.MapType:
+		names = append(names, a.typeNames(t.Key)...)
+		names = append(names, a.typeNames(t.Value)...)
+	case *ast.ChanType:
+		names = append(names, a.typeNames(t.Value)...)
+	case *ast.Ellipsis:
+		names = append(names, a.typeNames(t.Elt)...)
+	case *ast.IndexExpr:
+		names = append(names, a.typeNames(t.X)...)
+		names = append(names, a.typeNames(t.Index)...)
+	case *ast.IndexListExpr:
+		names = append(names, a.typeNames(t.X)...)
+		for _, idx := range t.Indices {
+			names = append(names, a.typeNames(idx)...)
+		}
+	case *ast.ParenExpr:
+		names = append(names, a.typeNames(t.X)...)
+	case *ast.FuncType:
+		if t.Params != nil {
+			for _, field := range t.Params.List {
+				names = append(names, a.typeNames(field.Type)...)
+			}
+		}
+		if t.Results != nil {
+			for _, field := range t.Results.List {
+				names = append(names, a.typeNames(field.Type)...)
+			}
+		}
+	case *ast.StructType:
+		for _, field := range t.Fields.List {
+			names = append(names, a.typeNames(field.Type)...)
+		}
+	case *ast.InterfaceType:
+		for _, method := range t.Methods.List {
+			names = append(names, a.typeNames(method.Type)...)
+		}
+	}
+	return names
+}
+
+// extractTypeUsagesBody finds type mentions inside a function body:
+// composite literals (T{}), type assertions (x.(T)), conversions T(x),
+// new(T) and explicitly typed var declarations.
+func (a *analyzer) extractTypeUsagesBody(body *ast.BlockStmt, caller string) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.CompositeLit:
+			if t.Type != nil {
+				a.recordTypeNode(caller, t.Type, t.Type.Pos(), "composite")
+			}
+		case *ast.TypeAssertExpr:
+			if t.Type != nil {
+				a.recordTypeNode(caller, t.Type, t.Type.Pos(), "assert")
+			}
+		case *ast.ValueSpec:
+			if t.Type != nil {
+				a.recordTypeNode(caller, t.Type, t.Type.Pos(), "declaration")
+			}
+		case *ast.CallExpr:
+			if ident, ok := t.Fun.(*ast.Ident); ok {
+				if ident.Name == "new" && len(t.Args) == 1 {
+					a.recordTypeNode(caller, t.Args[0], t.Args[0].Pos(), "new")
+				} else if _, declared := a.declaredTypes[ident.Name]; declared {
+					// T(v) conversion — only for types declared in this file:
+					// a plain call is indistinguishable syntactically.
+					a.recordTypeNode(caller, t.Fun, t.Fun.Pos(), "conversion")
+				}
+			}
+		}
+		return true
+	})
+}
+
+func (a *analyzer) flushTypeUsages() {
+	keys := make([]string, 0, len(a.typeUsages))
+	for key := range a.typeUsages {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		usage := a.typeUsages[key]
+		lines := make([]int, 0, len(usage.lines))
+		for line := range usage.lines {
+			lines = append(lines, line)
+		}
+		sort.Ints(lines)
+		kinds := make([]string, 0, len(usage.kinds))
+		for kind := range usage.kinds {
+			kinds = append(kinds, kind)
+		}
+		sort.Strings(kinds)
+
+		target := a.declaredTypes[usage.name]
+		if target == "" {
+			target = a.makeID(usage.name)
+		}
+		a.relns = append(a.relns, Relationship{
+			ID:             fmt.Sprintf("%s|uses_type|%s", usage.caller, target),
+			SourceSymbolID: usage.caller,
+			TargetSymbolID: target,
+			Kind:           "USES_TYPE",
+			Metadata: map[string]any{
+				"typeName":   usage.name,
+				"namespace":  a.pkgName,
+				"lines":      lines,
+				"count":      len(lines),
+				"usageKinds": kinds,
+			},
+		})
+	}
 }
 
 func (a *analyzer) makeSymbol(name, kind string, pos, end token.Pos) Symbol {

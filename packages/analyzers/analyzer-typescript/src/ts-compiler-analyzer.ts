@@ -11,6 +11,22 @@ import { createSymbolId } from "@yats/shared";
 
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
+/**
+ * Type names that are language/builtin types, never repository symbols.
+ * Filtered at emission so the unresolved-relationship buffer stays small.
+ */
+const TS_BUILTIN_TYPES = new Set([
+  "string", "number", "boolean", "any", "unknown", "void", "never", "object",
+  "null", "undefined", "bigint", "symbol", "this", "true", "false",
+  "Array", "ReadonlyArray", "Map", "ReadonlyMap", "Set", "ReadonlySet",
+  "WeakMap", "WeakSet", "Promise", "PromiseLike", "Record", "Partial",
+  "Required", "Readonly", "Pick", "Omit", "Exclude", "Extract", "NonNullable",
+  "Parameters", "ReturnType", "InstanceType", "Awaited", "NonNullable",
+  "Date", "RegExp", "Error", "Function", "Object", "String", "Number",
+  "Boolean", "Symbol", "BigInt", "JSON", "Math", "Iterable", "Iterator",
+  "AsyncIterable", "AsyncIterator", "Generator", "AsyncGenerator",
+]);
+
 export class TypeScriptAnalyzer extends AbstractAnalyzer {
   readonly language = Language.TYPESCRIPT;
 
@@ -18,6 +34,8 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
   private imports = new Map<string, string>();
   /** top-level variable names declared in the current file */
   private localVars = new Set<string>();
+  /** type name → exact symbol ID for types declared in the current file */
+  private declaredTypeIds = new Map<string, string>();
 
   canAnalyze(filePath: string, _content: string): boolean {
     const ext = filePath.split(".").pop()?.toLowerCase();
@@ -69,6 +87,25 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         ts.forEachChild(node, collectScope);
       };
       collectScope(sourceFile);
+
+      // Types declared in this file get exact USES_TYPE targets (same-file
+      // resolution must never be rewritten against another file's symbol).
+      this.declaredTypeIds = new Map();
+      const namespace = this.getNamespace(sourceFile);
+      const collectDeclaredTypes = (n: ts.Node): void => {
+        if (
+          (ts.isClassDeclaration(n) || ts.isInterfaceDeclaration(n) ||
+            ts.isEnumDeclaration(n) || ts.isTypeAliasDeclaration(n)) &&
+          n.name
+        ) {
+          this.declaredTypeIds.set(
+            n.name.text,
+            createSymbolId(repositoryName, filePath, this.getNodePath(n, sourceFile, namespace)),
+          );
+        }
+        ts.forEachChild(n, collectDeclaredTypes);
+      };
+      collectDeclaredTypes(sourceFile);
 
       // Extract symbols by walking the AST
       this.extractSymbols(
@@ -222,6 +259,9 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         );
       }
 
+      // Interface member signatures (property types, method returns).
+      this.extractTypeUsages(node, sourceFile, id, filePath, repository, namespace, relationships);
+
       // Process interface members
       ts.forEachChild(node, (member) => {
         this.processClassMember(
@@ -286,6 +326,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
 
       // Extract calls from function body
       this.extractCalls(node, sourceFile, id, filePath, repository, namespace, symbols, relationships);
+      this.extractTypeUsages(node, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Variable statement
@@ -308,6 +349,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
             sourceSnippet: text.slice(0, 500),
             contentHash: hashContent(text),
           }));
+          this.extractTypeUsages(decl, sourceFile, varId, filePath, repository, namespace, relationships);
         }
       }
     }
@@ -329,6 +371,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         sourceSnippet: text.slice(0, 1000),
         contentHash: hashContent(text),
       }));
+      this.extractTypeUsages(node, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Import/Export declarations — no relationships are emitted for them:
@@ -409,6 +452,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
 
       // Extract calls from method body
       this.extractCalls(member, sourceFile, id, filePath, repository, namespace, symbols, relationships);
+      this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Constructor
@@ -437,6 +481,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
       );
 
       this.extractCalls(member, sourceFile, id, filePath, repository, namespace, symbols, relationships);
+      this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Property
@@ -464,6 +509,8 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
       relationships.push(
         this.createRelationship(parentId, id, RelationshipKind.CONTAINS),
       );
+
+      this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Getter/Setter
@@ -493,6 +540,8 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         relationships.push(
           this.createRelationship(parentId, id, RelationshipKind.CONTAINS),
         );
+
+        this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
       }
     }
 
@@ -619,6 +668,142 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
     };
 
     ts.forEachChild(node, visitCall);
+  }
+
+  // ============================================================
+  // Type Usages — USES_TYPE
+  //
+  // A TS type is mentioned by annotations, generic arguments, casts,
+  // `instanceof` and `new` far more often than it is called: without these
+  // edges find_references(X) only saw calls. One edge per (enclosing symbol,
+  // type) carrying every usage line.
+  // ============================================================
+
+  private extractTypeUsages(
+    node: ts.Node,
+    sourceFile: ts.SourceFile,
+    callerId: string,
+    filePath: string,
+    repository: string,
+    namespace: string,
+    relationships: Relationship[],
+  ): void {
+    const usages = new Map<string, { name: string; lines: Set<number>; kinds: Set<string> }>();
+
+    const record = (rawName: string, at: ts.Node, kind: string): void => {
+      const name = rawName.split(".").pop()?.replace(/<.*$/, "") ?? "";
+      if (!name || TS_BUILTIN_TYPES.has(name)) return;
+      const targetId = this.declaredTypeIds.get(name) ??
+        createSymbolId(repository, filePath, name);
+      const line = sourceFile.getLineAndCharacterOfPosition(at.getStart(sourceFile)).line + 1;
+      const entry = usages.get(targetId) ?? {
+        name,
+        lines: new Set<number>(),
+        kinds: new Set<string>(),
+      };
+      entry.lines.add(line);
+      entry.kinds.add(kind);
+      usages.set(targetId, entry);
+    };
+
+    const collectType = (type: ts.TypeNode | undefined, kind: string): void => {
+      if (!type) return;
+      if (ts.isTypeReferenceNode(type)) {
+        record(type.typeName.getText(sourceFile), type, kind);
+        for (const arg of type.typeArguments ?? []) collectType(arg, "generic");
+        return;
+      }
+      if (ts.isArrayTypeNode(type)) return collectType(type.elementType, kind);
+      if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) {
+        for (const t of type.types) collectType(t, kind);
+        return;
+      }
+      if (ts.isParenthesizedTypeNode(type) || ts.isTypeOperatorNode(type)) {
+        return collectType(type.type, kind);
+      }
+      if (ts.isTupleTypeNode(type)) {
+        for (const element of type.elements) {
+          collectType(ts.isNamedTupleMember(element) ? element.type : element, kind);
+        }
+        return;
+      }
+      if (ts.isFunctionTypeNode(type) || ts.isConstructorTypeNode(type)) {
+        for (const parameter of type.parameters) collectType(parameter.type, "parameter");
+        collectType(type.type, "return");
+        return;
+      }
+      if (ts.isConditionalTypeNode(type)) {
+        collectType(type.checkType, kind);
+        collectType(type.extendsType, kind);
+        collectType(type.trueType, kind);
+        collectType(type.falseType, kind);
+        return;
+      }
+      if (ts.isTypeLiteralNode(type)) {
+        for (const member of type.members) {
+          if (ts.isPropertySignature(member)) collectType(member.type, "declaration");
+        }
+      }
+    };
+
+    const visit = (child: ts.Node): void => {
+      if (ts.isParameter(child)) collectType(child.type, "parameter");
+      else if (
+        ts.isVariableDeclaration(child) || ts.isPropertyDeclaration(child) ||
+        ts.isPropertySignature(child) || ts.isTypeAliasDeclaration(child)
+      ) {
+        collectType(child.type, "declaration");
+      }
+
+      if (ts.isFunctionLike(child)) {
+        collectType((child as ts.SignatureDeclaration).type, "return");
+      }
+
+      if (ts.isNewExpression(child)) {
+        if (ts.isIdentifier(child.expression)) record(child.expression.text, child, "new");
+        for (const arg of child.typeArguments ?? []) collectType(arg, "generic");
+      }
+
+      if (
+        ts.isAsExpression(child) || ts.isSatisfiesExpression(child) ||
+        ts.isTypeAssertionExpression(child)
+      ) {
+        collectType(child.type, "cast");
+      }
+
+      if (ts.isCallExpression(child)) {
+        for (const arg of child.typeArguments ?? []) collectType(arg, "generic");
+      }
+
+      if (
+        ts.isBinaryExpression(child) &&
+        child.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword &&
+        ts.isIdentifier(child.right)
+      ) {
+        record(child.right.text, child, "instanceof");
+      }
+
+      if (ts.isTypeOfExpression(child) && ts.isIdentifier(child.expression)) {
+        record(child.expression.text, child, "typeof");
+      }
+
+      ts.forEachChild(child, visit);
+    };
+
+    visit(node);
+
+    for (const [targetId, usage] of usages) {
+      const lines = [...usage.lines].sort((a, b) => a - b);
+      relationships.push(
+        this.createRelationship(callerId, targetId, RelationshipKind.USES_TYPE, {
+          typeName: usage.name,
+          namespace,
+          lines,
+          count: lines.length,
+          usageKinds: [...usage.kinds].sort(),
+        }),
+      );
+    }
   }
 
   // ============================================================

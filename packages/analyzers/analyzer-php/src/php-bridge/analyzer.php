@@ -85,6 +85,7 @@ function processFiles(array $files, string $repoName): array
             $traverser = new NodeTraverser();
             $traverser->addVisitor($extractor);
             $traverser->traverse($ast);
+            $extractor->flushTypeUsages();
 
             $symbols = $extractor->getSymbols();
             $relationships = $extractor->getRelationships();
@@ -127,6 +128,16 @@ class SymbolExtractor extends NodeVisitorAbstract
     private array $lineStarts = [];
     private string $namespace = '';
     private ?string $currentClass = null;
+    /** class name -> exact symbol id, for same-file USES_TYPE targets */
+    private array $declaredTypes = [];
+    /** "caller\0Type" -> {caller, name, lines, kinds} */
+    private array $typeUsages = [];
+
+    private const BUILTIN_TYPES = [
+        'int', 'float', 'string', 'bool', 'array', 'object', 'mixed', 'void',
+        'never', 'null', 'false', 'true', 'self', 'static', 'parent', 'iterable',
+        'callable', 'resource',
+    ];
 
     public function __construct(string $repo, string $filePath, string $code)
     {
@@ -190,6 +201,7 @@ class SymbolExtractor extends NodeVisitorAbstract
             }
 
             $this->symbols[] = $symbol;
+            $this->declaredTypes[$node->name->toString()] = $id;
             $this->currentClass = $node->name->toString();
 
             // Extends
@@ -304,6 +316,10 @@ class SymbolExtractor extends NodeVisitorAbstract
             ];
 
             $this->extractCalls($node, $id);
+            if ($node->returnType) {
+                $this->recordTypeUsage($id, $node->returnType, $node->returnType->getStartLine(), 'return');
+            }
+            $this->extractTypeUsages($node, $id);
         }
 
         // Property
@@ -328,6 +344,10 @@ class SymbolExtractor extends NodeVisitorAbstract
                     'kind' => 'CONTAINS',
                     'metadata' => (object)[],
                 ];
+
+                if ($node->type) {
+                    $this->recordTypeUsage($id, $node->type, $node->getStartLine(), 'declaration');
+                }
             }
         }
 
@@ -361,6 +381,10 @@ class SymbolExtractor extends NodeVisitorAbstract
             ], $node, 'function');
 
             $this->extractCalls($node, $id);
+            if ($node->returnType) {
+                $this->recordTypeUsage($id, $node->returnType, $node->returnType->getStartLine(), 'return');
+            }
+            $this->extractTypeUsages($node, $id);
         }
 
         // Use statements (imports)
@@ -402,6 +426,106 @@ class SymbolExtractor extends NodeVisitorAbstract
                 ];
             }
         }
+    }
+
+
+    // ========================================================
+    // Type usages — USES_TYPE edges
+    // ========================================================
+
+    public function flushTypeUsages(): void
+    {
+        $usings = [];
+        foreach ($this->relationships as $rel) {
+            if (($rel['kind'] ?? '') === 'IMPORTS' && isset($rel['metadata']['importPath'])) {
+                $usings[] = $rel['metadata']['importPath'];
+            }
+        }
+        foreach ($this->typeUsages as $usage) {
+            $lines = array_keys($usage['lines']);
+            sort($lines);
+            $kinds = array_keys($usage['kinds']);
+            sort($kinds);
+            $name = $usage['name'];
+            $targetId = $this->declaredTypes[$name] ?? $this->makeId($name);
+            $this->relationships[] = [
+                'id' => "{$usage['caller']}--[USES_TYPE]-->{$targetId}",
+                'sourceSymbolId' => $usage['caller'],
+                'targetSymbolId' => $targetId,
+                'kind' => 'USES_TYPE',
+                'metadata' => [
+                    'typeName' => $name,
+                    'namespace' => $this->namespace,
+                    'usings' => $usings,
+                    'lines' => $lines,
+                    'count' => count($lines),
+                    'usageKinds' => $kinds,
+                ],
+            ];
+        }
+    }
+
+    private function collectTypeNames($type, array &$names): void
+    {
+        if ($type === null) return;
+        if ($type instanceof Node\NullableType) {
+            $this->collectTypeNames($type->type, $names);
+            return;
+        }
+        if ($type instanceof Node\UnionType || $type instanceof Node\IntersectionType) {
+            foreach ($type->types as $inner) $this->collectTypeNames($inner, $names);
+            return;
+        }
+        if ($type instanceof Node\Name) {
+            $full = $type->toString();
+            $names[] = str_contains($full, '\\')
+                ? substr($full, strrpos($full, '\\') + 1)
+                : $full;
+        }
+    }
+
+    public function recordTypeUsage(?string $callerId, $type, int $line, string $kind): void
+    {
+        if (!$callerId || $type === null) return;
+        $names = [];
+        $this->collectTypeNames($type, $names);
+        foreach ($names as $name) {
+            if ($name === '' || in_array(strtolower($name), self::BUILTIN_TYPES, true)) continue;
+            $key = $callerId . "\0" . $name;
+            if (!isset($this->typeUsages[$key])) {
+                $this->typeUsages[$key] = ['caller' => $callerId, 'name' => $name, 'lines' => [], 'kinds' => []];
+            }
+            $this->typeUsages[$key]['lines'][$line] = true;
+            $this->typeUsages[$key]['kinds'][$kind] = true;
+        }
+    }
+
+    private function extractTypeUsages(Node $node, string $callerId): void
+    {
+        $owner = $this;
+        $visitor = new class($callerId, $owner) extends NodeVisitorAbstract {
+            public function __construct(private string $callerId, private SymbolExtractor $owner) {}
+
+            public function enterNode(Node $node)
+            {
+                if ($node instanceof Node\Param) {
+                    $this->owner->recordTypeUsage($this->callerId, $node->type, $node->getStartLine(), 'parameter');
+                } elseif ($node instanceof Node\Expr\New_ && $node->class instanceof Node\Name) {
+                    $this->owner->recordTypeUsage($this->callerId, $node->class, $node->getStartLine(), 'new');
+                } elseif ($node instanceof Node\Expr\Instanceof_ && $node->class instanceof Node\Name) {
+                    $this->owner->recordTypeUsage($this->callerId, $node->class, $node->getStartLine(), 'instanceof');
+                } elseif ($node instanceof Node\Expr\ClassConstFetch && $node->class instanceof Node\Name) {
+                    $this->owner->recordTypeUsage($this->callerId, $node->class, $node->getStartLine(), 'classconst');
+                } elseif ($node instanceof Node\Stmt\Catch_) {
+                    foreach ($node->types as $type) {
+                        $this->owner->recordTypeUsage($this->callerId, $type, $node->getStartLine(), 'catch');
+                    }
+                }
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse([$node]);
     }
 
     private function extractCalls(Node $node, string $callerId): void

@@ -20,7 +20,7 @@ from typing import Optional, Any
 # These will be imported if available at runtime
 try:
     import libcst as cst
-    from libcst.metadata import MetadataWrapper
+    from libcst.metadata import MetadataWrapper, PositionProvider
     HAS_LIBCST = True
 except ImportError:
     HAS_LIBCST = False
@@ -39,8 +39,12 @@ except ImportError:
 class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
     """Extracts symbols and relationships from Python AST using LibCST."""
 
-    def __init__(self, repo_name: str, file_path: str, source_code: str, repo_root: str = ""):
+    def __init__(self, repo_name: str, file_path: str, source_code: str, repo_root: str = "",
+                 positions: dict = None):
         self.repo = repo_name
+        # libcst nodes carry no positions by default; PositionProvider supplies
+        # them. Without it every symbol/usage was reported at line 1.
+        self.positions = positions or {}
         self.file_path = file_path
         # Compute relative path by stripping repo root prefix
         rel = file_path.removeprefix(repo_root).removeprefix("/")
@@ -52,6 +56,13 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
         self.current_function = None
         self.known_modules: set = set()
         self.namespace = os.path.splitext(self.relative_path.replace("/", "."))[0]
+        # Module paths imported by this file — used by the resolver to tell
+        # same-named classes apart.
+        self.imported_modules: set = set()
+        # (caller id, type name) -> {lines, kinds}; flushed as USES_TYPE edges.
+        self.type_usages: dict = {}
+        # class name -> exact symbol id, for same-file USES_TYPE targets
+        self.declared_types: dict = {}
 
     def _get_decorator_name(self, decorator) -> Optional[str]:
         """Extract the full dotted decorator name, handling @app.get, @router.post, etc."""
@@ -130,7 +141,24 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
     def make_id(self, symbol_path: str) -> str:
         return f"{self.repo}::{self.relative_path}::{symbol_path}"
 
+    def node_line(self, node) -> int:
+        position = self.positions.get(node) if self.positions else None
+        if position is not None:
+            return position.start.line
+        start = getattr(node, 'start', None)
+        return start.line if start else 1
+
     def make_location(self, node: cst.CSTNode) -> dict:
+        position = self.positions.get(node) if self.positions else None
+        if position is not None:
+            return {
+                "repository": self.repo,
+                "relativePath": self.relative_path,
+                "startLine": position.start.line,
+                "endLine": position.end.line,
+                "startColumn": position.start.column,
+                "endColumn": position.end.column,
+            }
         start = node.start if hasattr(node, 'start') else None
         end = node.end if hasattr(node, 'end') else None
         return {
@@ -148,9 +176,103 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
         except Exception:
             return ""
 
+    # ========================================================
+    # Type usages — USES_TYPE edges
+    # ========================================================
+
+    PY_BUILTINS = {
+        "int", "str", "float", "bool", "bytes", "list", "dict", "set",
+        "tuple", "frozenset", "object", "type", "None", "NoneType", "Any",
+        "Optional", "Union", "List", "Dict", "Set", "Tuple", "Callable",
+        "Iterable", "Iterator", "Sequence", "Mapping", "MutableMapping",
+        "Awaitable", "Coroutine", "AsyncIterator", "AsyncIterable", "Literal",
+        "TypeVar", "Generic", "Protocol", "Final", "ClassVar", "Annotated",
+        "Self", "Never", "NoReturn", "datetime", "date", "time", "Decimal",
+        "Path", "Exception", "ValueError", "TypeError", "KeyError", "Enum",
+    }
+
+    def _collect_type_names(self, node) -> list:
+        """Every simple type name inside an annotation / type expression."""
+        if node is None:
+            return []
+        names = []
+        if isinstance(node, cst.Name):
+            names.append(node.value)
+        elif isinstance(node, cst.Attribute):
+            names.append(node.attr.value)
+        elif isinstance(node, cst.Subscript):
+            names.extend(self._collect_type_names(node.value))
+            for element in node.slice:
+                if isinstance(element, cst.SubscriptElement):
+                    names.extend(self._collect_type_names(element.slice))
+        elif isinstance(node, cst.Index):
+            names.extend(self._collect_type_names(node.value))
+        elif isinstance(node, cst.BinaryOperation):
+            names.extend(self._collect_type_names(node.left))
+            names.extend(self._collect_type_names(node.right))
+        elif isinstance(node, cst.Tuple):
+            for element in node.elements:
+                names.extend(self._collect_type_names(element))
+        elif isinstance(node, cst.Element):
+            names.extend(self._collect_type_names(node.value))
+        elif isinstance(node, cst.Annotation):
+            names.extend(self._collect_type_names(node.annotation))
+        elif isinstance(node, cst.Arg):
+            names.extend(self._collect_type_names(node.value))
+        return names
+
+    def record_type_usage(self, caller_id: str, node, kind: str) -> None:
+        """Collect type names mentioned by ``node`` for ``caller_id``."""
+        if not caller_id:
+            return
+        line = self.node_line(node)
+        for name in self._collect_type_names(node):
+            if not name or name in self.PY_BUILTINS:
+                continue
+            key = (caller_id, name)
+            entry = self.type_usages.setdefault(key, {"lines": set(), "kinds": set()})
+            entry["lines"].add(line)
+            entry["kinds"].add(kind)
+
+    def current_caller_id(self) -> Optional[str]:
+        if self.current_function:
+            if self.current_class:
+                return self.make_id(f"{self.namespace}.{self.current_class}.{self.current_function}")
+            return self.make_id(f"{self.namespace}.{self.current_function}")
+        if self.current_class:
+            return self.make_id(f"{self.namespace}.{self.current_class}")
+        return None
+
+    def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
+        # `x: ProfileDto = ...` (local, module-level or class attribute).
+        caller = self.current_caller_id()
+        if caller and node.annotation:
+            self.record_type_usage(caller, node.annotation, "declaration")
+
+    def flush_type_usages(self) -> None:
+        """Materialize collected usages as USES_TYPE relationships."""
+        usings = sorted(self.imported_modules)
+        for (caller_id, name), entry in self.type_usages.items():
+            lines = sorted(entry["lines"])
+            self.relationships.append({
+                "id": f"{caller_id}--[USES_TYPE]-->{name}",
+                "sourceSymbolId": caller_id,
+                "targetSymbolId": self.declared_types.get(name, self.make_id(name)),
+                "kind": "USES_TYPE",
+                "metadata": {
+                    "typeName": name,
+                    "namespace": self.namespace,
+                    "usings": usings,
+                    "lines": lines,
+                    "count": len(lines),
+                    "usageKinds": sorted(entry["kinds"]),
+                },
+            })
+
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         name = node.name.value
         sid = self.make_id(f"{self.namespace}.{name}")
+        self.declared_types[name] = sid
 
         self.symbols.append({
             "id": sid,
@@ -252,6 +374,13 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
 
         signature = f"def {name}({', '.join(params)}){returns}"
 
+        # Type annotations are usages of this function.
+        for param in node.params.params:
+            if hasattr(param, 'annotation') and param.annotation:
+                self.record_type_usage(sid, param.annotation, "parameter")
+        if hasattr(node, 'returns') and node.returns:
+            self.record_type_usage(sid, node.returns, "return")
+
         self.symbols.append({
             "id": sid,
             "name": name,
@@ -317,9 +446,18 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
     def leave_FunctionDef(self, node: cst.FunctionDef) -> None:
         self.current_function = None
 
+    def _dotted_name(self, node) -> str:
+        """`app.models` is an Attribute tree, not a string — flatten it."""
+        if isinstance(node, cst.Name):
+            return node.value
+        if isinstance(node, cst.Attribute):
+            return f"{self._dotted_name(node.value)}.{node.attr.value}"
+        return str(node)
+
     def visit_Import(self, node: cst.Import) -> None:
         for name in node.names:
-            module_name = name.name.value if hasattr(name.name, 'value') else str(name.name)
+            module_name = self._dotted_name(name.name)
+            self.imported_modules.add(module_name)
             alias = name.asname.name.value if hasattr(name, 'asname') and name.asname else None
             # Track the name callers use (alias or last path segment) for
             # module-qualified call resolution (`Mod.func()`).
@@ -335,14 +473,13 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
             })
 
     def visit_ImportFrom(self, node: cst.ImportFrom) -> None:
-        module = ""
-        if hasattr(node.module, 'value'):
-            module = node.module.value
-        elif hasattr(node, 'module') and node.module:
-            module = str(node.module)
-        else:
-            module = ""
+        # `from app.models import X` → module is a dotted Attribute tree.
+        # Taking `.value` here yielded a Name object and broke the whole
+        # analysis (it fell back to the regex analyzer).
+        module = self._dotted_name(node.module) if node.module is not None else ""
 
+        if module:
+            self.imported_modules.add(module)
         for name in node.names:
             imported = name.name.value if hasattr(name.name, 'value') else str(name.name)
             alias = name.asname.name.value if hasattr(name, 'asname') and name.asname else None
@@ -359,6 +496,20 @@ class PythonSymbolExtractor(cst.CSTVisitor if HAS_LIBCST else object):
             })
 
     def visit_Call(self, node: cst.Call) -> None:
+        # isinstance(x, Type) and typing.cast(Type, x) mention the type.
+        caller = self.current_caller_id()
+        if caller:
+            func_name = None
+            if isinstance(node.func, cst.Name):
+                func_name = node.func.value
+            elif isinstance(node.func, cst.Attribute):
+                func_name = node.func.attr.value
+            if func_name == "isinstance":
+                for arg in node.args[1:]:
+                    self.record_type_usage(caller, arg, "isinstance")
+            elif func_name == "cast" and node.args:
+                self.record_type_usage(caller, node.args[0], "cast")
+
         if self.current_function:
             caller_id = self.make_id(
                 f"{self.namespace}.{self.current_class}.{self.current_function}"
@@ -660,8 +811,10 @@ def analyze_source(source: str, file_path: str, repo_name: str, repo_root: str =
         try:
             tree = cst.parse_module(source)
             wrapper = MetadataWrapper(tree)
-            extractor = PythonSymbolExtractor(repo_name, file_path, source, repo_root)
+            positions = wrapper.resolve(PositionProvider)
+            extractor = PythonSymbolExtractor(repo_name, file_path, source, repo_root, positions)
             wrapper.visit(extractor)
+            extractor.flush_type_usages()
             symbols = extractor.symbols
             relationships = extractor.relationships
             symbols = detect_conventions(repo_name, file_path, symbols)
