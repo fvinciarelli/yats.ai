@@ -5,6 +5,40 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`find_references` no longer hides half the answer.** When several symbols
+  share the exact name (the classic DTO declared in two namespaces), usages of
+  **all** of them are returned and each row carries `matchedTargetIds`. Before,
+  the resolver picked the first match and the other namespace silently
+  disappeared — `rg -w` found both, YATS found one.
+- **`find_references` default limit 20 → 200** and up to 1000 on request. A type
+  used across a real codebase has far more than 20 referencing symbols; the
+  result is now truncated only when it exceeds the limit, with an explicit
+  warning as a second content block.
+- **`find_references` accepts `path=`** as well as `repository=`; both are
+  resolved to the canonical rootPath. Passing the display name returned by
+  `list_repositories` (`"my-repo"`) used to fail with "Symbol not found"
+  because symbols are keyed by rootPath.
+- **Single-symbol tools (`find_callers`, `find_callees`,
+  `find_implementations`, `find_inheritors`, `find_tests`) now reject an
+  ambiguous name** with the candidate list instead of silently answering for
+  the first match. `findSymbolByName` orders exact matches first and no longer
+  cuts the list at 50 rows.
+
+### Changed
+- **`delete_repository` deletes by canonical rootPath and verifies the
+  outcome.** It used to resolve the repository to its *display name* and then
+  run `MATCH (s:Symbol {repository: $name})` — a key symbols never store. Neo4j
+  treats a zero-row DELETE as success, so it reported "deleted successfully
+  (0 symbols)" while every symbol, relationship and file row stayed behind,
+  reachable only by `symbolId` (ghost symbols). It now deletes symbols, files
+  and vectors by rootPath, removes the Repository node last, and fails loudly
+  with real counts if anything survives.
+- `clearRepository()` returns `{symbols, files}` so callers can verify what was
+  actually removed instead of trusting a no-op.
+
 ## [0.8.4] - 2026-11-20
 
 ### Added

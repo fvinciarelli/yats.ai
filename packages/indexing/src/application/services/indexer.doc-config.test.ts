@@ -21,7 +21,7 @@ function makeDeps() {
         upsertRepositoryMetadata: async () => {},
         setLastIndexedCommit: async () => {},
         getLastIndexedCommit: async () => null,
-        clearRepository: async () => {},
+        clearRepository: async () => ({ symbols: 0, files: 0 }),
         findRepositoryByPath: async () => null,
         listRepositories: async () => [],
         deleteSymbols: async () => {},

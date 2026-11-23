@@ -93,8 +93,21 @@ export class Neo4jGraphRepository implements GraphRepository {
     );
   }
 
-  async clearRepository(repository: string): Promise<void> {
-    // Accept a rootPath or the display name (legacy) — identity is the path.
+  async clearRepository(repository: string): Promise<{ symbols: number; files: number }> {
+    // `repository` is the rootPath stored on every Symbol/File row. A display
+    // name matches nothing here and Neo4j treats a zero-row DELETE as success,
+    // so the count is measured before deleting and returned to the caller.
+    const symbolRows = await this.connection.read<{ n: number }>(
+      `MATCH (s:Symbol {repository: $repository}) RETURN count(s) AS n`,
+      { repository },
+    );
+    const fileRows = await this.connection.read<{ n: number }>(
+      `MATCH (f:File {repo: $repository}) RETURN count(f) AS n`,
+      { repository },
+    );
+    const symbols = Number(symbolRows[0]?.n ?? 0);
+    const files = Number(fileRows[0]?.n ?? 0);
+
     await this.connection.write(
       `
       MATCH (s:Symbol {repository: $repository})
@@ -111,16 +124,13 @@ export class Neo4jGraphRepository implements GraphRepository {
       { repository },
     );
 
-    await this.connection.write(
-      `
-      MATCH (r:Repository)
-      WHERE r.rootPath = $repository OR r.name = $repository
-      DELETE r
-      `,
-      { repository },
+    // The Repository node is removed last, by the caller, once vectors are
+    // gone too: if anything fails midway the repo stays discoverable and the
+    // delete can simply be retried.
+    this.logger.info(
+      `Cleared ${symbols} symbols and ${files} files for repository: ${repository}`,
     );
-
-    this.logger.info(`Cleared all data for repository: ${repository}`);
+    return { symbols, files };
   }
 
   // ============================================================
@@ -209,23 +219,27 @@ export class Neo4jGraphRepository implements GraphRepository {
     let cypher: string;
     let params: Record<string, unknown>;
 
+    // Exact matches first: a name like "OrderDto" must never be pushed out of
+    // the result by 500 unrelated "*Dto*" rows cut off by the cap.
     if (kind) {
       cypher = `
         MATCH (s:Symbol {repository: $repository})
         WHERE toLower(s.name) CONTAINS toLower($name)
           AND s.kind = $kind
         RETURN s, labels(s) AS labels, id(s) AS nodeId
+        ORDER BY CASE WHEN s.name = $name THEN 0 ELSE 1 END, s.name
         LIMIT $limit
       `;
-      params = { repository, name, kind, limit: 50 };
+      params = { repository, name, kind, limit: 500 };
     } else {
       cypher = `
         MATCH (s:Symbol {repository: $repository})
         WHERE toLower(s.name) CONTAINS toLower($name)
         RETURN s, labels(s) AS labels, id(s) AS nodeId
+        ORDER BY CASE WHEN s.name = $name THEN 0 ELSE 1 END, s.name
         LIMIT $limit
       `;
-      params = { repository, name, limit: 50 };
+      params = { repository, name, limit: 500 };
     }
 
     const rows = await this.connection.read<any>(cypher, params);
@@ -796,10 +810,12 @@ export class Neo4jGraphRepository implements GraphRepository {
     );
   }
 
-  async deleteRepositoryNode(name: string): Promise<void> {
+  async deleteRepositoryNode(repositoryRef: string): Promise<void> {
     await this.connection.write(
-      `MATCH (r:Repository {name: $name}) DETACH DELETE r`,
-      { name },
+      `MATCH (r:Repository)
+       WHERE r.rootPath = $ref OR r.name = $ref
+       DETACH DELETE r`,
+      { ref: repositoryRef },
     );
   }
 

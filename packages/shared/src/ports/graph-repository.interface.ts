@@ -72,7 +72,12 @@ export interface GraphRepository {
    * at surviving symbols across re-indexes (P2).
    */
   deleteRelationships(symbolIds: string[]): Promise<void>;
-  clearRepository(repository: string): Promise<void>;
+  /**
+   * Delete every symbol and file row of a repository. `repository` must be the
+   * rootPath stored on `Symbol.repository` — the display name matches nothing.
+   * Returns what was actually removed so callers can verify the outcome.
+   */
+  clearRepository(repository: string): Promise<{ symbols: number; files: number }>;
   findSymbol(symbolId: string): Promise<GraphSymbol | null>;
   findSymbolByName(repository: string, name: string, kind?: SymbolKind): Promise<GraphSymbol[]>;
   findReferences(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
@@ -113,5 +118,6 @@ export interface GraphRepository {
   /** Analysis pipeline version that produced the indexed symbols (see ANALYSIS_SCHEMA_VERSION). */
   getAnalyzerVersion(repository: string): Promise<number | null>;
   setAnalyzerVersion(repository: string, version: number): Promise<void>;
-  deleteRepositoryNode(name: string): Promise<void>;
+  /** Remove the Repository metadata node, matched by rootPath or name. */
+  deleteRepositoryNode(repositoryRef: string): Promise<void>;
 }

@@ -67,7 +67,7 @@ function makeMockDeps(): McpDependencies {
       setLastIndexedCommit: async () => {},
       getLastIndexedCommit: async () => null,
       deleteSymbols: async () => {},
-      clearRepository: async () => {},
+      clearRepository: async () => ({ symbols: 0, files: 0 }),
       deleteRepositoryNode: async () => {},
     },
     vectorRepository: {
@@ -375,5 +375,171 @@ describe("MCP Server — input validation", () => {
     assert.equal(lastFindRoutesCall!.options?.method, "GET");
     assert.equal(lastFindRoutesCall!.options?.path, "/users");
     assert.equal(lastFindRoutesCall!.options?.limit, 5);
+  });
+});
+
+// ============================================================
+// Repository identity / reference completeness
+// ============================================================
+
+function makeSymbol(id: string, name: string, file: string, lines: number[] = []) {
+  return {
+    id,
+    name,
+    kind: "class",
+    language: "typescript",
+    location: { relativePath: file, startLine: lines[0] ?? 1 },
+    namespace: file.split("/")[0],
+    relations: ["USES_TYPE"],
+    lines,
+    occurrences: lines.length,
+  } as any;
+}
+
+describe("references and deletion by canonical rootPath", () => {
+  let server: McpServer;
+  let deps: McpDependencies;
+
+  function callTool(name: string, args: Record<string, unknown>) {
+    return server.handleRequest({
+      jsonrpc: "2.0",
+      id: 100,
+      method: "tools/call",
+      params: { name, arguments: args },
+    });
+  }
+
+  before(() => {
+    deps = makeMockDeps();
+    server = new McpServer(deps);
+  });
+
+  it("find_references aggregates every exact match (same DTO, two namespaces)", async () => {
+    deps.graphRepository.findSymbolByName = async (repo: string) => {
+      assert.equal(repo, "/tmp/test-repo", "name must be resolved to rootPath");
+      return [
+        makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+        makeSymbol("/tmp/test-repo::b.ts::B.OrderDto", "OrderDto", "b.ts"),
+      ];
+    };
+    deps.graphRepository.findReferences = async (id: string) =>
+      id.includes("A.OrderDto")
+        ? [makeSymbol("/tmp/test-repo::a.ts::A.Svc.save", "save", "a.ts", [5, 6])]
+        : [makeSymbol("/tmp/test-repo::b.ts::B.Svc.load", "load", "b.ts", [4, 9])];
+
+    // Short display name (what list_repositories returns) must work too.
+    const response = await callTool("find_references", { name: "OrderDto", repository: "test-repo" });
+    const result = (response as any).result;
+    assert.ok(!result.isError, JSON.stringify(result));
+
+    const rows = JSON.parse(result.content[0].text);
+    assert.equal(rows.length, 2, "both namespaces must be present");
+    assert.deepEqual(rows.map((r: any) => r.file).sort(), ["a.ts", "b.ts"]);
+    assert.deepEqual(rows[0].matchedTargetIds.length, 1);
+    assert.ok(rows.some((r: any) => r.lines.includes(9)));
+  });
+
+  it("find_references accepts path= instead of repository=", async () => {
+    deps.graphRepository.findSymbolByName = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+    ];
+    deps.graphRepository.findReferences = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.Svc.save", "save", "a.ts", [5]),
+    ];
+
+    const response = await callTool("find_references", { name: "OrderDto", path: "/tmp/test-repo" });
+    const rows = JSON.parse((response as any).result.content[0].text);
+    assert.equal(rows.length, 1);
+  });
+
+  it("find_references returns more than 20 sources by default", async () => {
+    deps.graphRepository.findSymbolByName = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+    ];
+    deps.graphRepository.findReferences = async () =>
+      Array.from({ length: 25 }, (_, i) =>
+        makeSymbol(`/tmp/test-repo::a.ts::A.m${i}`, `m${i}`, "a.ts", [i + 1]),
+      );
+
+    const response = await callTool("find_references", { name: "OrderDto", repository: "test-repo" });
+    const rows = JSON.parse((response as any).result.content[0].text);
+    assert.equal(rows.length, 25, "default limit must not truncate at 20");
+  });
+
+  it("find_callers rejects an ambiguous name instead of guessing", async () => {
+    deps.graphRepository.findSymbolByName = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+      makeSymbol("/tmp/test-repo::b.ts::B.OrderDto", "OrderDto", "b.ts"),
+    ];
+    const response = await callTool("find_callers", { name: "OrderDto", repository: "test-repo" });
+    const result = (response as any).result;
+    assert.ok(result.isError);
+    assert.ok(result.content[0].text.includes("ambiguous"));
+  });
+
+  it("delete_repository deletes by rootPath and verifies the outcome", async () => {
+    let summaryCalls = 0;
+    let clearedWith: string | null = null;
+    let nodeWith: string | null = null;
+    let vectorsWith: string | null = null;
+    let deleted = false;
+
+    deps.graphRepository.repositorySummary = async (repo: string) => {
+      summaryCalls += 1;
+      return {
+        repository: repo,
+        totalSymbols: summaryCalls === 1 ? 5 : 0,
+        totalRelationships: summaryCalls === 1 ? 5 : 0,
+        symbolsByKind: {},
+        symbolsByLanguage: {},
+        languages: [],
+      };
+    };
+    deps.graphRepository.clearRepository = async (repo: string) => {
+      clearedWith = repo;
+      deleted = true;
+      return { symbols: 5, files: 2 };
+    };
+    deps.graphRepository.deleteRepositoryNode = async (ref: string) => {
+      nodeWith = ref;
+    };
+    deps.vectorRepository.clearVectorsByRepository = async (ref: string) => {
+      vectorsWith = ref;
+    };
+    deps.graphRepository.listRepositories = async () =>
+      deleted ? [] : [{ name: "test-repo", rootPath: "/tmp/test-repo" }];
+
+    const response = await callTool("delete_repository", {
+      repository: "test-repo",
+      confirm: true,
+    });
+    const result = (response as any).result;
+    assert.ok(!result.isError, JSON.stringify(result));
+    assert.equal(clearedWith, "/tmp/test-repo", "must clear by rootPath, never by name");
+    assert.equal(nodeWith, "/tmp/test-repo");
+    assert.equal(vectorsWith, "/tmp/test-repo");
+    assert.ok(result.content[0].text.includes("5 symbols"));
+  });
+
+  it("delete_repository fails loudly when symbols survive", async () => {
+    deps.graphRepository.repositorySummary = async (repo: string) => ({
+      repository: repo,
+      totalSymbols: 5,
+      totalRelationships: 5,
+      symbolsByKind: {},
+      symbolsByLanguage: {},
+      languages: [],
+    });
+    deps.graphRepository.clearRepository = async () => ({ symbols: 0, files: 0 });
+    deps.graphRepository.deleteRepositoryNode = async () => {};
+    deps.graphRepository.listRepositories = async () => [];
+
+    const response = await callTool("delete_repository", {
+      path: "/tmp/test-repo",
+      confirm: true,
+    });
+    const result = (response as any).result;
+    assert.ok(result.isError, "leftover data must be an error");
+    assert.ok(result.content[0].text.includes("incomplete"));
   });
 });

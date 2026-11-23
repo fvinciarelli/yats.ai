@@ -85,7 +85,12 @@ function makeMockDeps(repoPath: string) {
       upsertRepositoryMetadata: async () => {},
       setLastIndexedCommit: async () => {},
       getLastIndexedCommit: async () => null,
-      clearRepository: async () => { storedSymbols.length = 0; storedRels.length = 0; },
+      clearRepository: async () => {
+          const symbols = storedSymbols.length;
+          storedSymbols.length = 0;
+          storedRels.length = 0;
+          return { symbols, files: 0 };
+        },
       findRepositoryByPath: async () => null,
       listRepositories: async () => [],
       findSymbol: async () => null,
