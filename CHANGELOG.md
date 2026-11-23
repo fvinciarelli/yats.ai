@@ -5,6 +5,19 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The container hung forever on "Waiting for Ollama..." when using an
+  external Ollama.** `docker/entrypoint.sh` waited on `OLLAMA_HOST`
+  (defaulting to the bundled hostname `ollama`) while `yats setup` and both
+  compose files write `OLLAMA_URL`. In host/custom mode the bundled service is
+  omitted, so `ollama` never resolves and the server never started. The
+  entrypoint now honours `OLLAMA_URL` (falling back to `OLLAMA_HOST` for
+  hand-written compose files) and bounds the wait: after 60 s it explains that
+  a host Ollama must listen on `0.0.0.0` and that the firewall must allow
+  11434, then starts anyway so graph queries keep working.
+
 ## [0.8.5] - 2026-11-23
 
 ### Fixed
