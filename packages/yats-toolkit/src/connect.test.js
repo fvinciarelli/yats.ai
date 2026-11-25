@@ -137,44 +137,54 @@ describe("mergeTasksConfig — .vscode/tasks.json is never clobbered", () => {
   });
 });
 
-describe("agent version variants", () => {
-  const codexAgent = {
-    name: "Codex CLI",
-    variants: "connect/codex/variants.json",
-  };
-
-  it("parseVersion extracts semver from CLI output", () => {
-    assert.deepEqual(parseVersion("codex-cli 0.172.0"), [0, 172, 0]);
-    assert.deepEqual(parseVersion("2026.11.22-e9042b2"), [2026, 11, 22]);
-    assert.equal(parseVersion("no version here"), null);
-    assert.equal(parseVersion(null), null);
+describe("agent version catalog", () => {
+  it("codex 0.172+ uses the default (modern) templates with tested metadata", () => {
+    const entry = selectVariant("codex", [0, 172, 0]);
+    assert.ok(entry, "catalog entry must match");
+    assert.deepEqual(entry.files, {});
+    assert.ok(entry.tested, "tested metadata present");
+    assert.match(entry.tested.result, /PASS/);
+    assert.match(entry.tested.matrix, /test-connect/);
   });
 
-  it("compareVersions orders tuples", () => {
-    assert.ok(compareVersions([0, 172, 0], [0, 171, 999]) > 0);
-    assert.ok(compareVersions([0, 172, 0], [0, 172, 0]) === 0);
-    assert.ok(compareVersions([0, 5, 0], [1, 0, 0]) < 0);
-  });
-
-  it("codex 0.172+ uses the default (modern) templates", () => {
-    const variant = selectVariant(codexAgent, [0, 172, 0]);
-    assert.deepEqual(variant, {});
-  });
-
-  it("codex < 0.172 maps config.toml to the legacy variant", () => {
-    const variant = selectVariant(codexAgent, [0, 171, 0]);
-    assert.deepEqual(variant, {
+  it("codex < 0.172 maps config.toml to the legacy variant (untested)", () => {
+    const entry = selectVariant("codex", [0, 171, 0]);
+    assert.ok(entry);
+    assert.deepEqual(entry.files, {
       "connect/codex/config.toml": "connect/codex/legacy/config.toml",
     });
+    assert.equal(entry.tested, null);
   });
 
   it("boundaries are inclusive: 0.171.999 is legacy, 0.172.0 is modern", () => {
-    assert.ok(selectVariant(codexAgent, [0, 171, 999])["connect/codex/config.toml"]);
-    assert.deepEqual(selectVariant(codexAgent, [0, 172, 0]), {});
+    assert.ok(selectVariant("codex", [0, 171, 999]).files["connect/codex/config.toml"]);
+    assert.deepEqual(selectVariant("codex", [0, 172, 0]).files, {});
   });
 
-  it("returns {} when no version detected (default templates apply)", () => {
-    assert.deepEqual(selectVariant(codexAgent, null), {});
+  it("returns null when no version detected (default templates apply)", () => {
+    assert.equal(selectVariant("codex", null), null);
+  });
+
+  it("returns null for unknown agents", () => {
+    assert.equal(selectVariant("nonexistent-agent", [1, 0, 0]), null);
+  });
+
+  it("claude catalog entry carries the measured results", () => {
+    const entry = selectVariant("claude", [2, 1, 332]);
+    assert.ok(entry?.tested);
+    assert.match(entry.tested.result, /77\.4%/);
+  });
+
+  it("every agent in the catalog ships the templates it references", () => {
+    const catalog = JSON.parse(renderContent("connect/catalog.json"));
+    for (const [agentKey, agentEntry] of Object.entries(catalog)) {
+      if (typeof agentEntry !== "object" || agentEntry === null) continue; // skip "note"
+      for (const v of agentEntry.versions) {
+        for (const variantSrc of Object.values(v.files ?? {})) {
+          assert.ok(renderContent(variantSrc), `${agentKey}: template must resolve: ${variantSrc}`);
+        }
+      }
+    }
   });
 
   it("legacy variant template ships in the package", () => {

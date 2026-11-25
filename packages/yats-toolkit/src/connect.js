@@ -90,7 +90,6 @@ const AGENTS = {
       { src: "connect/codex/config.toml", dest: ".codex/config.toml", type: "toml" },
     ],
     detect: { cmd: "codex", args: ["--version"] },
-    variants: "connect/codex/variants.json",
     url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/codex",
   },
   pi: {
@@ -165,13 +164,17 @@ function appendMarker(agentKey) {
 }
 
 // ============================================================
-// Agent version detection + template variants
+// Agent version detection + template catalog
 // ============================================================
-// Agents change their config formats over time (e.g. codex 0.172 deprecated
-// [features].multi_agent in favour of [agents].enabled). Each agent can ship a
-// variants.json manifest mapping semver ranges to template overrides, so one
-// `yats connect` works across many agent versions. The default templates apply
-// when no version is detected or no range matches.
+// Agents change their config formats over time, and prompts are tuned per
+// agent (and per version, when needed) against the test-connect suite. The
+// catalog (connect/catalog.json) maps agent → version ranges → the prompt/
+// config templates that performed best for that combination, with the
+// measured results. `yats connect` selects the matching entry at install
+// time; default templates apply when no version is detected or no range
+// matches.
+
+const CATALOG_PATH = "connect/catalog.json";
 
 export function parseVersion(s) {
   const m = String(s ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
@@ -201,28 +204,33 @@ export function detectAgentVersion(agent) {
   }
 }
 
-/**
- * Select template overrides for a detected version from the agent's
- * variants.json manifest: { since, until, files: { templateSrc → variantSrc } }.
- * Ranges are inclusive at both ends; the first match wins.
- */
-export function selectVariant(agent, version) {
-  if (!agent?.variants || !version) return {};
-  const raw = getFileContent(agent.variants);
+export function loadCatalog() {
+  const raw = getFileContent(CATALOG_PATH);
   if (!raw) return {};
   try {
-    const manifest = JSON.parse(raw);
-    for (const v of manifest.versions ?? []) {
-      const since = v.since ? parseVersion(v.since) : [0, 0, 0];
-      const until = v.until ? parseVersion(v.until) : null;
-      if (compareVersions(version, since) >= 0 && (!until || compareVersions(version, until) <= 0)) {
-        return v.files ?? {};
-      }
-    }
+    return JSON.parse(raw);
   } catch {
     return {};
   }
-  return {};
+}
+
+/**
+ * Select the catalog entry matching the detected agent version.
+ * Returns { files, tested } of the first range match, or null when the
+ * version is unknown / no range matches (→ default templates apply).
+ */
+export function selectVariant(agentKey, version) {
+  const catalog = loadCatalog();
+  const agentEntry = catalog[agentKey];
+  if (!agentEntry || !version) return null;
+  for (const v of agentEntry.versions ?? []) {
+    const since = v.since ? parseVersion(v.since) : [0, 0, 0];
+    const until = v.until ? parseVersion(v.until) : null;
+    if (compareVersions(version, since) >= 0 && (!until || compareVersions(version, until) <= 0)) {
+      return { files: v.files ?? {}, tested: v.tested ?? null };
+    }
+  }
+  return null;
 }
 
 // ============================================================
@@ -410,12 +418,17 @@ async function installFiles(agentKey, prompter) {
   let installed = 0;
   let skipped = 0;
 
-  // Version-aware templates: override template sources for the installed CLI version.
+  // Catalog-driven templates: pick the prompt/config that performed best for
+  // the detected CLI version (connect/catalog.json), fall back to defaults.
   const agentVersion = detectAgentVersion(agent);
-  const variantFiles = selectVariant(agent, agentVersion);
+  const entry = selectVariant(agentKey, agentVersion);
+  const variantFiles = entry?.files ?? {};
   if (agentVersion) {
     const suffix = Object.keys(variantFiles).length > 0 ? " — applying version-specific templates." : " — default templates.";
     console.log(`  ${D}Detected ${agent.name} ${formatVersion(agentVersion)}${suffix}${R}`);
+    if (entry?.tested) {
+      console.log(`  ${D}Known-good for this version (${entry.tested.date}): ${entry.tested.result}${R}`);
+    }
   }
 
   for (const rawFile of agent.files) {
@@ -562,7 +575,8 @@ function showConfig(agentKey) {
   console.log(`  ${B}${agent.name}${R} — via ${agent.transport}`);
   console.log("");
 
-  const variantFiles = selectVariant(agent, detectAgentVersion(agent));
+  const entry = selectVariant(agentKey, detectAgentVersion(agent));
+  const variantFiles = entry?.files ?? {};
 
   for (const rawFile of agent.files) {
     const file = { ...rawFile, src: variantFiles[rawFile.src] ?? rawFile.src };
