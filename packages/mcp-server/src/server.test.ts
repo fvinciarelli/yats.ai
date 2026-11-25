@@ -542,4 +542,60 @@ describe("references and deletion by canonical rootPath", () => {
     assert.ok(result.isError, "leftover data must be an error");
     assert.ok(result.content[0].text.includes("incomplete"));
   });
+
+  it("search_documentation returns section content, not just metadata", async () => {
+    deps.vectorRepository.search = async () => [
+      {
+        id: "doc-1", score: 0.9, vector: [],
+        payload: {
+          repository: "/tmp/test-repo",
+          docSectionId: "/tmp/test-repo::docs/readme.md#Intro",
+          relativePath: "docs/readme.md",
+          heading: "docs/readme.md > Intro",
+          content: "Full section text here.",
+          contentTruncated: false,
+          contentHash: "abc",
+        },
+      },
+      {
+        // a hit from another repo must be filtered out
+        id: "doc-2", score: 0.5, vector: [],
+        payload: { repository: "/other/repo", docSectionId: "x", relativePath: "y", content: "nope" },
+      },
+    ] as any;
+
+    const response = await callTool("search_documentation", {
+      query: "intro docs",
+      path: "/tmp/test-repo",
+    });
+    deps.vectorRepository.search = async () => [];
+
+    const text = (response as any).result?.content?.[0]?.text;
+    const docs = JSON.parse(text);
+    assert.equal(docs.length, 1, "only the matching repository's docs");
+    assert.equal(docs[0].relativePath, "docs/readme.md");
+    assert.equal(docs[0].content, "Full section text here.");
+    assert.equal(docs[0].contentTruncated, false);
+    assert.equal(docs[0].score, 0.9);
+  });
+
+  it("search_documentation reports content:null for legacy payloads (pre-content index)", async () => {
+    deps.vectorRepository.search = async () => [
+      {
+        id: "doc-1", score: 0.8, vector: [],
+        payload: { repository: "/tmp/test-repo", docSectionId: "x", relativePath: "y", contentHash: "abc" },
+      },
+    ] as any;
+
+    const response = await callTool("search_documentation", {
+      query: "anything",
+      path: "/tmp/test-repo",
+    });
+    deps.vectorRepository.search = async () => [];
+
+    const text = (response as any).result?.content?.[0]?.text;
+    const docs = JSON.parse(text);
+    assert.equal(docs[0].content, null);
+    assert.equal(docs[0].contentTruncated, false);
+  });
 });

@@ -706,8 +706,22 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const hits = await deps.vectorRepository.search(CollectionName.DOCUMENTATION, result, {
       limit: (args.limit as number) ?? 10,
     });
+    const docs = hits
+      .filter(h => h.payload.repository === resolved.rootPath)
+      .map(h => ({
+        docSectionId: h.payload.docSectionId,
+        relativePath: h.payload.relativePath,
+        heading: h.payload.heading ?? null,
+        score: h.score,
+        // Content stored at index time — the agent usually answers from this
+        // without reading the file. Absent for repos indexed before this
+        // feature: re-index (`yats reindex <path>`) to populate it.
+        content: h.payload.content ?? null,
+        contentTruncated: h.payload.contentTruncated ?? false,
+        contentHash: h.payload.contentHash ?? null,
+      }));
     return {
-      content: [{ type: "text", text: JSON.stringify(hits.filter(h => h.payload.repository === resolved.rootPath), null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(docs, null, 2) }],
     };
   });
 

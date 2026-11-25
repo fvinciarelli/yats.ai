@@ -13,6 +13,12 @@ export interface VectorPayload {
   contentHash: string;
   gitCommit: string | null;
   timestamp: string;
+  /** Doc section heading (e.g. "CLI.md > Commands"). Docs only. */
+  heading?: string;
+  /** Doc section body stored at index time (capped). Docs only. */
+  content?: string;
+  /** True when the stored content was truncated to the cap. */
+  contentTruncated?: boolean;
 }
 
 export interface VectorPoint {

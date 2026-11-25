@@ -28,6 +28,9 @@ function hashFileContent(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+/** Max chars of a doc section stored in the vector payload (returned to agents). */
+const DOC_SECTION_CONTENT_MAX = 2000;
+
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline
 // ============================================================
@@ -1011,6 +1014,12 @@ export class IndexerService implements Indexer {
           language: "markdown" as any,
           repository: repositoryPath,
           relativePath: filePath,
+          heading: section.heading,
+          // The section CONTENT itself, so agents can answer doc questions
+          // without re-reading the file (capped; contentTruncated flags the
+          // rest — the agent can read the file for the full section).
+          content: section.content.slice(0, DOC_SECTION_CONTENT_MAX),
+          contentTruncated: section.content.length > DOC_SECTION_CONTENT_MAX,
           namespace: "",
           className: null,
           methodName: null,
