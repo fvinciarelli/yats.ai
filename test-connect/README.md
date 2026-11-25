@@ -38,14 +38,14 @@ shell-web fallbacks / tokens / savings % / correct answer.
 
 ## Supported agents
 
-| Agent | Lab model | Status |
-|---|---|---|
-| claude | DeepSeek (BYOK via ANTHROPIC_BASE_URL) | ✅ green |
-| codex | DeepSeek (custom provider) | ✅ green |
-| copilot | DeepSeek (BYOK, no GitHub account) | ✅ green |
-| pi (pi.dev) | DeepSeek (models.json custom provider) | ✅ green |
-| gemini | gemini-flash-lite-latest (own key) | ⏳ GEMINI_API_KEY needed in .env |
-| cursor | account model (subscription pool) | ⏳ CURSOR_API_KEY needed in .env |
+| Agent | Lab model | Savings (q01, 2-run avg) | Status |
+|---|---|---|---|
+| claude | DeepSeek (BYOK via ANTHROPIC_BASE_URL) | 77.4% input tokens | ✅ green |
+| codex | DeepSeek (custom provider) | 54.9% input tokens | ✅ green |
+| copilot | DeepSeek (BYOK, no GitHub account) | n/a (BYOK reports no tokens) | ✅ green |
+| pi (pi.dev) | DeepSeek (models.json custom provider) | 25.4% input tokens | ✅ green |
+| gemini | gemini-flash-lite-latest (own key) | pending (free-tier quota) | ⏳ GEMINI_API_KEY needed in .env |
+| cursor | account model (subscription pool) | — | ⏳ CURSOR_API_KEY needed in .env |
 
 **pi.dev** is not installed in the image: its host npm bundle is bind-mounted
 read-only (`PI_AGENT_DIR`, defaults to the pi-node install). Zero image growth.

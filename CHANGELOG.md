@@ -5,6 +5,38 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-25
+
+### Added
+- **`yats connect` now supports Pi (pi.dev) and VS Code (native MCP).** Pi gets
+  `.pi/mcp.json` (HTTP transport) plus an `AGENTS.md` tuned for its
+  `mcp__yats__*` tool names; VS Code gets native `servers`-format MCP config
+  plus a `tasks.json` that runs `yats watch . --live` on folder open.
+- **Agent-version catalog.** `connect/catalog.json` maps each agent + version
+  range to the prompt/config templates that performed best, with the measured
+  evidence (date, model, matrix, result). `yats connect --install` detects the
+  installed CLI version and reports the "Known-good" entry while installing.
+  Codex < 0.172 gets the legacy `[features].multi_agent` config; 0.172+ gets
+  `[agents].enabled = false` + MCP tool approval.
+- **`search_documentation` returns the doc section content**, not just
+  metadata. Doc sections are stored at index time (capped at 2000 chars, with
+  `contentTruncated`), so agents answer docs questions without re-reading
+  files. Re-index a repo (`yats remove` + `yats index`) to populate content
+  for older indexes.
+- **test-connect suite**: verifies per-agent that connect-installed configs
+  actually work — isolated Docker lab, multi-run scorecards (YATS usage,
+  first-call, `path=`, call budget, fallbacks, token savings, answer
+  correctness), DeepSeek BYOK so all agents run behind the same model.
+
+### Fixed
+- **Codex MCP calls were rejected in `exec` mode.** The connect template now
+  sets `default_tools_approval_mode = "approve"` (YATS tools are read-only),
+  so the agent no longer falls back to web search.
+- **Prompts v5 across all agents** — path rule (`rootPath`, never the repo
+  name), docs-first workflow, anti-re-verification and a 4-call budget.
+  Measured (same model, 2-run averages): Claude Code 77.4%, Codex 54.9%,
+  Pi 25.4% fewer input tokens with zero shell/web fallbacks.
+
 ## [0.8.6] - 2026-11-23
 
 ### Fixed
