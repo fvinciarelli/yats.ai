@@ -1,0 +1,8 @@
+# Agent homes (auth, config, caches) — isolated per agent, NEVER touched on host
+homes/
+
+# Test results / transcripts
+results/
+
+# Local npm packs fed into the image
+*.tgz
