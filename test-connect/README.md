@@ -67,9 +67,33 @@ cp test-connect/env.example test-connect/.env   # completar DEEPSEEK_API_KEY
 gemini y cursor siguen atados a sus modelos (requieren auth propia:
 `gemini` (Google AI Studio, key gratis) y `agent login` (cuenta cursor.com)).
 
-## Variantes por versión de agente
+## Catálogo de versiones (agente+versión → prompt/config)
 
-`connect` detecta la versión del CLI instalado y elige templates específicos
-(variants.json por agente). Ej: codex < 0.172 usa `[features].multi_agent`;
-0.172+ usa `[agents].enabled = false`. A medida que descubrimos diferencias
-entre versiones, se agregan rangos al manifest sin romper lo existente.
+`connect/catalog.json` (en `packages/yats-toolkit/connect/`) registra, por agente,
+rangos de versión → templates que mejor rindieron, con la evidencia medida
+(fecha, versión exacta, modelo, matriz, resultado). `yats connect` detecta la
+versión del CLI instalado, matchea el rango y aplica esos templates; si no hay
+match o no detecta, usa los defaults. Ej: codex < 0.172 usa
+`[features].multi_agent`; 0.172+ usa `[agents].enabled = false`.
+
+## Proceso: salió una versión nueva de un agente
+
+1. **Actualizar el lab** — `./test-connect/build-image.sh` trae los CLIs más nuevos
+   (pi se monta del host: `npm update -g` ahí si aplica).
+2. **Ver la versión nueva** dentro del container:
+   `docker run --rm -u 1000:1000 yats-agent-lab:latest <cli> --version`
+3. **Correr la celda con multi-run** (y el baseline si pudo cambiar):
+   ```bash
+   YATS_TEST_RUNS=2 ./test-connect/bin/run-agent.sh <agent> test-connect/questions/abs/01-cli-commands.md --with-yats
+   YATS_TEST_RUNS=2 ./test-connect/bin/run-agent.sh <agent> test-connect/questions/abs/01-cli-commands.md --without-yats
+   ```
+4. **Scorear** con `python3 test-connect/bin/score.py <expects> <transcripts...>`.
+5. **Registrar el resultado en `connect/catalog.json`**:
+   - Todo verde → actualizar la entrada existente (`agentVersion`, `date`,
+     `result`) o, si esa versión cambió de comportamiento, agregar una entrada
+     nueva con su rango `since`/`until` y los `files` overrides necesarios.
+   - Algo falla → iterar el prompt/config de esa entrada (o crear variantes
+     nuevas) hasta verde ANTES de registrar.
+6. **Re-empaquetar y verificar**: `./test-connect/build-image.sh` y confirmar que
+   `yats connect --install <agent>` muestra el “Known-good” correcto para esa
+   versión.
