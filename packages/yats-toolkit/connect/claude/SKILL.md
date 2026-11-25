@@ -24,8 +24,10 @@ This repo is indexed by YATS (mcp__yats__* tools). Every symbol, call, and relat
 - Max 3-5 YATS tool calls per task. Synthesize what you have.
 - Never guess symbol names — always start with `search_code`.
 - Prefer `expand_graph` over multiple individual `find_symbol` calls.
+- Do NOT re-verify YATS results with grep/cat/sed/find — the graph is already indexed and exact; re-reading files burns thousands of tokens. Never run sed/rg/grep/cat AFTER YATS answered — answer from the results.
+- If you need exact line contents, Read only the specific file:line range YATS returned, once.
 - If YATS returns empty, try a different query before falling back to file reads.
-- Use `path="__REPO_PATH__"` for every call — YATS identifies repos by their full path.
+- Use `path="__REPO_PATH__"` for every call — YATS identifies repos by their full path. Pass the FULL absolute path (the `rootPath` value from `list_repositories` / `yats list`), never the repo `name`. A name like "abs-bench" is wrong; the value must start with `/`.
 
 ## At startup
 

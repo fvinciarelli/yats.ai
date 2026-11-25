@@ -75,6 +75,8 @@ def parse_copilot(path: Path):
             d = r.get("data", {})
             if d.get("inputTokens") or d.get("input_tokens"):
                 usage = d
+            if d.get("totalNanoAiu") is not None or d.get("totalPremiumRequests") is not None:
+                usage = {**usage, **d}
     return calls, reads, answer, usage
 
 
@@ -97,6 +99,8 @@ def parse_claude(path: Path):
         elif t == "result":
             usage = r.get("usage", {})
             answer = r.get("result", "")
+            if r.get("total_cost_usd") is not None:
+                usage["total_cost_usd"] = r["total_cost_usd"]
     return calls, reads, answer, usage
 
 
@@ -148,16 +152,23 @@ def main():
             continue
         calls, reads, answer, usage = parse(Path(f))
         n = len(calls)
-        first_is_search = n > 0 and calls[0]["tool"] == "search_code"
+        first_is_search = n > 0 and calls[0]["tool"] in ("search_code", "search_documentation")
         all_have_path = n > 0 and all(path_ok(c) for c in calls)
         within_budget = n <= 5
         inp = total_input(usage)
         out = usage.get("output_tokens", 0) if usage else 0
+        cost = None
+        if usage:
+            if usage.get("total_cost_usd") is not None:
+                cost = f"${usage['total_cost_usd']:.4f} (agent-reported)"
+            elif usage.get("totalNanoAiu") is not None or usage.get("totalPremiumRequests") is not None:
+                cost = (f"AIU={usage.get('totalNanoAiu', 0)}, "
+                        f"premiumRequests={usage.get('totalPremiumRequests', 0)}")
         results[label] = dict(
             calls=calls, reads=reads, answer=answer,
             n_yats=n, first_is_search=first_is_search,
             all_have_path=all_have_path, within_budget=within_budget,
-            input_tokens=inp, output_tokens=out,
+            input_tokens=inp, output_tokens=out, cost=cost,
         )
 
     w = results.get("with-yats")
@@ -175,10 +186,15 @@ def main():
             print(f"    - {c['tool']} ({p})")
         print(f"  Fallback (shell/web/read): {w['reads']}")
         print(f"  Tokens: in={w['input_tokens']:,} out={w['output_tokens']:,}")
+        cost = w.get("cost")
+        if cost:
+            print(f"  Cost reported by agent: {cost}")
+        else:
+            print("  Cost: not reported (derive from provider pricing)")
 
         checks = [
             ("uses YATS tools", w["n_yats"] >= 1),
-            ("starts with search_code", w["first_is_search"]),
+            ("starts with search_code / search_documentation", w["first_is_search"]),
             ("passes path= on every call", w["all_have_path"]),
             ("respects 3-5 call budget", w["within_budget"]),
             ("does not fall back to shell/web", w["reads"] == 0),

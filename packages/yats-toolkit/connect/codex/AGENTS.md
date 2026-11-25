@@ -22,11 +22,13 @@ This repository is indexed by YATS MCP. You have these tools:
 - Never guess symbol names — always start with `search_code`.
 - Prefer `expand_graph` over multiple individual calls.
 - If YATS returns empty, try a different query before falling back to file reads.
-- Do NOT use shell commands (`head`, `cat`, `sed`, `rg`, `grep`) to inspect code — YATS has the symbols and relationships.
+- Do NOT use shell commands (`head`, `cat`, `sed`, `rg`, `grep`, `find`) to inspect code — YATS has the symbols and relationships.
+- Never run sed/rg/grep/cat AFTER YATS answered — answer from the results. They re-read files YATS already indexed and burn thousands of tokens.
+- Do NOT re-check the repo with `ls`/`find` after YATS answered — answer with what you have.
 
 ## Repository
 
-Use `path="__REPO_PATH__"` for every call — YATS identifies repos by their full path.
+Use `path="__REPO_PATH__"` for every call — YATS identifies repos by their full path. Pass the FULL absolute path (the `rootPath` value from `list_repositories` / `yats list`), never the repo `name`. A name like "abs-bench" is wrong; the value must start with `/`.
 
 ## At startup
 
