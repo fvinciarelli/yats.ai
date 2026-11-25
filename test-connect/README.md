@@ -43,7 +43,7 @@ aislando el comportamiento del agente (no del LLM). Sin necesidad de cuentas de
 GitHub ni créditos de Anthropic.
 
 ```bash
-cp test-connect/.env.example test-connect/.env   # completar DEEPSEEK_API_KEY
+cp test-connect/env.example test-connect/.env   # completar DEEPSEEK_API_KEY
 ```
 
 - claude  → `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`
