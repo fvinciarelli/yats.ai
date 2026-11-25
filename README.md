@@ -95,7 +95,7 @@ Most of the tokens your agent spends aren't writing code — they're **re-readin
 
 > **TL;DR for your boss** *(copy-paste into the email asking for budget):*
 >
-> "Every time our AI coding tools need to understand our codebase, they read files one by one and burn tokens doing it. YATS indexes our code into a knowledge graph so agents query the graph instead — cutting token spend 37–73% on code tasks, measured by a benchmark we can reproduce on our own repos. It runs locally or with our own API keys, costs €150–600/year per team (free under 25 devs), and works with the agents we already use: Cursor, Claude, Copilot, Codex, and Gemini."
+> "Every time our AI coding tools need to understand our codebase, they read files one by one and burn tokens doing it. YATS indexes our code into a knowledge graph so agents query the graph instead — cutting token spend 37–73% on code tasks, measured by a benchmark we can reproduce on our own repos. It runs locally or with our own API keys, costs €150–600/year per team (free under 25 devs), and works with the agents we already use: Cursor, Claude, Copilot, Codex, Gemini, and Pi."
 
 ---
 
@@ -137,6 +137,21 @@ Same questions. Same repos. Fresh sessions. Every token counted.
 | Gemini | Django (web framework) | Python | 115,122 tokens | 63,851 tokens | **45%** |
 
 Run `yats benchmark` and get your own row in this table.
+
+### Cross-agent matrix — same model, same question (test-connect)
+
+To isolate **agent behaviour from the model**, the [test-connect suite](./test-connect/) runs every agent behind the **same model** (DeepSeek-flash), against the same indexed repo, averaging 2 runs per cell:
+
+| Agent (version) | Savings vs no YATS | Compliance |
+|---|---|---|
+| Claude Code (2.1.332) | **77.4%** fewer input tokens | ✅ 5/5 criteria, 2/2 correct |
+| Codex CLI (0.172.0) | **54.9%** fewer input tokens | ✅ 5/5 criteria, 2/2 correct |
+| Pi · pi.dev (1.6.0) | **25.4%** fewer input tokens | ✅ 5/5 criteria, 2/2 correct |
+| Copilot CLI (1.0.116) | n/a (BYOK reports no tokens) | ✅ 5/5 criteria, 2/2 correct |
+| Gemini CLI (0.71.1) | pending re-test (free-tier quota) | ✅ partial — v5 prompt behaved correctly |
+| Cursor | pending auth | — |
+
+The scorecard criteria: uses YATS tools · starts with `search_code`/`search_documentation` · passes `path=` on every call · ≤4-call budget · zero shell/web fallbacks. Every cell is reproducible: `YATS_TEST_RUNS=2 ./test-connect/bin/run-agent.sh <agent> …`
 
 → [Full benchmark suite and raw data](./packages/yats-toolkit/benchmark/)
 
