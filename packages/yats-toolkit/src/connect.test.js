@@ -10,7 +10,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { mergeServerConfig, mergeTasksConfig, renderContent } from "./connect.js";
+import { mergeServerConfig, mergeTasksConfig, renderContent, parseVersion, compareVersions, selectVariant } from "./connect.js";
 
 describe("mergeServerConfig", () => {
   it("merges mcpServers entries, preserving existing servers", () => {
@@ -134,5 +134,59 @@ describe("mergeTasksConfig — .vscode/tasks.json is never clobbered", () => {
     assert.equal(merged.version, "2.0.0");
     assert.deepEqual(merged.inputs, [{ id: "x" }]);
     assert.equal(merged.tasks.length, 1);
+  });
+});
+
+describe("agent version variants", () => {
+  const codexAgent = {
+    name: "Codex CLI",
+    variants: "connect/codex/variants.json",
+  };
+
+  it("parseVersion extracts semver from CLI output", () => {
+    assert.deepEqual(parseVersion("codex-cli 0.172.0"), [0, 172, 0]);
+    assert.deepEqual(parseVersion("2026.11.22-e9042b2"), [2026, 11, 22]);
+    assert.equal(parseVersion("no version here"), null);
+    assert.equal(parseVersion(null), null);
+  });
+
+  it("compareVersions orders tuples", () => {
+    assert.ok(compareVersions([0, 172, 0], [0, 171, 999]) > 0);
+    assert.ok(compareVersions([0, 172, 0], [0, 172, 0]) === 0);
+    assert.ok(compareVersions([0, 5, 0], [1, 0, 0]) < 0);
+  });
+
+  it("codex 0.172+ uses the default (modern) templates", () => {
+    const variant = selectVariant(codexAgent, [0, 172, 0]);
+    assert.deepEqual(variant, {});
+  });
+
+  it("codex < 0.172 maps config.toml to the legacy variant", () => {
+    const variant = selectVariant(codexAgent, [0, 171, 0]);
+    assert.deepEqual(variant, {
+      "connect/codex/config.toml": "connect/codex/legacy/config.toml",
+    });
+  });
+
+  it("boundaries are inclusive: 0.171.999 is legacy, 0.172.0 is modern", () => {
+    assert.ok(selectVariant(codexAgent, [0, 171, 999])["connect/codex/config.toml"]);
+    assert.deepEqual(selectVariant(codexAgent, [0, 172, 0]), {});
+  });
+
+  it("returns {} when no version detected (default templates apply)", () => {
+    assert.deepEqual(selectVariant(codexAgent, null), {});
+  });
+
+  it("legacy variant template ships in the package", () => {
+    const content = renderContent("connect/codex/legacy/config.toml");
+    assert.ok(content, "legacy template must resolve from the package");
+    assert.ok(content.includes("multi_agent = false"));
+    assert.ok(!content.includes("default_tools_approval_mode"));
+  });
+
+  it("modern (default) template uses [agents] and MCP tool approval", () => {
+    const content = renderContent("connect/codex/config.toml");
+    assert.ok(content.includes("[agents]"));
+    assert.ok(content.includes("default_tools_approval_mode"));
   });
 });

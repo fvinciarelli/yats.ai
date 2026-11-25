@@ -89,6 +89,8 @@ const AGENTS = {
       { src: "connect/codex/AGENTS.md", dest: "AGENTS.md", type: "text" },
       { src: "connect/codex/config.toml", dest: ".codex/config.toml", type: "toml" },
     ],
+    detect: { cmd: "codex", args: ["--version"] },
+    variants: "connect/codex/variants.json",
     url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/codex",
   },
 };
@@ -150,6 +152,67 @@ function splitFrontmatter(content) {
 
 function appendMarker(agentKey) {
   return `\n---\n\n<!-- Added by \`yats connect ${agentKey}\` — YATS code intelligence. Remove this block if you don't need it. -->\n\n`;
+}
+
+// ============================================================
+// Agent version detection + template variants
+// ============================================================
+// Agents change their config formats over time (e.g. codex 0.172 deprecated
+// [features].multi_agent in favour of [agents].enabled). Each agent can ship a
+// variants.json manifest mapping semver ranges to template overrides, so one
+// `yats connect` works across many agent versions. The default templates apply
+// when no version is detected or no range matches.
+
+export function parseVersion(s) {
+  const m = String(s ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+export function compareVersions(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+export function formatVersion(v) {
+  return v ? v.join(".") : "?";
+}
+
+/** Best-effort detection of the installed agent CLI version. */
+export function detectAgentVersion(agent) {
+  const detect = agent?.detect;
+  if (!detect) return null;
+  try {
+    const res = spawnSync(detect.cmd, detect.args ?? [], { encoding: "utf-8", timeout: 5000 });
+    return parseVersion(`${res.stdout ?? ""}\n${res.stderr ?? ""}`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Select template overrides for a detected version from the agent's
+ * variants.json manifest: { since, until, files: { templateSrc → variantSrc } }.
+ * Ranges are inclusive at both ends; the first match wins.
+ */
+export function selectVariant(agent, version) {
+  if (!agent?.variants || !version) return {};
+  const raw = getFileContent(agent.variants);
+  if (!raw) return {};
+  try {
+    const manifest = JSON.parse(raw);
+    for (const v of manifest.versions ?? []) {
+      const since = v.since ? parseVersion(v.since) : [0, 0, 0];
+      const until = v.until ? parseVersion(v.until) : null;
+      if (compareVersions(version, since) >= 0 && (!until || compareVersions(version, until) <= 0)) {
+        return v.files ?? {};
+      }
+    }
+  } catch {
+    return {};
+  }
+  return {};
 }
 
 // ============================================================
@@ -337,7 +400,16 @@ async function installFiles(agentKey, prompter) {
   let installed = 0;
   let skipped = 0;
 
-  for (const file of agent.files) {
+  // Version-aware templates: override template sources for the installed CLI version.
+  const agentVersion = detectAgentVersion(agent);
+  const variantFiles = selectVariant(agent, agentVersion);
+  if (agentVersion) {
+    const suffix = Object.keys(variantFiles).length > 0 ? " — applying version-specific templates." : " — default templates.";
+    console.log(`  ${D}Detected ${agent.name} ${formatVersion(agentVersion)}${suffix}${R}`);
+  }
+
+  for (const rawFile of agent.files) {
+    const file = { ...rawFile, src: variantFiles[rawFile.src] ?? rawFile.src };
     const destPath = file.dest;
 
     if (file.type === "json") {
@@ -480,7 +552,10 @@ function showConfig(agentKey) {
   console.log(`  ${B}${agent.name}${R} — via ${agent.transport}`);
   console.log("");
 
-  for (const file of agent.files) {
+  const variantFiles = selectVariant(agent, detectAgentVersion(agent));
+
+  for (const rawFile of agent.files) {
+    const file = { ...rawFile, src: variantFiles[rawFile.src] ?? rawFile.src };
     console.log(`  ${B}${file.dest}${R}`);
     if (file.type === "json") {
       const templateContent = renderContent(file.src);

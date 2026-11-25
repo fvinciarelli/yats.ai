@@ -1,0 +1,11 @@
+# YATS MCP stdio bridge — added by `yats connect codex`
+# Legacy variant for codex < 0.172, where [features].multi_agent was the
+# supported way to force direct MCP tool usage ([agents] did not exist yet).
+# Place in .codex/config.toml (repo root) or ~/.codex/config.toml (global)
+
+[features]
+multi_agent = false              # REQUIRED: force direct MCP tool usage
+
+[mcp_servers.yats]
+command = "yats"
+args = ["bridge"]
