@@ -10,3 +10,6 @@ results/
 # fixture copy (source: ~/cosas/abs)
 fixture/
 .env
+
+# the repo-wide `bin/` ignore must not swallow the test-connect runner scripts
+!bin/

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Runs an AI agent inside the isolated lab container.
+#
+# Usage (host):
+#   bin/run-agent.sh <agent> <question-file> [--with-yats|--without-yats]
+#
+# The fixture repo is mounted at ITS OWN absolute path inside the container,
+# so tool calls pass `path=` values that the YATS server recognizes.
+# Agent state (auth/config/caches) lives ONLY in test-connect/homes/<agent>.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Optional DeepSeek key: runs the agent model-independently (BYOK)
+[ -f "$DIR/.env" ] && set -a && . "$DIR/.env" && set +a
+AGENT="${1:?usage: run-agent.sh <agent> <question-file> [--with-yats|--without-yats]}"
+QUESTION_FILE="${2:?question file required}"
+MODE="${3:---with-yats}"
+
+QUESTION_FILE="$(realpath "$QUESTION_FILE")"
+REPO_DIR="${YATS_TEST_REPO_DIR:-$(realpath "$DIR/fixture/abs-bench")}"
+
+[ -f "$QUESTION_FILE" ] || { echo "✗ question file not found: $QUESTION_FILE" >&2; exit 1; }
+[ -d "$REPO_DIR" ] || { echo "✗ fixture repo not found: $REPO_DIR (run bin/prepare-fixture.sh)" >&2; exit 1; }
+
+HOME_DIR="$DIR/homes/$AGENT"
+mkdir -p "$HOME_DIR"
+
+OUT_DIR="$DIR/results/$AGENT"
+mkdir -p "$OUT_DIR"
+OUT_FILE="$OUT_DIR/$(basename "$QUESTION_FILE" .md)__${MODE#--}.jsonl"
+
+echo "▶ $AGENT · $(basename "$QUESTION_FILE") · ${MODE#--}  →  $OUT_FILE"
+
+# --- Reset the fixture to a clean state for this agent, then install connect
+# config only when testing WITH yats (baseline = the repo as-is, no YATS).
+RESET_FILES=""
+case "$AGENT" in
+  claude)  RESET_FILES=".mcp.json .claude" ;;
+  codex)   RESET_FILES="AGENTS.md .codex" ;;
+  copilot) RESET_FILES=".mcp.json .github/copilot-instructions.md" ;;
+  gemini)  RESET_FILES="GEMINI.md .gemini" ;;
+  cursor)  RESET_FILES=".cursor" ;;
+  vscode)  RESET_FILES=".vscode" ;;
+esac
+
+docker run --rm -u 1000:1000 -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR" \
+  yats-agent-lab:latest bash -c "rm -rf $RESET_FILES"
+
+if [ "$MODE" = "--with-yats" ]; then
+  echo "▶ installing connect config for $AGENT"
+  docker run --rm -u 1000:1000 -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR" \
+    yats-agent-lab:latest bash -c "printf 'y\n' | yats connect --install $AGENT" | grep -E "✓|↻|Created|Merged" || true
+fi
+
+timeout "${YATS_TEST_TIMEOUT:-300}" docker run --rm --network host \
+  -u 1000:1000 \
+  -v "$HOME_DIR:/home/agent" \
+  -v "$REPO_DIR:$REPO_DIR" \
+  -v "$DIR/bin:/test-connect-bin:ro" \
+  -w "$REPO_DIR" \
+  -e HOME=/home/agent \
+  -e AGENT_NAME="$AGENT" \
+  -e AGENT_MODE="${MODE#--}" \
+  -e YATS_TEST_MODEL="${YATS_TEST_MODEL:-}" \
+  -e DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
+  yats-agent-lab:latest \
+  /test-connect-bin/agent-entry.sh "$(cat "$QUESTION_FILE")" 2>&1 | tee "$OUT_FILE"
