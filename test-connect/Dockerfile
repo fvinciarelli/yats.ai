@@ -19,14 +19,22 @@ RUN npm install -g \
       @google/gemini-cli \
       @github/copilot
 
-# Cursor Agent CLI — official installer (no npm package)
-RUN curl -fsS https://cursor.com/install | bash
+# Cursor Agent CLI — official installer (no npm package), installed to /opt so
+# the non-root `agent` user can run it (the installer writes under $HOME).
+RUN mkdir -p /opt/cursor-agent && export HOME=/opt/cursor-agent && curl -fsS https://cursor.com/install | bash \
+    && ln -sf /opt/cursor-agent/.local/bin/cursor-agent /usr/local/bin/agent \
+    && ln -sf /opt/cursor-agent/.local/bin/cursor-agent /usr/local/bin/cursor-agent
+
+# Non-root user: the image's built-in `node` user is uid/gid 1000, matching the
+# host user so bind-mounted homes are writable. Claude Code refuses
+# --dangerously-skip-permissions when running as root.
+RUN mkdir -p /home/agent && chown node:node /home/agent
 
 # YATS CLI from this branch's local pack
 COPY yats-toolkit-*.tgz /tmp/
 RUN npm install -g /tmp/yats-toolkit-*.tgz && rm -f /tmp/yats-toolkit-*.tgz
 
-ENV PATH="/root/.local/bin:${PATH}"
+USER node
 
 WORKDIR /work
 CMD ["/bin/bash"]

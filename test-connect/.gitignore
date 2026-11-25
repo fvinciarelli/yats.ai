@@ -6,3 +6,6 @@ results/
 
 # Local npm packs fed into the image
 *.tgz
+
+# fixture copy (source: ~/cosas/abs)
+fixture/
