@@ -1,26 +1,26 @@
-# test-connect — suite de verificación de `yats connect` por agente
+# test-connect — verification suite for `yats connect` per agent
 
-Prueba que lo que `yats connect --install <agent>` deja en un repo **funciona de
-verdad**: el agente carga la config, usa las tools de YATS y ahorra tokens.
-Todo corre en Docker; el host no se toca (ni CLIs instalados, ni credenciales
-modificadas — las copias viven en `homes/`, gitignored).
+Verifies that what `yats connect --install <agent>` leaves in a repo **actually
+works**: the agent loads the config, uses the YATS tools, and saves tokens.
+Everything runs in Docker; the host is untouched (no CLIs installed, no
+credentials modified — copies live in `homes/`, gitignored).
 
-## Flujo
+## Flow
 
 ```
-fixture indexado → reset fixture → connect --install <agent> → correr agente headless
-                 → transcript en results/ → score.py → scorecard ✅/❌
+indexed fixture → reset fixture → connect --install <agent> → run agent headless
+                → transcript in results/ → score.py → scorecard ✅/❌
 ```
 
-## Setup (una vez)
+## Setup (one-time)
 
 ```bash
-./test-connect/build-image.sh          # imagen yats-agent-lab (5 agent CLIs + yats de esta rama)
-./test-connect/bin/seed-auth.sh        # copia credenciales del host a homes/ (host intacto)
-./test-connect/bin/prepare-fixture.sh  # copia ~/cosas/abs → fixture/abs-bench y lo indexa
+./test-connect/build-image.sh          # yats-agent-lab image (agent CLIs + this branch's yats)
+./test-connect/bin/seed-auth.sh        # copy host credentials into homes/ (host untouched)
+./test-connect/bin/prepare-fixture.sh  # copy ~/cosas/abs → fixture/abs-bench and index it
 ```
 
-## Correr una prueba
+## Running a test
 
 ```bash
 ./test-connect/bin/run-agent.sh codex test-connect/questions/abs/01-cli-commands.md --with-yats
@@ -31,69 +31,70 @@ python3 test-connect/bin/score.py \
   test-connect/results/codex/01-cli-commands__without-yats.jsonl
 ```
 
-El runner resetea el fixture y reinstala la config de connect en cada corrida
-(`with-yats`) o la deja limpia (`without-yats`). El scorecard evalúa:
-usa YATS / empieza por `search_code` / pasa `path=` / presupuesto ≤4 llamadas /
-fallbacks a shell-web / tokens / ahorro % / respuesta correcta.
+The runner resets the fixture and reinstalls the connect config on every run
+(`with-yats`) or leaves it clean (`without-yats`). The scorecard checks:
+uses YATS / starts with `search_code` / passes `path=` / ≤4-call budget /
+shell-web fallbacks / tokens / savings % / correct answer.
 
-## Agentes soportados
+## Supported agents
 
-| Agente | Modelo en el lab | Estado |
+| Agent | Lab model | Status |
 |---|---|---|
-| claude | DeepSeek (BYOK vía ANTHROPIC_BASE_URL) | ✅ verde |
-| codex | DeepSeek (provider custom) | ✅ verde |
-| copilot | DeepSeek (BYOK, sin cuenta GitHub) | ✅ verde |
-| pi (pi.dev) | DeepSeek (models.json custom provider) | ✅ verde |
-| gemini | gemini-flash-latest (key propia) | ⏳ falta GEMINI_API_KEY en .env |
-| cursor | modelo de cuenta (subscription pool) | ⏳ falta CURSOR_API_KEY en .env |
+| claude | DeepSeek (BYOK via ANTHROPIC_BASE_URL) | ✅ green |
+| codex | DeepSeek (custom provider) | ✅ green |
+| copilot | DeepSeek (BYOK, no GitHub account) | ✅ green |
+| pi (pi.dev) | DeepSeek (models.json custom provider) | ✅ green |
+| gemini | gemini-flash-lite-latest (own key) | ⏳ GEMINI_API_KEY needed in .env |
+| cursor | account model (subscription pool) | ⏳ CURSOR_API_KEY needed in .env |
 
-**pi.dev** no se instala en la imagen: se monta read-only el bundle npm del host
-(`PI_AGENT_DIR`, por defecto el install de pi-node). Cero crecimiento de imagen.
+**pi.dev** is not installed in the image: its host npm bundle is bind-mounted
+read-only (`PI_AGENT_DIR`, defaults to the pi-node install). Zero image growth.
 
-## Modelo independiente: DeepSeek BYOK
+## Model-independent runs: DeepSeek BYOK
 
-Un solo key de DeepSeek corre claude, codex y copilot con **el mismo modelo**,
-aislando el comportamiento del agente (no del LLM). Sin necesidad de cuentas de
-GitHub ni créditos de Anthropic.
+A single DeepSeek key runs claude, codex, copilot and pi behind **the same
+model**, isolating agent behaviour (not the LLM). No GitHub accounts or
+Anthropic credits required.
 
 ```bash
-cp test-connect/env.example test-connect/.env   # completar DEEPSEEK_API_KEY
+cp test-connect/env.example test-connect/.env   # fill in DEEPSEEK_API_KEY
 ```
 
 - claude  → `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`
-- codex   → provider `deepseek` en `~/.codex/config.toml` (solo en el home aislado)
-- copilot → `COPILOT_PROVIDER_*` BYOK + `COPILOT_OFFLINE=true` (sin cuenta GitHub)
+- codex   → `deepseek` provider in `~/.codex/config.toml` (isolated home only)
+- copilot → `COPILOT_PROVIDER_*` BYOK + `COPILOT_OFFLINE=true` (no GitHub account)
+- pi      → custom provider in `~/.pi/agent/models.json`
 
-gemini y cursor siguen atados a sus modelos (requieren auth propia:
-`gemini` (Google AI Studio, key gratis) y `agent login` (cuenta cursor.com)).
+gemini and cursor stay bound to their own models (own auth required: gemini via
+Google AI Studio free key, cursor via `agent login` / cursor.com account).
 
-## Catálogo de versiones (agente+versión → prompt/config)
+## Agent-version catalog (agent+version → prompt/config)
 
-`connect/catalog.json` (en `packages/yats-toolkit/connect/`) registra, por agente,
-rangos de versión → templates que mejor rindieron, con la evidencia medida
-(fecha, versión exacta, modelo, matriz, resultado). `yats connect` detecta la
-versión del CLI instalado, matchea el rango y aplica esos templates; si no hay
-match o no detecta, usa los defaults. Ej: codex < 0.172 usa
-`[features].multi_agent`; 0.172+ usa `[agents].enabled = false`.
+`connect/catalog.json` (in `packages/yats-toolkit/connect/`) records, per agent,
+version ranges → the templates that performed best, with the measured evidence
+(date, exact version, model, matrix, result). `yats connect` detects the
+installed CLI version, matches the range and applies those templates; with no
+match or no detection it falls back to the defaults. E.g. codex < 0.172 uses
+`[features].multi_agent`; 0.172+ uses `[agents].enabled = false`.
 
-## Proceso: salió una versión nueva de un agente
+## Procedure: a new agent version ships
 
-1. **Actualizar el lab** — `./test-connect/build-image.sh` trae los CLIs más nuevos
-   (pi se monta del host: `npm update -g` ahí si aplica).
-2. **Ver la versión nueva** dentro del container:
+1. **Update the lab** — `./test-connect/build-image.sh` pulls the newest CLIs
+   (pi is mounted from the host: `npm update -g` there if applicable).
+2. **Check the new version** inside the container:
    `docker run --rm -u 1000:1000 yats-agent-lab:latest <cli> --version`
-3. **Correr la celda con multi-run** (y el baseline si pudo cambiar):
+3. **Run the cell with multi-run** (and the baseline if it may have changed):
    ```bash
    YATS_TEST_RUNS=2 ./test-connect/bin/run-agent.sh <agent> test-connect/questions/abs/01-cli-commands.md --with-yats
    YATS_TEST_RUNS=2 ./test-connect/bin/run-agent.sh <agent> test-connect/questions/abs/01-cli-commands.md --without-yats
    ```
-4. **Scorear** con `python3 test-connect/bin/score.py <expects> <transcripts...>`.
-5. **Registrar el resultado en `connect/catalog.json`**:
-   - Todo verde → actualizar la entrada existente (`agentVersion`, `date`,
-     `result`) o, si esa versión cambió de comportamiento, agregar una entrada
-     nueva con su rango `since`/`until` y los `files` overrides necesarios.
-   - Algo falla → iterar el prompt/config de esa entrada (o crear variantes
-     nuevas) hasta verde ANTES de registrar.
-6. **Re-empaquetar y verificar**: `./test-connect/build-image.sh` y confirmar que
-   `yats connect --install <agent>` muestra el “Known-good” correcto para esa
-   versión.
+4. **Score** with `python3 test-connect/bin/score.py <expects> <transcripts...>`.
+5. **Record the result in `connect/catalog.json`**:
+   - All green → update the existing entry (`agentVersion`, `date`, `result`)
+     or, if that version changed behaviour, add a new entry with its
+     `since`/`until` range and the necessary `files` overrides.
+   - Something fails → iterate the prompt/config for that entry (or create new
+     variants) until green BEFORE recording.
+6. **Repack and verify**: `./test-connect/build-image.sh`, then confirm
+   `yats connect --install <agent>` shows the correct "Known-good" line for
+   that version.

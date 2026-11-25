@@ -1,5 +1,5 @@
 {
-  "note": "Catalog of agent versions → prompt/config templates. `yats connect` detects the installed agent CLI version and selects the entry whose range matches (ranges inclusive, first match wins). Each entry records WHAT was tested and HOW it performed with the test-connect suite. Untested entries fall back to the default templates. Update procedure when a new agent version ships: see test-connect/README.md → 'Proceso: salió una versión nueva de un agente'.",
+  "note": "Catalog of agent versions → prompt/config templates. `yats connect` detects the installed agent CLI version and selects the entry whose range matches (ranges inclusive, first match wins). Each entry records WHAT was tested and HOW it performed with the test-connect suite. Untested entries fall back to the default templates. Update procedure when a new agent version ships: see test-connect/README.md → 'Procedure: a new agent version ships'.",
   "codex": {
     "versions": [
       {
