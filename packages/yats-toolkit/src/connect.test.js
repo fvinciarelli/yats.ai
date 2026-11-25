@@ -190,3 +190,22 @@ describe("agent version variants", () => {
     assert.ok(content.includes("default_tools_approval_mode"));
   });
 });
+
+describe("pi (pi.dev) templates", () => {
+  it("pi mcp.json uses the HTTP transport (no stdio bridge)", () => {
+    const content = renderContent("connect/pi/mcp.json");
+    assert.ok(content, "pi template must resolve from the package");
+    const tpl = JSON.parse(content);
+    assert.deepEqual(tpl, {
+      mcpServers: { yats: { url: "http://localhost:5555/mcp" } },
+    });
+  });
+
+  it("pi AGENTS.md targets mcp__yats__* tool names and replaces __REPO_PATH__", () => {
+    const content = renderContent("connect/pi/AGENTS.md");
+    assert.ok(content, "pi AGENTS.md must resolve");
+    assert.ok(content.includes("mcp__yats__search_code"));
+    assert.ok(!content.includes("__REPO_PATH__"));
+    assert.ok(content.includes(process.cwd()));
+  });
+});

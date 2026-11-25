@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # AI agent CLIs from npm
+# pi.dev is NOT baked in: its npm install lives on the host and is bind-mounted
+# read-only at runtime (see run-agent.sh → /opt/pi-agent). Zero image growth.
 RUN npm install -g \
       @anthropic-ai/claude-code \
       @openai/codex \

@@ -93,6 +93,16 @@ const AGENTS = {
     variants: "connect/codex/variants.json",
     url: "https://github.com/fvinciarelli/yats.ai/tree/main/connect/codex",
   },
+  pi: {
+    name: "Pi (pi.dev)",
+    transport: "HTTP",
+    files: [
+      { src: "connect/pi/AGENTS.md", dest: "AGENTS.md", type: "text" },
+      { src: "connect/pi/mcp.json", dest: ".pi/mcp.json", type: "json" },
+    ],
+    detect: { cmd: "pi", args: ["--version"] },
+    url: "https://pi.dev",
+  },
 };
 
 function getYatsMcpConfig() {
@@ -668,6 +678,7 @@ export default async function connect(args) {
     { label: "VS Code (native MCP)", value: "vscode" },
     { label: "Gemini CLI", value: "gemini" },
     { label: "Codex CLI", value: "codex" },
+    { label: "Pi (pi.dev)", value: "pi" },
   ]);
 
   showConfig(picked);

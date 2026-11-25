@@ -33,8 +33,22 @@ python3 test-connect/bin/score.py \
 
 El runner resetea el fixture y reinstala la config de connect en cada corrida
 (`with-yats`) o la deja limpia (`without-yats`). El scorecard evalúa:
-usa YATS / empieza por `search_code` / pasa `path=` / presupuesto 3-5 llamadas /
+usa YATS / empieza por `search_code` / pasa `path=` / presupuesto ≤4 llamadas /
 fallbacks a shell-web / tokens / ahorro % / respuesta correcta.
+
+## Agentes soportados
+
+| Agente | Modelo en el lab | Estado |
+|---|---|---|
+| claude | DeepSeek (BYOK vía ANTHROPIC_BASE_URL) | ✅ verde |
+| codex | DeepSeek (provider custom) | ✅ verde |
+| copilot | DeepSeek (BYOK, sin cuenta GitHub) | ✅ verde |
+| pi (pi.dev) | DeepSeek (models.json custom provider) | ✅ verde |
+| gemini | gemini-flash-latest (key propia) | ⏳ falta GEMINI_API_KEY en .env |
+| cursor | modelo de cuenta (subscription pool) | ⏳ falta CURSOR_API_KEY en .env |
+
+**pi.dev** no se instala en la imagen: se monta read-only el bundle npm del host
+(`PI_AGENT_DIR`, por defecto el install de pi-node). Cero crecimiento de imagen.
 
 ## Modelo independiente: DeepSeek BYOK
 

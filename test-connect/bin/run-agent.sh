@@ -50,6 +50,7 @@ case "$AGENT" in
   copilot) RESET_FILES=".mcp.json .github/copilot-instructions.md" ;;
   gemini)  RESET_FILES="GEMINI.md .gemini" ;;
   cursor)  RESET_FILES=".cursor" ;;
+  pi)      RESET_FILES="AGENTS.md .pi" ;;
   vscode)  RESET_FILES=".vscode" ;;
 esac
 
@@ -62,17 +63,27 @@ if [ "$MODE" = "--with-yats" ]; then
     yats-agent-lab:latest bash -c "printf 'y\n' | yats connect --install $AGENT" | grep -E "✓|↻|Created|Merged" || true
 fi
 
+# pi.dev: reuse the host npm install (bind-mounted read-only) — the user's exact version
+PI_AGENT_DIR="${PI_AGENT_DIR:-$HOME/.local/share/pi-node/node-v22.22.3-linux-x64/lib/node_modules/@earendil-works/pi-coding-agent}"
+PI_MOUNT=()
+if [ "$AGENT" = "pi" ] && [ -f "$PI_AGENT_DIR/dist/bundle/cli.js" ]; then
+  PI_MOUNT=(-v "$PI_AGENT_DIR:/opt/pi-agent:ro")
+fi
+
 timeout "${YATS_TEST_TIMEOUT:-300}" docker run --rm --network host \
   -u 1000:1000 \
   -v "$HOME_DIR:/home/agent" \
   -v "$REPO_DIR:$REPO_DIR" \
   -v "$DIR/bin:/test-connect-bin:ro" \
+  "${PI_MOUNT[@]}" \
   -w "$REPO_DIR" \
   -e HOME=/home/agent \
   -e AGENT_NAME="$AGENT" \
   -e AGENT_MODE="${MODE#--}" \
   -e YATS_TEST_MODEL="${YATS_TEST_MODEL:-}" \
   -e DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
+  -e GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
+  -e CURSOR_API_KEY="${CURSOR_API_KEY:-}" \
   yats-agent-lab:latest \
   /test-connect-bin/agent-entry.sh "$(cat "$QUESTION_FILE")" 2>&1 | tee "$OUT_FILE"
 done

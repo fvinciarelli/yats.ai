@@ -88,6 +88,60 @@ def is_startup_check(name, args):
     return cmd.strip().startswith(("yats list", "yats index"))
 
 
+def parse_pi(path: Path):
+    """Pi `--mode json` NDJSON: message_update (usage + text deltas),
+    tool_execution_start (toolName/args), agent_end (final messages)."""
+    calls, reads, file_reads, answer, usage = [], 0, 0, "", {}
+    deltas = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = r.get("type")
+        if t == "message_update":
+            u = r.get("usage") or {}
+            if u.get("input") or u.get("totalTokens"):
+                usage = {
+                    "input_tokens": u.get("input", 0),
+                    "output_tokens": u.get("output", 0),
+                    "cache_read_input_tokens": u.get("cacheRead", 0),
+                }
+                cost = (u.get("cost") or {}).get("total")
+                if cost:
+                    usage["total_cost_usd"] = cost
+            ev = r.get("assistantMessageEvent") or {}
+            if ev.get("type") == "text_delta":
+                deltas.append(ev.get("delta", ""))
+        elif t == "tool_execution_start":
+            name = r.get("toolName", "")
+            if name.startswith("mcp__yats__"):
+                calls.append({"tool": name.removeprefix("mcp__yats__"), "args": r.get("args", {})})
+            elif name in ("read", "read_file"):
+                file_reads += 1
+            elif name in ("bash", "grep", "find", "ls", "web_search", "web_fetch"):
+                if name == "bash" and is_startup_check(name, r.get("args", {})):
+                    continue
+                reads += 1
+        elif t == "agent_end":
+            for m in r.get("messages") or []:
+                if m.get("role") == "assistant":
+                    c = m.get("content")
+                    if isinstance(c, str):
+                        answer = c
+                    elif isinstance(c, list):
+                        for b in c:
+                            if isinstance(b, dict) and b.get("type") == "text":
+                                answer = b.get("text", "")
+    if not answer:
+        answer = "".join(deltas)
+    usage["_file_reads"] = file_reads
+    return calls, reads, answer, usage
+
+
 def parse_claude(path: Path):
     calls, reads, file_reads, answer, usage = [], 0, 0, "", {}
     for line in path.read_text().splitlines():
@@ -125,6 +179,8 @@ def parse(path: Path):
         return parse_claude(path)
     if "copilot" in name:
         return parse_copilot(path)
+    if "/pi/" in name:
+        return parse_pi(path)
     return parse_codex(path)
 
 

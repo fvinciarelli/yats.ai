@@ -67,16 +67,19 @@ case "$AGENT" in
     ;;
 
   gemini)
+    # Gemini cannot use DeepSeek: needs its own key + model (free tier works)
+    export GEMINI_API_KEY="${GEMINI_API_KEY:-}"
+    G_MODEL="${YATS_TEST_GEMINI_MODEL:-gemini-flash-latest}"
     if [ "$MODE" = "with-yats" ]; then
       export GEMINI_CLI_TRUST_WORKSPACE=true
       gemini -p "$PROMPT" \
-        ${MODEL:+--model "$MODEL"} \
+        --model "$G_MODEL" \
         --output-format stream-json --yolo
     else
       mv .gemini .gemini.disabled 2>/dev/null || true
       export GEMINI_CLI_TRUST_WORKSPACE=true
       gemini -p "$PROMPT" \
-        ${MODEL:+--model "$MODEL"} \
+        --model "$G_MODEL" \
         --output-format stream-json --yolo
       mv .gemini.disabled .gemini 2>/dev/null || true
     fi
@@ -90,12 +93,32 @@ case "$AGENT" in
     ;;
 
   cursor)
+    # Cursor is subscription-bound (no BYOK); needs CURSOR_API_KEY or `agent login`
+    export CURSOR_API_KEY="${CURSOR_API_KEY:-}"
     if [ "$MODE" = "with-yats" ]; then
       export CURSOR_MCP_CONFIG="$PWD/.cursor/mcp.json"
       agent -p "$PROMPT" --force --output-format stream-json
     else
       agent -p "$PROMPT" --force --output-format stream-json
     fi
+    ;;
+
+  pi)
+    # Pi (pi.dev): reads .pi/mcp.json only for trusted projects (-a approves
+    # once). The CLI bundle is bind-mounted from the host (/opt/pi-agent);
+    # DeepSeek BYOK via ~/.pi/agent/models.json (custom provider).
+    if [ ! -f /opt/pi-agent/dist/bundle/cli.js ]; then
+      echo "✗ pi bundle not mounted — set PI_AGENT_DIR to the host install dir" >&2
+      exit 1
+    fi
+    if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+      mkdir -p "$HOME/.pi/agent"
+      printf '{\n  "$schema": "https://pi.dev/schemas/models.schema.json",\n  "providers": {\n    "deepseek": {\n      "baseUrl": "https://api.deepseek.com/v1",\n      "api": "openai-completions",\n      "apiKey": "$DEEPSEEK_API_KEY",\n      "models": [ { "id": "%s" } ]\n    }\n  }\n}\n' "$DS_MODEL" > "$HOME/.pi/agent/models.json"
+      PI_MODEL="deepseek/$DS_MODEL"
+    else
+      PI_MODEL="${MODEL:-}"
+    fi
+    node /opt/pi-agent/dist/bundle/cli.js -a -p "$PROMPT" ${PI_MODEL:+--model "$PI_MODEL"} --mode json
     ;;
 
   *)
