@@ -4,6 +4,16 @@ import type { SymbolKind, RelationshipKind } from "../domain/enums.js";
 export interface GraphSymbol extends Symbol {
   nodeId: number;
   labels: string[];
+  /**
+   * Reference queries aggregate every edge between a source symbol and the
+   * target, so a single row can carry more than one relation type
+   * (e.g. CALLS + USES_TYPE for `X.Create()`).
+   */
+  relations?: string[];
+  /** Lines where the source symbol uses the target (USES_TYPE/INSTANTIATES). */
+  lines?: number[];
+  /** Number of recorded usage lines (=== lines.length when present). */
+  occurrences?: number;
 }
 
 export interface Subgraph {
@@ -25,15 +35,49 @@ export interface RepositoryInfo {
   rootPath: string;
 }
 
+/** Lightweight symbol row for cross-file resolution (no source snippet/vectors). */
+export interface SymbolLite {
+  id: string;
+  name: string;
+  /** Symbol kind — resolution uses it to tell types from members with the same name. */
+  kind?: string | null;
+  namespace: string;
+  relativePath: string;
+  /** Containing class, when known (used for deterministic CALLS resolution). */
+  parentClass?: string | null;
+}
+
+/** Optional filters for findRoutes. */
+export interface RouteFilterOptions {
+  /** Exact HTTP method match (GET/POST/PUT/PATCH/DELETE, case-insensitive). */
+  method?: string;
+  /** Partial route path match (substring). */
+  path?: string;
+  /** Maximum number of routes to return (default 100). */
+  limit?: number;
+}
+
 export interface GraphRepository {
   upsertSymbol(symbol: Symbol): Promise<void>;
   upsertSymbols(symbols: Symbol[]): Promise<void>;
+  /** Create (or update) a node for an external API (library/browser global). */
+  upsertExternalSymbol(id: string, name: string): Promise<void>;
   upsertRelationship(rel: Relationship): Promise<void>;
   upsertRelationships(rels: Relationship[]): Promise<void>;
   deleteSymbol(symbolId: string): Promise<void>;
   deleteSymbols(symbolIds: string[]): Promise<void>;
-  deleteRelationships(symbolId: string): Promise<void>;
-  clearRepository(repository: string): Promise<void>;
+  /**
+   * Delete only the *outgoing* relationships of the given symbols.
+   * Incoming edges are preserved, so callers in other files keep pointing
+   * at surviving symbols across re-indexes (P2).
+   */
+  deleteRelationships(symbolIds: string[]): Promise<void>;
+  /**
+   * Delete every symbol and file row of a repository. `repository` must be the
+   * rootPath stored on `Symbol.repository` — the display name matches nothing.
+   * Returns what was actually removed so callers can verify the outcome.
+   */
+  clearRepository(repository: string): Promise<{ symbols: number; files: number }>;
   findSymbol(symbolId: string): Promise<GraphSymbol | null>;
   findSymbolByName(repository: string, name: string, kind?: SymbolKind): Promise<GraphSymbol[]>;
   findReferences(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
@@ -42,16 +86,38 @@ export interface GraphRepository {
   findImplementations(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
   findInheritors(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
   findTests(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
-  findRoutes(repository: string): Promise<GraphSymbol[]>;
+  findRoutes(repository: string, options?: RouteFilterOptions): Promise<GraphSymbol[]>;
   findConfiguration(repository: string, key?: string): Promise<GraphSymbol[]>;
   expandGraph(seedIds: string[], hops: number, relationshipTypes: RelationshipKind[]): Promise<Subgraph>;
   relatedSymbols(symbolId: string, limit?: number): Promise<GraphSymbol[]>;
   repositorySummary(repository: string): Promise<RepositorySummary>;
   listSymbols(repository: string, kind?: SymbolKind, limit?: number, offset?: number): Promise<GraphSymbol[]>;
+  /** All symbols of a repository as lightweight entries (id/name/namespace/relativePath). */
+  listAllSymbols(repository: string): Promise<SymbolLite[]>;
+  /** Symbol ids belonging to one file, matched by relative path (legacy id-substring fallback). */
+  listSymbolIdsByFile(repository: string, relativePath: string): Promise<string[]>;
   upsertRepositoryMetadata(name: string, rootPath: string): Promise<void>;
   listRepositories(): Promise<RepositoryInfo[]>;
   findRepositoryByPath(rootPath: string): Promise<RepositoryInfo | null>;
   getLastIndexedCommit(name: string): Promise<string | null>;
   setLastIndexedCommit(name: string, commit: string): Promise<void>;
-  deleteRepositoryNode(name: string): Promise<void>;
+  /** Per-file content hashes (relativePath → sha256) analyzed at the given pipeline version. */
+  getFileHashes(repository: string, analyzerVersion: number): Promise<Record<string, string>>;
+  /** Content hash + analyzer version of one file's last successful analysis. */
+  getFileState(
+    repository: string,
+    relativePath: string,
+  ): Promise<{ contentHash: string | null; analyzerVersion: number | null }>;
+  upsertFileHash(
+    repository: string,
+    relativePath: string,
+    contentHash: string,
+    analyzerVersion: number,
+  ): Promise<void>;
+  removeFileHash(repository: string, relativePath: string): Promise<void>;
+  /** Analysis pipeline version that produced the indexed symbols (see ANALYSIS_SCHEMA_VERSION). */
+  getAnalyzerVersion(repository: string): Promise<number | null>;
+  setAnalyzerVersion(repository: string, version: number): Promise<void>;
+  /** Remove the Repository metadata node, matched by rootPath or name. */
+  deleteRepositoryNode(repositoryRef: string): Promise<void>;
 }

@@ -28,6 +28,7 @@ const EXTENSION_MAP: Record<string, Language> = {
   ".go": Language.GO,
   ".java": Language.JAVA,
   ".jar": Language.JAVA,
+  ".rs": Language.RUST,
 };
 
 const SHEBANG_MAP: Record<string, Language> = {
@@ -41,10 +42,13 @@ const SPECIAL_FILES: Record<string, Language> = {
   "Dockerfile": Language.TYPESCRIPT, // not really, but we treat Dockerfiles as plain text / config
 };
 
-const IGNORED_EXTENSIONS: Set<string> = new Set(
-  (process.env.SKIP_EXTENSIONS || ".md,.txt,.json,.yaml,.yml,.toml,.xml,.html,.css,.scss,.less,.svg,.png,.jpg,.jpeg,.gif,.ico,.webp,.woff,.woff2,.ttf,.eot,.lock,.log,.map")
-    .split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
-);
+const IGNORED_EXTENSIONS = new Set([
+  ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+  ".xml", ".html", ".css", ".scss", ".less", ".svg",
+  ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp",
+  ".woff", ".woff2", ".ttf", ".eot",
+  ".lock", ".log", ".map",
+]);
 
 /**
  * Detect programming language from file path and content.

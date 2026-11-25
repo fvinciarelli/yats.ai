@@ -1,0 +1,21 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "YATS: watch",
+      "detail": "Keeps the YATS index in sync with the files on disk (live mode).",
+      "type": "shell",
+      "command": "yats",
+      "args": ["watch", ".", "--live"],
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

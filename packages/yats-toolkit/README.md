@@ -56,7 +56,7 @@ yats index ~/work/frontend
 ```
 "index /home/user/my-project"
 ```
-The agent will use the `index_repository` MCP tool, which tells it to run `yats index` and then polls until complete.
+The agent runs `yats index` on your machine (the only way to index — the server never walks your filesystem) and then polls `repository_summary` until complete.
 
 ## MCP Configuration
 
@@ -89,7 +89,7 @@ Add this to your AI agent's MCP config:
 | Inheritance | `find_implementations`, `find_inheritors` |
 | Graph | `expand_graph`, `related_symbols` |
 | Discovery | `list_symbols`, `find_routes`, `find_configuration`, `find_tests` |
-| Repository | `list_repositories`, `index_repository`, `delete_repository` |
+| Repository | `list_repositories`, `delete_repository` |
 | Analysis | `repository_summary`, `architecture_summary` |
 
 ## Commands
@@ -119,14 +119,14 @@ TypeScript, JavaScript, Python, Go, C#, PHP — plus universal fallback via Tree
 
 ## Architecture
 
-See the [GitHub repository](https://github.com/fvinciarelli/yats) for the full architecture and source code.
+See the [GitHub repository](https://github.com/fvinciarelli/yats.ai) for the full architecture and source code.
 
 ## CLI Reference
 
 ```bash
 yats setup
 ```
-Runs the one-time setup wizard. Detects if YATS is already running, asks for embedding provider (Ollama/OpenAI/Mistral/Voyage), API keys if needed, batch size, docs indexing preference, optional pre-index directories, and MCP port. Generates `~/.yats/docker-compose.yml` and starts all services.
+Runs the one-time setup wizard. Detects if YATS is already running, asks for embedding provider (Ollama/OpenAI/Mistral/Voyage), API keys if needed, batch size, docs indexing preference, optional pre-index directories, and MCP port. Generates `~/.yats/docker-compose.yml`, writes `~/.yats/.env` (embedding keys plus empty `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `DEEPSEEK_API_KEY` placeholders for `yats benchmark`), and starts all services.
 
 ```bash
 yats index <path> [--skip-docs]
@@ -172,8 +172,21 @@ Deletes all indexed data for a repository (symbols, relationships, vectors). Use
 yats benchmark
 ```
 Runs an interactive AI agent benchmark. Compares token usage answering the same
-codebase questions with and without YATS. Supports Claude CLI and Codex.
-Automatically clones test repos, indexes them, and saves results with averages.
+codebase questions with and without YATS. Supports Claude, Codex, Copilot, Gemini,
+and Cursor (CLI). Clones/indexes test repos and saves results with averages.
+
+**Where your agent's keys come from** — the benchmark runs *your* agent, which uses
+*your* credentials with its provider. It loads `~/.yats/.env` (written by `yats setup`,
+which pre-fills the agent key names) and any `.env` in the current dir or repo root;
+shell env vars take precedence.
+
+| Agent | Credential |
+|---|---|
+| Gemini | `GEMINI_API_KEY` (free: aistudio.google.com/apikey) |
+| Claude | `ANTHROPIC_API_KEY`, or `claude` OAuth login |
+| Codex | `OPENAI_API_KEY`, or `codex` login (`~/.codex/auth.json`) |
+| Copilot | GitHub Copilot login (no env var) |
+| Cursor | `cursor-agent` login |
 
 ## License
 

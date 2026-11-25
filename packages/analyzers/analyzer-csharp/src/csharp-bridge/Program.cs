@@ -44,7 +44,9 @@ var tree = CSharpSyntaxTree.ParseText(code);
 var root = tree.GetCompilationUnitRoot();
 
 var analyzer = new CSharpAnalyzer(repoName, filePath);
+analyzer.PrepareTopLevel(root);
 analyzer.Visit(root);
+analyzer.FlushTypeUsages();
 
 var result = new BridgeResult
 {
@@ -120,6 +122,44 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
     private string _currentNamespace = "";
     private string? _currentParentId;
 
+    /** Type names declared in this file (classes, interfaces, structs, records, enums). */
+    private readonly HashSet<string> _declaredTypes = new();
+
+    /** Type name → full symbol ID for types declared in this file (exact INSTANTIATES targets). */
+    private readonly Dictionary<string, string> _declaredTypeIds = new();
+
+    /**
+     * Namespaces imported by the file's `using` directives. Cross-file type
+     * resolution uses them to pick the right candidate when two namespaces
+     * declare a type with the same name.
+     */
+    private readonly HashSet<string> _usingNamespaces = new(StringComparer.Ordinal);
+
+    /**
+     * Type usages collected while walking, keyed by (referencing symbol, type
+     * name). A type mentioned 40 times by one method becomes ONE edge carrying
+     * 40 lines instead of 40 edges.
+     */
+    private readonly Dictionary<(string CallerId, string TypeName), TypeUsage> _typeUsages = new();
+
+    private sealed class TypeUsage
+    {
+        public SortedSet<int> Lines { get; } = new();
+        public SortedSet<string> Kinds { get; } = new(StringComparer.Ordinal);
+        /** Namespace in effect at the usage site (a file can hold several). */
+        public string Namespace { get; set; } = "";
+    }
+
+    /** Innermost member whose body is being walked — source of CALLS/INSTANTIATES edges. */
+    private string? _currentCallerId;
+
+    /**
+     * Syntax-level type map for the current type scope:
+     * identifier → (simple type name, kind: field | property | parameter | local).
+     * Swapped per type declaration so members of one class never leak into another.
+     */
+    private Dictionary<string, (string Type, string Kind)> _scopeTypes = new();
+
     public List<BridgeSymbol> Symbols { get; } = new();
     public List<BridgeRelationship> Relationships { get; } = new();
 
@@ -129,7 +169,29 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
     {
         _repo = repo;
         _filePath = filePath;
-        _relPath = Path.GetFileName(filePath);
+        // Full repo-relative path (not basename) — two files with the same name
+        // in different folders must not collide in symbol IDs or resolution.
+        _relPath = filePath.Replace('\\', '/').TrimStart('.', '/');
+    }
+
+    // ============================================================
+    // Top-level statements (Program.cs style)
+    //
+    // A file with top-level statements has no enclosing symbol, so its CALLS /
+    // INSTANTIATES / USES_TYPE edges had no source and were dropped. Create a
+    // file-level symbol (kind FUNCTION, name = file name) and attribute them.
+    // ============================================================
+
+    public void PrepareTopLevel(CompilationUnitSyntax root)
+    {
+        if (!root.Members.OfType<GlobalStatementSyntax>().Any()) return;
+
+        var fileName = _relPath.Split('/').LastOrDefault() ?? _relPath;
+        var sym = MakeSymbol(fileName, "FUNCTION", root);
+        sym.Signature = "top-level statements";
+        sym.Metadata["isTopLevel"] = true;
+        Symbols.Add(sym);
+        _currentCallerId = sym.Id;
     }
 
     // ============================================================
@@ -157,10 +219,16 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "CLASS", node);
         DetectConvention(sym, name);
+        _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         // Track parent for CONTAINS
         var previousParent = _currentParentId;
         _currentParentId = sym.Id;
+
+        // Fresh type scope for this class
+        var previousScope = _scopeTypes;
+        _scopeTypes = new Dictionary<string, (string Type, string Kind)>();
 
         // Inheritance
         if (node.BaseList != null)
@@ -185,15 +253,20 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         base.VisitClassDeclaration(node);
 
         _currentParentId = previousParent;
+        _scopeTypes = previousScope;
     }
 
     public override void VisitInterfaceDeclaration(InterfaceDeclarationSyntax node)
     {
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "INTERFACE", node);
+        _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         var previousParent = _currentParentId;
         _currentParentId = sym.Id;
+        var previousScope = _scopeTypes;
+        _scopeTypes = new Dictionary<string, (string Type, string Kind)>();
 
         // Base interfaces
         if (node.BaseList != null)
@@ -216,12 +289,15 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         base.VisitInterfaceDeclaration(node);
 
         _currentParentId = previousParent;
+        _scopeTypes = previousScope;
     }
 
     public override void VisitEnumDeclaration(EnumDeclarationSyntax node)
     {
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "ENUM", node);
+        _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         // Enum members
         foreach (var member in node.Members)
@@ -240,15 +316,20 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
     {
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "STRUCT", node);
+        _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         var previousParent = _currentParentId;
         _currentParentId = sym.Id;
+        var previousScope = _scopeTypes;
+        _scopeTypes = new Dictionary<string, (string Type, string Kind)>();
 
         ExtractAttributes(node.AttributeLists, sym);
         Symbols.Add(sym);
         base.VisitStructDeclaration(node);
 
         _currentParentId = previousParent;
+        _scopeTypes = previousScope;
     }
 
     public override void VisitRecordDeclaration(RecordDeclarationSyntax node)
@@ -257,21 +338,31 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var kind = node.Kind() == SyntaxKind.RecordStructDeclaration ? "STRUCT" : "CLASS";
         var sym = MakeSymbol(name, kind, node);
         sym.Metadata["isRecord"] = true;
+        _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
 
         var previousParent = _currentParentId;
         _currentParentId = sym.Id;
+        var previousScope = _scopeTypes;
+        _scopeTypes = new Dictionary<string, (string Type, string Kind)>();
 
         Symbols.Add(sym);
         base.VisitRecordDeclaration(node);
 
         _currentParentId = previousParent;
+        _scopeTypes = previousScope;
     }
 
     public override void VisitDelegateDeclaration(DelegateDeclarationSyntax node)
     {
         var name = node.Identifier.Text;
         var sym = MakeSymbol(name, "DELEGATE", node);
+        _declaredTypes.Add(name);
+        _declaredTypeIds[name] = sym.Id;
         sym.Signature = node.ToString().Split('{', ';')[0].Trim();
+        RecordTypeNode(sym.Id, node.ReturnType, LineOf(node), "return");
+        foreach (var parameter in node.ParameterList.Parameters)
+            RecordTypeNode(sym.Id, parameter.Type, LineOf(parameter), "parameter");
         Symbols.Add(sym);
     }
 
@@ -304,6 +395,14 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         if (node.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword)))
             sym.Metadata["isAsync"] = true;
 
+        // Register parameter types for receiver resolution
+        foreach (var p in node.ParameterList?.Parameters ?? new SeparatedSyntaxList<ParameterSyntax>())
+        {
+            var ptype = ExtractSimpleName(p.Type?.ToString() ?? "");
+            if (!string.IsNullOrEmpty(ptype))
+                _scopeTypes[p.Identifier.Text] = (ptype, "parameter");
+        }
+
         // Set parent class from current scope
         if (_currentParentId != null)
             sym.ParentClass = _currentParentId.Split("::").LastOrDefault();
@@ -315,30 +414,65 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
 
         Symbols.Add(sym);
 
+        // Return, parameter and constraint types are usages of this method.
+        var methodLine = LineOf(node);
+        RecordTypeNode(sym.Id, node.ReturnType, methodLine, "return");
+        foreach (var parameter in node.ParameterList?.Parameters ?? new SeparatedSyntaxList<ParameterSyntax>())
+            RecordTypeNode(sym.Id, parameter.Type, LineOf(parameter), "parameter");
+        foreach (var constraint in node.ConstraintClauses)
+            foreach (var typeConstraint in constraint.Constraints.OfType<TypeConstraintSyntax>())
+                RecordTypeNode(sym.Id, typeConstraint.Type, LineOf(typeConstraint), "constraint");
+
         if (_currentParentId != null)
             Relationships.Add(MakeContains(_currentParentId, sym.Id));
 
-        // Extract method calls from body
-        ExtractMethodCalls(node.Body, sym.Id);
+        // Extract method calls from body (with receiver resolution).
+        // Expression-bodied members (`=> Send(...)`) have no BlockSyntax —
+        // their ExpressionBody carries the invocations.
+        SyntaxNode? callScope = node.Body != null ? node.Body : node.ExpressionBody;
+        ExtractMethodCalls(callScope, sym.Id, CollectLocals(node.Body));
 
+        // Walk the body with this method as the referencing context — object
+        // creations inside it become INSTANTIATES edges attributed to it.
+        var previousCaller = _currentCallerId;
+        _currentCallerId = sym.Id;
         base.VisitMethodDeclaration(node);
+        _currentCallerId = previousCaller;
     }
 
     public override void VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
     {
         var name = node.Identifier.Text;
-        // Use .ctor suffix to avoid ID collision with the class itself
+        // Use .ctor suffix to avoid ID collision with the class itself, and
+        // name the symbol "X.ctor" so find_references/find_symbol by name
+        // never confuse the constructor with the type it constructs.
         var ctorId = MakeId($"{name}.ctor");
-        var sym = MakeMemberSymbol(name, "CONSTRUCTOR", node, ctorId);
+        var sym = MakeMemberSymbol($"{name}.ctor", "CONSTRUCTOR", node, ctorId);
         var parameters = node.ParameterList?.ToString() ?? "()";
         sym.Signature = $"{name}{parameters}";
         Symbols.Add(sym);
 
+        foreach (var parameter in node.ParameterList?.Parameters ?? new SeparatedSyntaxList<ParameterSyntax>())
+            RecordTypeNode(sym.Id, parameter.Type, LineOf(parameter), "parameter");
+
         if (_currentParentId != null)
             Relationships.Add(MakeContains(_currentParentId, sym.Id));
 
-        ExtractMethodCalls(node.Body, sym.Id);
+        foreach (var p in node.ParameterList?.Parameters ?? new SeparatedSyntaxList<ParameterSyntax>())
+        {
+            var ptype = ExtractSimpleName(p.Type?.ToString() ?? "");
+            if (!string.IsNullOrEmpty(ptype))
+                _scopeTypes[p.Identifier.Text] = (ptype, "parameter");
+        }
+
+        SyntaxNode? callScope = node.Body != null ? node.Body : node.ExpressionBody;
+        ExtractMethodCalls(callScope, sym.Id, CollectLocals(node.Body));
+
+        // Walk the body with this constructor as the referencing context.
+        var previousCaller = _currentCallerId;
+        _currentCallerId = sym.Id;
         base.VisitConstructorDeclaration(node);
+        _currentCallerId = previousCaller;
     }
 
     public override void VisitDestructorDeclaration(DestructorDeclarationSyntax node)
@@ -362,6 +496,10 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
 
         ExtractAttributes(node.AttributeLists, sym);
         Symbols.Add(sym);
+
+        RecordTypeNode(sym.Id, node.Type, LineOf(node), "declaration");
+
+        _scopeTypes[name] = (ExtractSimpleName(node.Type.ToString()), "property");
 
         if (_currentParentId != null)
             Relationships.Add(MakeContains(_currentParentId, sym.Id));
@@ -388,6 +526,13 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
             Symbols.Add(sym);
             if (_currentParentId != null)
                 Relationships.Add(MakeContains(_currentParentId, sym.Id));
+
+            RecordTypeNode(sym.Id, node.Declaration.Type, LineOf(node), "declaration");
+
+            // Track the field's type for receiver resolution (skip `var`)
+            var fieldType = ExtractSimpleName(node.Declaration.Type.ToString());
+            if (fieldType != "var")
+                _scopeTypes[name] = (fieldType, "field");
         }
         base.VisitFieldDeclaration(node);
     }
@@ -398,6 +543,8 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         var sym = MakeMemberSymbol(name, "EVENT", node, MakeId(name));
         sym.Signature = $"event {node.Type} {name}";
         Symbols.Add(sym);
+
+        RecordTypeNode(sym.Id, node.Type, LineOf(node), "declaration");
 
         if (_currentParentId != null)
             Relationships.Add(MakeContains(_currentParentId, sym.Id));
@@ -414,10 +561,168 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
             sym.Signature = $"event {node.Declaration.Type} {name}";
             Symbols.Add(sym);
 
+            RecordTypeNode(sym.Id, node.Declaration.Type, LineOf(node), "declaration");
+
             if (_currentParentId != null)
                 Relationships.Add(MakeContains(_currentParentId, sym.Id));
         }
         base.VisitEventFieldDeclaration(node);
+    }
+
+    // ============================================================
+    // Object creation — INSTANTIATES edges
+    // ============================================================
+
+    public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
+    {
+        // `new X(...)` — record an INSTANTIATES edge from the innermost member
+        // (or its containing type, for field/property initializers) to X.
+        // This is what makes find_references(X) answer "who instantiates X".
+        var typeName = ExtractSimpleName(node.Type.ToString());
+        var callerId = _currentCallerId ?? _currentParentId;
+
+        if (!string.IsNullOrEmpty(typeName) && callerId != null)
+        {
+            // Same-file type → exact target ID. Otherwise a tentative ID that
+            // the cross-file resolver rewrites against the symbol table.
+            var targetId = _declaredTypeIds.TryGetValue(typeName, out var knownId)
+                ? knownId
+                : MakeId(typeName);
+
+            Relationships.Add(new BridgeRelationship
+            {
+                Id = $"{callerId}|instantiates|{targetId}",
+                SourceSymbolId = callerId,
+                TargetSymbolId = targetId,
+                Kind = "INSTANTIATES",
+                Metadata = new Dictionary<string, object?> { ["typeName"] = typeName }
+            });
+        }
+
+        // Also a type usage (and the only way to reach generic arguments of
+        // `new List<ProfileDto>()`). Same line as INSTANTIATES — find_references
+        // merges lines, so the occurrence is counted once.
+        RecordTypeNode(callerId, node.Type, LineOf(node), "new");
+
+        base.VisitObjectCreationExpression(node);
+    }
+
+    // ============================================================
+    // Type usages — USES_TYPE edges
+    //
+    // Data types (DTOs, records, entities) are mentioned far more often than
+    // they are instantiated or called: declarations, generic arguments, casts,
+    // typeof, is/as, patterns and static member access. Without these edges
+    // find_references(Dto) only saw `new Dto()` and reported a fraction of the
+    // real usages.
+    // ============================================================
+
+    public override void VisitLocalDeclarationStatement(LocalDeclarationStatementSyntax node)
+    {
+        RecordTypeNode(_currentCallerId, node.Declaration.Type, LineOf(node), "local");
+        base.VisitLocalDeclarationStatement(node);
+    }
+
+    public override void VisitForStatement(ForStatementSyntax node)
+    {
+        if (node.Declaration != null)
+            RecordTypeNode(_currentCallerId, node.Declaration.Type, LineOf(node), "local");
+        base.VisitForStatement(node);
+    }
+
+    public override void VisitForEachStatement(ForEachStatementSyntax node)
+    {
+        RecordTypeNode(_currentCallerId, node.Type, LineOf(node), "local");
+        base.VisitForEachStatement(node);
+    }
+
+    public override void VisitCatchDeclaration(CatchDeclarationSyntax node)
+    {
+        RecordTypeNode(_currentCallerId, node.Type, LineOf(node), "catch");
+        base.VisitCatchDeclaration(node);
+    }
+
+    public override void VisitTypeOfExpression(TypeOfExpressionSyntax node)
+    {
+        RecordTypeNode(_currentCallerId, node.Type, LineOf(node), "typeof");
+        base.VisitTypeOfExpression(node);
+    }
+
+    public override void VisitCastExpression(CastExpressionSyntax node)
+    {
+        RecordTypeNode(_currentCallerId, node.Type, LineOf(node), "cast");
+        base.VisitCastExpression(node);
+    }
+
+    public override void VisitBinaryExpression(BinaryExpressionSyntax node)
+    {
+        if ((node.IsKind(SyntaxKind.IsExpression) || node.IsKind(SyntaxKind.AsExpression))
+            && node.Right is TypeSyntax rightType)
+        {
+            RecordTypeNode(_currentCallerId, rightType, LineOf(node),
+                node.IsKind(SyntaxKind.IsExpression) ? "is" : "as");
+        }
+        base.VisitBinaryExpression(node);
+    }
+
+    public override void VisitDeclarationPattern(DeclarationPatternSyntax node)
+    {
+        RecordTypeNode(_currentCallerId, node.Type, LineOf(node), "pattern");
+        base.VisitDeclarationPattern(node);
+    }
+
+    public override void VisitTypePattern(TypePatternSyntax node)
+    {
+        RecordTypeNode(_currentCallerId, node.Type, LineOf(node), "pattern");
+        base.VisitTypePattern(node);
+    }
+
+    public override void VisitRecursivePattern(RecursivePatternSyntax node)
+    {
+        if (node.Type != null)
+            RecordTypeNode(_currentCallerId, node.Type, LineOf(node), "pattern");
+        base.VisitRecursivePattern(node);
+    }
+
+    public override void VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
+    {
+        // `X.Member` where X is a type (static access, const, enum member) is a
+        // usage of X that never produces a call edge.
+        if (node.Expression is IdentifierNameSyntax receiver && IsTypeReceiver(receiver.Identifier.Text))
+            RecordTypeUsage(_currentCallerId, receiver.Identifier.Text, LineOf(node), "member");
+        base.VisitMemberAccessExpression(node);
+    }
+
+    public override void VisitInvocationExpression(InvocationExpressionSyntax node)
+    {
+        // nameof(X) mentions the type by name.
+        if (node.Expression is IdentifierNameSyntax identifier && identifier.Identifier.Text == "nameof"
+            && node.ArgumentList.Arguments.Count > 0
+            && node.ArgumentList.Arguments[0].Expression is IdentifierNameSyntax argument)
+        {
+            RecordTypeUsage(_currentCallerId, argument.Identifier.Text, LineOf(node), "nameof");
+        }
+
+        // Generic method calls: Array.Empty<Dto>(), cache.GetOrAdd<Dto>(...).
+        var generic = node.Expression as GenericNameSyntax
+            ?? (node.Expression as MemberAccessExpressionSyntax)?.Name as GenericNameSyntax;
+        if (generic != null)
+        {
+            foreach (var typeArgument in generic.TypeArgumentList.Arguments)
+                RecordTypeNode(_currentCallerId, typeArgument, LineOf(node), "generic");
+        }
+
+        base.VisitInvocationExpression(node);
+    }
+
+    public override void VisitLocalFunctionStatement(LocalFunctionStatementSyntax node)
+    {
+        // Local functions have no symbol of their own; their signature usage is
+        // attributed to the enclosing member.
+        RecordTypeNode(_currentCallerId, node.ReturnType, LineOf(node), "return");
+        foreach (var parameter in node.ParameterList.Parameters)
+            RecordTypeNode(_currentCallerId, parameter.Type, LineOf(parameter), "parameter");
+        base.VisitLocalFunctionStatement(node);
     }
 
     // ============================================================
@@ -428,6 +733,19 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
     {
         var importPath = node.Name?.ToString() ?? "";
         if (string.IsNullOrEmpty(importPath)) return;
+
+        // `using MyApp.Models;` makes that namespace visible. Aliases and
+        // `using static` point at a type/member, so record their parent
+        // namespace — `Alias.Type` references still resolve with it.
+        if (node.Alias != null || node.StaticKeyword.IsKind(SyntaxKind.StaticKeyword))
+        {
+            var lastDot = importPath.LastIndexOf('.');
+            if (lastDot > 0) _usingNamespaces.Add(importPath[..lastDot]);
+        }
+        else
+        {
+            _usingNamespaces.Add(importPath);
+        }
 
         var sourceId = MakeId($"import:{importPath}");
         var targetId = MakeId(importPath);
@@ -552,8 +870,12 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
 
     /// <summary>
     /// Extract method invocations from a method body and add CALLS relationships.
+    /// The receiver expression is classified with a syntax-level type map
+    /// (fields, properties, parameters, locals) so cross-class calls carry
+    /// receiverType metadata for deterministic resolution downstream.
     /// </summary>
-    private void ExtractMethodCalls(BlockSyntax? body, string callerId)
+    private void ExtractMethodCalls(SyntaxNode? body, string callerId,
+        Dictionary<string, (string Type, string Kind)>? methodLocals = null)
     {
         if (body == null) return;
 
@@ -561,26 +883,116 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
         foreach (var invocation in invocations)
         {
             string calledName;
+            string? receiverType = null;
+            string? receiverExpr = null;
+            string? receiverKind = null;
+
             if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+            {
                 calledName = ExtractSimpleName(memberAccess.Name.Identifier.Text);
+                var recv = memberAccess.Expression;
+
+                if (recv is IdentifierNameSyntax rid)
+                {
+                    var recvName = rid.Identifier.Text;
+                    receiverExpr = recvName;
+                    var scoped = LookupScopeType(recvName, methodLocals);
+                    if (scoped.HasValue)
+                    {
+                        receiverType = scoped.Value.Type;
+                        receiverKind = scoped.Value.Kind;
+                    }
+                    else if (_declaredTypes.Contains(recvName)
+                        || (recvName.Length > 0 && char.IsUpper(recvName[0])))
+                    {
+                        // Static call on a type name (OrderValidator.Validate())
+                        receiverType = recvName;
+                        receiverKind = "type";
+                    }
+                }
+                else if (recv is ThisExpressionSyntax)
+                {
+                    // Same class — the raw target is already scoped correctly.
+                    receiverExpr = "this";
+                    receiverKind = "this";
+                }
+                else if (recv is ObjectCreationExpressionSyntax oc)
+                {
+                    receiverType = ExtractSimpleName(oc.Type.ToString());
+                    receiverExpr = $"new {receiverType}";
+                    receiverKind = "constructor";
+                }
+                // Chained access (a.B().C()) or invocation results — type unknown,
+                // leave metadata empty and rely on the name-based fallback.
+            }
             else if (invocation.Expression is IdentifierNameSyntax identifier)
+            {
                 calledName = identifier.Identifier.Text;
+            }
             else
+            {
                 continue;
+            }
 
             if (calledName == "ToString" || calledName == "GetType" || calledName == "Equals"
-                || calledName == "GetHashCode" || calledName == "Dispose" || calledName == "DisposeAsync")
+                || calledName == "GetHashCode" || calledName == "Dispose" || calledName == "DisposeAsync"
+                || calledName == "nameof")
                 continue;
 
             var targetId = MakeId(calledName);
-            Relationships.Add(new BridgeRelationship
+            var rel = new BridgeRelationship
             {
                 Id = $"{callerId}|calls|{targetId}",
                 SourceSymbolId = callerId,
                 TargetSymbolId = targetId,
                 Kind = "CALLS"
-            });
+            };
+
+            if (receiverType != null)
+            {
+                rel.Metadata["receiverType"] = receiverType;
+                rel.Metadata["receiverExpr"] = receiverExpr;
+                rel.Metadata["receiverKind"] = receiverKind;
+            }
+            else if (receiverExpr != null)
+            {
+                rel.Metadata["receiverExpr"] = receiverExpr;
+                if (receiverKind != null)
+                    rel.Metadata["receiverKind"] = receiverKind;
+            }
+
+            Relationships.Add(rel);
         }
+    }
+
+    /// <summary>
+    /// Local variables with explicit types (skip `var`) — their type is known
+    /// syntactically and helps resolve `dto.Map()`-style receivers.
+    /// </summary>
+    private static Dictionary<string, (string Type, string Kind)> CollectLocals(BlockSyntax? body)
+    {
+        var locals = new Dictionary<string, (string Type, string Kind)>();
+        if (body == null) return locals;
+
+        foreach (var local in body.DescendantNodes().OfType<LocalDeclarationStatementSyntax>())
+        {
+            var typeName = ExtractSimpleName(local.Declaration.Type.ToString());
+            if (typeName == "var") continue;
+            foreach (var v in local.Declaration.Variables)
+                locals[v.Identifier.Text] = (typeName, "local");
+        }
+        return locals;
+    }
+
+    private (string Type, string Kind)? LookupScopeType(
+        string name,
+        Dictionary<string, (string Type, string Kind)>? methodLocals)
+    {
+        if (methodLocals != null && methodLocals.TryGetValue(name, out var local))
+            return local;
+        if (_scopeTypes.TryGetValue(name, out var scoped))
+            return scoped;
+        return null;
     }
 
     private void DetectConvention(BridgeSymbol sym, string name)
@@ -665,6 +1077,171 @@ public class CSharpAnalyzer : CSharpSyntaxWalker
             }
         }
     }
+
+    // ============================================================
+    // Type usage helpers
+    // ============================================================
+
+    private static int LineOf(SyntaxNode node) =>
+        node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+
+    /** Record every type mentioned by a type syntax (generics included). */
+    private void RecordTypeNode(string? callerId, TypeSyntax? type, int line, string kind)
+    {
+        if (type == null) return;
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        CollectTypeNames(type, names);
+        foreach (var name in names)
+            RecordTypeUsage(callerId, name, line, kind);
+    }
+
+    private void RecordTypeUsage(string? callerId, string? typeName, int line, string kind)
+    {
+        var caller = callerId ?? _currentParentId;
+        if (caller == null || string.IsNullOrEmpty(typeName)) return;
+        if (IsBuiltinType(typeName)) return;
+
+        var key = (caller, typeName);
+        if (!_typeUsages.TryGetValue(key, out var usage))
+        {
+            usage = new TypeUsage { Namespace = _currentNamespace };
+            _typeUsages[key] = usage;
+        }
+        usage.Lines.Add(line);
+        usage.Kinds.Add(kind);
+    }
+
+    /** A type used as a receiver (`X.Member`) is not a variable/field in scope. */
+    private bool IsTypeReceiver(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        if (_declaredTypes.Contains(name)) return true;
+        if (_scopeTypes.ContainsKey(name)) return false;
+        return char.IsUpper(name[0]);
+    }
+
+    /**
+     * Materialize collected type usages as USES_TYPE edges. Called once after
+     * the file is walked: each usage keeps the namespace that was in effect at
+     * its own line, not the last namespace of the file.
+     */
+    public void FlushTypeUsages()
+    {
+        var usings = _usingNamespaces.OrderBy(u => u, StringComparer.Ordinal).ToList();
+
+        foreach (var entry in _typeUsages)
+        {
+            var (callerId, typeName) = entry.Key;
+            var usage = entry.Value;
+            var targetId = _declaredTypeIds.TryGetValue(typeName, out var knownId)
+                ? knownId
+                : MakeTentativeTypeId(typeName, usage.Namespace);
+
+            Relationships.Add(new BridgeRelationship
+            {
+                Id = $"{callerId}|uses_type|{targetId}",
+                SourceSymbolId = callerId,
+                TargetSymbolId = targetId,
+                Kind = "USES_TYPE",
+                Metadata = new Dictionary<string, object?>
+                {
+                    ["typeName"] = typeName,
+                    ["namespace"] = usage.Namespace,
+                    ["usings"] = usings,
+                    ["lines"] = usage.Lines.ToList(),
+                    ["count"] = usage.Lines.Count,
+                    ["usageKinds"] = usage.Kinds.ToList(),
+                },
+            });
+        }
+    }
+
+    /** ID for a type declared in another file — resolved later by the symbol table. */
+    private string MakeTentativeTypeId(string typeName, string ns)
+    {
+        var prefix = string.IsNullOrEmpty(ns) ? "" : $"{ns}.";
+        return $"{_repo}::{_relPath}::{prefix}{typeName}";
+    }
+
+    /**
+     * Collect simple type names from a type syntax, including generic arguments:
+     * `Dictionary<string, List<ProfileDto>>` → ProfileDto (BCL names are filtered
+     * at record time). Qualified names keep only the last segment.
+     */
+    private static void CollectTypeNames(TypeSyntax? type, ISet<string> sink)
+    {
+        switch (type)
+        {
+            case null:
+            case PredefinedTypeSyntax:
+            case OmittedTypeArgumentSyntax:
+                return;
+            case IdentifierNameSyntax identifier:
+                sink.Add(identifier.Identifier.Text);
+                return;
+            case GenericNameSyntax generic:
+                sink.Add(generic.Identifier.Text);
+                foreach (var argument in generic.TypeArgumentList.Arguments)
+                    CollectTypeNames(argument, sink);
+                return;
+            case QualifiedNameSyntax qualified:
+                CollectTypeNames(qualified.Right, sink);
+                return;
+            case AliasQualifiedNameSyntax alias:
+                CollectTypeNames(alias.Name, sink);
+                return;
+            case ArrayTypeSyntax array:
+                CollectTypeNames(array.ElementType, sink);
+                return;
+            case NullableTypeSyntax nullable:
+                CollectTypeNames(nullable.ElementType, sink);
+                return;
+            case PointerTypeSyntax pointer:
+                CollectTypeNames(pointer.ElementType, sink);
+                return;
+            case RefTypeSyntax reference:
+                CollectTypeNames(reference.Type, sink);
+                return;
+            case TupleTypeSyntax tuple:
+                foreach (var element in tuple.Elements)
+                    CollectTypeNames(element.Type, sink);
+                return;
+            case FunctionPointerTypeSyntax functionPointer:
+                // Roslyn exposes the return type as the last parameter of the list.
+                foreach (var parameter in functionPointer.ParameterList.Parameters)
+                    CollectTypeNames(parameter.Type, sink);
+                return;
+            default:
+                var simple = ExtractSimpleName(type.ToString());
+                if (!string.IsNullOrEmpty(simple)) sink.Add(simple);
+                return;
+        }
+    }
+
+    /**
+     * Primitives and BCL types that can never be a repo type. Filtering them
+     * here keeps the unresolved-relationship buffer small: every USES_TYPE edge
+     * whose target does not exist in the symbol table is retried on each flush.
+     */
+    private static bool IsBuiltinType(string name) => BuiltinTypeNames.Contains(name);
+
+    private static readonly HashSet<string> BuiltinTypeNames = new(StringComparer.Ordinal)
+    {
+        // Primitives
+        "bool", "byte", "sbyte", "char", "decimal", "double", "float", "int",
+        "uint", "long", "ulong", "short", "ushort", "object", "string", "void",
+        "var", "dynamic", "nint", "nuint",
+        // BCL containers and framework types
+        "Action", "Array", "Comparer", "Console", "Convert", "DateTime",
+        "DateTimeOffset", "Debug", "Dictionary", "Directory", "Enumerable",
+        "Environment", "EqualityComparer", "Exception", "File", "Func", "Guid",
+        "HashSet", "IAsyncEnumerable", "ICollection", "IComparable", "IDictionary",
+        "IDisposable", "IEnumerable", "IEquatable", "IList", "IReadOnlyCollection",
+        "IReadOnlyDictionary", "IReadOnlyList", "ISet", "KeyValuePair", "Lazy",
+        "List", "Math", "Memory", "Nullable", "Path", "Predicate", "Queryable",
+        "ReadOnlyMemory", "ReadOnlySpan", "Regex", "Span", "String", "Task",
+        "TimeSpan", "Tuple", "ValueTask",
+    };
 
     /// <summary>
     /// Extract the simple name from a potentially generic-qualified type name.

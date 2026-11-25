@@ -1,0 +1,11 @@
+# YATS — keep the Docker build context small
+node_modules
+.git
+dist
+build
+.next
+*.log
+.env
+docker/neo4j/data
+packages/mcp-server/dist
+packages/yats-toolkit/dist

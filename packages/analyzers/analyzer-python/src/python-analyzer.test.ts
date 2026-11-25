@@ -115,6 +115,52 @@ async def create_user(data: dict):
 
     const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
     assert.equal(routes.length, 2, `Expected 2 ROUTEs, got ${routes.length}`);
+
+    const getRoute = routes.find((r) => r.name === "get_users");
+    assert.ok(getRoute, "get_users should be a route");
+    assert.equal(getRoute.metadata["httpMethod"], "GET");
+    assert.equal(getRoute.metadata["routePath"], "/users");
+
+    const postRoute = routes.find((r) => r.name === "create_user");
+    assert.equal(postRoute.metadata["httpMethod"], "POST");
+    assert.equal(postRoute.metadata["routePath"], "/users");
+  });
+
+  it("detects Flask @app.route decorators with methods (P5)", async () => {
+    const code = `
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/users", methods=["GET"])
+def list_users():
+    return []
+
+@app.route("/users", methods=["POST"])
+def create_user():
+    return {"id": 1}
+
+@app.route("/health")
+def health():
+    return "ok"
+`;
+    const result = await analyzer.analyze("app.py", code, "test-repo");
+
+    const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
+    assert.equal(routes.length, 3, `Expected 3 ROUTEs, got ${routes.length}`);
+
+    const listRoute = routes.find((r) => r.name === "list_users");
+    assert.equal(listRoute.metadata["framework"], "flask");
+    assert.equal(listRoute.metadata["httpMethod"], "GET");
+    assert.equal(listRoute.metadata["routePath"], "/users");
+
+    const createRoute = routes.find((r) => r.name === "create_user");
+    assert.equal(createRoute.metadata["httpMethod"], "POST");
+
+    // methods= omitted → GET by default
+    const healthRoute = routes.find((r) => r.name === "health");
+    assert.equal(healthRoute.metadata["httpMethod"], "GET");
+    assert.equal(healthRoute.metadata["routePath"], "/health");
   });
 
   it("detects imports", async () => {
@@ -178,5 +224,57 @@ class PaymentEntity:
   it("returns empty results for empty file", async () => {
     const result = await analyzer.analyze("empty.py", "", "test-repo");
     assert.equal(result.errors.length, 0);
+  });
+});
+
+describe("PythonAnalyzer — USES_TYPE edges", () => {
+  it("records annotations, generics and isinstance", async () => {
+    const code = `
+from dataclasses import dataclass
+from typing import List, Optional
+
+@dataclass
+class ProfileDto:
+    id: int
+    name: str
+
+class ProfileService:
+    def __init__(self, seed: ProfileDto):
+        self.seed = seed
+        self.cache: List[ProfileDto] = []
+
+    def get(self, profile_id: int) -> Optional[ProfileDto]:
+        found: ProfileDto = self.seed
+        if isinstance(found, ProfileDto):
+            return found
+        return None
+`;
+    const result = await analyzer.analyze("services/profiles.py", code, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    const profile = result.symbols.find((s) => s.name === "ProfileDto");
+    assert.ok(profile, "ProfileDto symbol missing");
+
+    for (const edge of uses) {
+      assert.equal(edge.metadata?.typeName, "ProfileDto");
+      const lines = edge.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0);
+      assert.ok(lines.every((l) => l > 1), `lines should be real positions, got ${lines}`);
+    }
+
+    const targetIds = new Set(uses.map((u) => u.targetSymbolId));
+    assert.ok(targetIds.has(profile!.id), `same-file target must be exact, got ${[...targetIds]}`);
+
+    const kinds = new Set<string>();
+    for (const edge of uses) {
+      for (const kind of (edge.metadata?.usageKinds as string[]) ?? []) kinds.add(kind);
+    }
+    for (const expected of ["parameter", "return", "declaration", "isinstance"]) {
+      assert.ok(kinds.has(expected), `missing usage kind ${expected} (got ${[...kinds]})`);
+    }
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "List"));
   });
 });

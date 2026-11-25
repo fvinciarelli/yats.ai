@@ -7,7 +7,7 @@ set -e
 
 QUESTION_FILE="$1"
 USE_YATS="$2"
-MODEL="${YATS_BENCH_MODEL:-sonnet}"
+YATS_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 QUESTION=$(cat "$QUESTION_FILE")
 
 # Dynamic claude.json
@@ -17,7 +17,7 @@ if [ "$USE_YATS" = "--with-yats" ]; then
   "env": {"API_TIMEOUT_MS": "3000000"},
   "permissions": {"defaultMode": "default"},
   "projects": {
-    "/home/franco/cosas/code_indexer": {
+    "$YATS_ROOT": {
       "mcpServers": {
         "yats": {"type": "sse", "url": "http://localhost:5555/mcp/sse"}
       }

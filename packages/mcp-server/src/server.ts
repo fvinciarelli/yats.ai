@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from "@yats/shared";
+import { createLogger, type Logger, canonicalRepoPath } from "@yats/shared";
 import * as http from "node:http";
 import * as crypto from "node:crypto";
 import {
@@ -9,6 +9,7 @@ import {
   type McpDependencies,
 } from "./tools/all-tools.js";
 import { validateArgs } from "./middleware/validation.js";
+import { decideRegistration, uniqueRepositoryName } from "./repository-identity.js";
 
 // ============================================================
 // Types
@@ -47,6 +48,7 @@ export class McpServer {
   private readonly handlers: Map<string, ToolHandler>;
   private readonly logger: Logger;
   private readonly indexer: McpDependencies["indexer"];
+  private readonly graphRepository: McpDependencies["graphRepository"];
   private running = false;
 
   constructor(deps: McpDependencies) {
@@ -54,6 +56,7 @@ export class McpServer {
     this.tools = getAllToolDefinitions();
     this.handlers = createToolHandlers(deps);
     this.indexer = deps.indexer;
+    this.graphRepository = deps.graphRepository;
   }
 
   // ==========================================================
@@ -326,8 +329,34 @@ export class McpServer {
         this.handleIndexFile(req, res);
         return;
       }
+      // File-hash state — lets the CLI diff against the last indexed content
+      if (req.method === "GET" && url.pathname === "/index/state") {
+        this.handleGetIndexState(req, res, url);
+        return;
+      }
+      // Finalize endpoint — flush pending relationships (cross-file resolution)
+      if (req.method === "POST" && url.pathname === "/index/complete") {
+        this.handleIndexComplete(req, res);
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/index/remove") {
         this.handleIndexRemove(req, res);
+        return;
+      }
+
+      // Last indexed commit — read/write (used by commit-based `yats watch`, P1)
+      if (req.method === "GET" && url.pathname === "/index/commit") {
+        this.handleGetIndexCommit(req, res, url);
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/index/commit") {
+        this.handleSetIndexCommit(req, res);
+        return;
+      }
+
+      // Rebuild vector index (re-embed all symbols) — used by `yats reindex --rebuild-vectors`
+      if (req.method === "POST" && url.pathname === "/reindex") {
+        this.handleRebuildVectors(req, res);
         return;
       }
 
@@ -468,15 +497,44 @@ export class McpServer {
   ): Promise<void> {
     const body = await this.readBody(req);
     try {
-      const { path: repoPath } = JSON.parse(body);
-      if (!repoPath) {
+      const { path: rawPath } = JSON.parse(body);
+      if (!rawPath) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "path is required" }));
         return;
       }
-      const result = await this.indexer.ensureIndexed(repoPath);
+      // The CLI walks the host filesystem and streams files via /index/file —
+      // the server only registers the repo metadata here (it may run in a
+      // container without access to host paths).
+      //
+      // Identity: the path is canonicalized (`C:\\Repo\\`, `C:/Repo` and
+      // `/c/Repo` are the same folder) and an existing repository always wins,
+      // so indexing from another shell/agent spelling can never split the index
+      // in two. Legacy entries (e.g. indexed as ".") are returned as-is with a
+      // warning instead of being duplicated.
+      const canonical = canonicalRepoPath(rawPath, { cwd: "" });
+      // Look up with the raw spelling too: legacy entries are stored verbatim
+      // (e.g. with a trailing slash) and the exact match is what finds them.
+      const existing = await this.graphRepository.findRepositoryByPath(rawPath);
+      const decision = decideRegistration(rawPath, existing);
+
+      if (decision.register) {
+        const repos = await this.graphRepository.listRepositories();
+        const desired = decision.repository.split("/").pop() || decision.repository;
+        const repoName = uniqueRepositoryName(desired, decision.repository, repos);
+        await this.indexer.registerRepository(repoName, decision.repository);
+      }
+
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(result));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          repository: decision.repository,
+          path: canonical,
+          registered: decision.register,
+          ...(decision.warning ? { warning: decision.warning } : {}),
+        }),
+      );
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));
@@ -498,9 +556,57 @@ export class McpServer {
         res.end(JSON.stringify({ error: "repoName/repository, filePath/path, and content are required" }));
         return;
       }
-      const result = await this.indexer.indexFileContent(repoName, filePath, content);
+      const result = await this.indexer.indexFileContent(
+        repoName,
+        filePath,
+        content,
+        typeof params.contentHash === "string" ? params.contentHash : undefined,
+      );
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, status: result.status, reason: result.reason, file: filePath }));
+      res.end(JSON.stringify({ ok: true, file: filePath, skipped: result.status === "skipped" }));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleGetIndexState(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const repository = url.searchParams.get("repository") ?? url.searchParams.get("repoName");
+    if (!repository) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "repository query param is required" }));
+      return;
+    }
+    try {
+      const state = await this.indexer.getIndexState(repository);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(state));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleIndexComplete(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = await this.readBody(req);
+    try {
+      const params = JSON.parse(body);
+      const repoName = params.repository || params.repoName;
+      if (!repoName) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "repository is required" }));
+        return;
+      }
+      const result = await this.indexer.finalizeRepository(repoName);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, repository: repoName, ...result }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));
@@ -524,6 +630,77 @@ export class McpServer {
       res.end(JSON.stringify({ ok: true, removed: result.removed, file: path }));
     } catch (err: any) {
       res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  /**
+   * GET /index/commit?repository=<rootPath> — the commit the server considers
+   * the repository indexed at (null if never recorded). Used by the
+   * commit-based `yats watch` to know where to start diffing from.
+   */
+  private async handleGetIndexCommit(
+    _req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const repository = url.searchParams.get("repository");
+    if (!repository) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "repository query parameter is required" }));
+      return;
+    }
+    try {
+      const commit = await this.graphRepository.getLastIndexedCommit(repository);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, repository, commit }));
+    } catch (err: any) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  /**
+   * POST /index/commit {repository, commit} — record that the repository was
+   * indexed at this commit. Called by `yats index` after a full run and by
+   * `yats watch` after applying a commit diff. Ensures the Repository node
+   * exists first (watch may record without a prior /index registration).
+   */
+  private async handleSetIndexCommit(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = await this.readBody(req);
+    try {
+      const { repository, commit } = JSON.parse(body);
+      if (!repository || !commit) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "repository and commit are required" }));
+        return;
+      }
+      await this.graphRepository.upsertRepositoryMetadata(
+        repository.split("/").pop() || repository,
+        repository,
+      );
+      await this.graphRepository.setLastIndexedCommit(repository, commit);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, repository, commit }));
+    } catch (err: any) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  private async handleRebuildVectors(
+    _req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const result = await this.indexer.rebuildVectors();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+    } catch (err: any) {
+      res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));
     }
   }

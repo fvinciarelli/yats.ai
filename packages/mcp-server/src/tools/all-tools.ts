@@ -1,6 +1,7 @@
 import { createLogger, type Logger } from "@yats/shared";
-import type { GraphRepository, VectorRepository, EmbeddingGenerator, FileSystem, Retriever, Indexer } from "@yats/shared";
+import type { GraphRepository, VectorRepository, EmbeddingGenerator, FileSystem, Retriever, Indexer, GraphSymbol } from "@yats/shared";
 import { Language, SymbolKind, RelationshipKind, CollectionName } from "@yats/shared";
+import { markDuplicateRepositories } from "../repository-identity.js";
 import type { RankedContextItem, RetrievalQuery } from "@yats/shared";
 import * as path from "node:path";
 
@@ -55,17 +56,14 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     ARCHITECTURE_SUMMARY,
     SEARCH_SIMILAR,
     LIST_REPOSITORIES,
-    INDEX_REPOSITORY,
     DELETE_REPOSITORY,
-    REINDEX,
-    INDEX_FILE,
-    REMOVE_FILE,
+    REBUILD_VECTORS,
   ];
 }
 
 const SEARCH_CODE: ToolDefinition = {
   name: "search_code",
-  description: "Search indexed code using natural language. Finds relevant symbols, functions, and classes. If the repo isn't indexed yet, you'll get a hint to call index_repository first.",
+  description: "Search indexed code using natural language. Finds relevant symbols, functions, and classes. To verify your repo is indexed: call list_repositories (or run 'yats list' on the host). If your repo is missing, run 'yats index <full-path-of-repo>' on the host and wait for it to finish, then retry this tool.",
   inputSchema: {
     type: "object",
     properties: {
@@ -114,16 +112,23 @@ const FIND_SYMBOL: ToolDefinition = {
 
 const FIND_REFERENCES: ToolDefinition = {
   name: "find_references",
-  description: "Find all symbols that reference the given symbol. Provide either symbolId or name+repository.",
+  description:
+    "Find every symbol that references the given symbol, grouped per referencing symbol. " +
+    "Each result lists the relation types (CALLS, INSTANTIATES, USES_TYPE, REFERENCES, IMPORTS) " +
+    "and, for type usages/instantiations, the `lines` where the symbol appears — so a DTO used " +
+    "40 times shows up as its real usages instead of a single collapsed row. " +
+    "When several symbols share the exact name (e.g. the same DTO in two namespaces), usages of " +
+    "ALL of them are returned and each row carries `matchedTargetIds`. " +
+    "Provide either symbolId or name+repository/path.",
   inputSchema: {
     type: "object",
     properties: {
       symbolId: { type: "string" },
       name: { type: "string" },
       repository: { type: "string" },
-      limit: { type: "number", default: 20 },
+      path: { type: "string" },
+      limit: { type: "number", default: 200 },
     },
-    required: ["repository"],
   },
 };
 
@@ -204,16 +209,16 @@ const FIND_TESTS: ToolDefinition = {
 
 const FIND_ROUTES: ToolDefinition = {
   name: "find_routes",
-  description: "Find HTTP routes / API endpoints in the repository.",
+  description: "Find HTTP routes / API endpoints in the repository. Filter by HTTP method (GET/POST/PUT/PATCH/DELETE) and/or partial path.",
   inputSchema: {
     type: "object",
     properties: {
-      repository: { type: "string" },
-      method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-      path: { type: "string", description: "Partial path match" },
+      path: { type: "string", description: "Root path of the repository (from list_repositories or your current working directory)" },
+      repository: { type: "string", description: "Repository name (alternative to path)" },
+      method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"], description: "Exact HTTP method to filter by" },
+      routePath: { type: "string", description: "Partial route path to match (e.g. /users)" },
       limit: { type: "number", default: 30 },
     },
-    required: ["repository"],
   },
 };
 
@@ -400,24 +405,11 @@ const CREATE_FILE: ToolDefinition = {
 
 const LIST_REPOSITORIES: ToolDefinition = {
   name: "list_repositories",
-  description: "List all indexed repositories with their root paths. Call this when you start working in a directory to discover which repos are available for code search.",
+  description: "List all indexed repositories with their root paths. Call this at the start of your session to verify your repo is indexed. If your working directory is missing from the list, index it by running 'yats index <full-path-of-repo>' on the host (wait for it to finish), then retry.",
   inputSchema: {
     type: "object",
     properties: {},
     required: [],
-  },
-};
-
-const INDEX_REPOSITORY: ToolDefinition = {
-  name: "index_repository",
-  description: "Index a repository so it becomes searchable. This tool tells you the command to run — the actual indexing happens via the 'yats index' CLI on your machine, which walks local files and sends them to the YATS server.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the repository to index" },
-      skipDocs: { type: "boolean", description: "Skip documentation files (markdown, etc.) for faster indexing. Use true for large repos with lots of docs." },
-    },
-    required: ["path"],
   },
 };
 
@@ -435,41 +427,13 @@ const DELETE_REPOSITORY: ToolDefinition = {
   },
 };
 
-const REINDEX: ToolDefinition = {
-  name: "reindex",
-  description: "Re-index a repository to pick up recent changes. Use this after you or the user has modified code files and the index may be stale. Only re-indexes changed files when git is available.",
+const REBUILD_VECTORS: ToolDefinition = {
+  name: "rebuild_vectors",
+  description: "Rebuild the vector index after the embedding model/dimension changed. Re-embeds all symbols and may incur API costs — always ask the user before proceeding.",
   inputSchema: {
     type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the repository to reindex" },
-    },
-    required: ["path"],
-  },
-};
-
-const INDEX_FILE: ToolDefinition = {
-  name: "index_file",
-  description: "Re-index a single file after editing it. Call this immediately after you modify a file so the knowledge graph stays up to date.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the file that was modified" },
-      repository: { type: "string", description: "Repository name (as shown in list_repositories)" },
-    },
-    required: ["path", "repository"],
-  },
-};
-
-const REMOVE_FILE: ToolDefinition = {
-  name: "remove_file",
-  description: "Remove a deleted file from the index. Call this after you delete a file so the knowledge graph doesn't reference dead code.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Absolute path to the file that was deleted" },
-      repository: { type: "string", description: "Repository name (as shown in list_repositories)" },
-    },
-    required: ["path", "repository"],
+    properties: {},
+    required: [],
   },
 };
 
@@ -490,6 +454,12 @@ async function resolveRepo(
     return null;
   }
   if (fallbackRepo) {
+    // `repository` may carry either a short name or a full path (agents often
+    // pass the path there) — try rootPath first when it looks like a path.
+    if (fallbackRepo.includes("/") || fallbackRepo.includes("\\")) {
+      const repo = await graphRepo.findRepositoryByPath(fallbackRepo);
+      if (repo) return { name: repo.name, rootPath: repo.rootPath };
+    }
     // Look up rootPath from stored repos
     const repos = await graphRepo.listRepositories();
     const found = repos.find(r => r.name === fallbackRepo);
@@ -514,120 +484,205 @@ async function ensureRepoIndexed(
   // Try to resolve from already-indexed repos
   const repo = await resolveRepo(repoPath, repoName, deps.graphRepository);
   if (repo) {
-    // Already indexed — but check if it's stale and update if needed
-    if (repoPath) {
-      await deps.indexer.ensureIndexed(repoPath);
-    }
     return repo;
   }
 
-  // Not indexed — if we have a path, index it now automatically
+  // Not indexed — the YATS server never walks the host filesystem (it may run
+  // in a container without access to host paths). Indexing happens exclusively
+  // through the thin host CLI, which streams files over HTTP.
   if (repoPath) {
-    const { status } = await deps.indexer.ensureIndexed(repoPath);
-    if (status === "indexed" || status === "reindexed") {
-      const repo = await resolveRepo(repoPath, repoName, deps.graphRepository);
-      if (repo) return repo;
-    }
-    return {
-      content: [{ type: "text", text: `Indexing failed for "${repoPath}".` }],
-      isError: true,
-    };
+    return notIndexed(repoPath);
   }
-
   return notIndexed(repoName as string);
 }
 
-/** Return a helpful "not indexed" message with the exact command */
+/** Return a helpful "not indexed" message with the correct usage instructions */
 function notIndexed(hint?: string): ToolResult {
   const name = hint || "this repository";
-  const cmd = `npx yats index ${name}`;
+  const base = hint ? hint.split(/[\\/]/).pop() : "repo";
   return {
     content: [{
       type: "text",
-      text: `Repository "${name}" is not indexed yet.\n\nRun this command to index it:\n  ${cmd}\n\nThen ask me again.`,
+      text: `Repository "${name}" is not indexed yet.\n\n` +
+        `YATS identifies repositories by their full path — not by name. ` +
+        `Pass the full path of your working directory when calling YATS tools.\n\n` +
+        `Run this command in a terminal on the host machine and wait for it to finish:\n\n` +
+        `  yats index /full/path/to/${base}`,
     }],
   };
 }
 
+// ============================================================
+// Indexing-in-progress notice
+// ============================================================
+
+/** Human/agent-readable notice shown while a repository is mid-indexing. */
+function indexingNoticeText(repository: string, pending: number): string {
+  return (
+    `⏳ Repository "${repository}" is currently being indexed ` +
+    `(${pending} relationships pending resolution). ` +
+    `The relationship graph is only complete once indexing finishes. ` +
+    `Wait a few seconds, then query repository_summary again.`
+  );
+}
+
 /**
- * Check if the repository has a massive docs/ directory and return a warning.
- * Returns null if docs are fine to index, or a warning string if there are too many.
+ * Prepend the indexing notice to a tool result when the repository is
+ * mid-indexing. Never throws — status errors must not block queries.
  */
-async function checkDocsWarning(
-  repoPath: string,
+async function withIndexingNotice(
+  repository: string,
   deps: McpDependencies,
-): Promise<string | null> {
-  const MAX_DOC_FILES = 300;
-  const docsDir = `${repoPath}/docs`;
+  text: string,
+): Promise<string> {
+  if (!repository) return text;
   try {
-    const exists = await deps.fileSystem.exists(docsDir);
-    if (!exists) return null;
-    const files = await deps.fileSystem.listFiles(docsDir);
-    const mdFiles = files.filter(f => f.endsWith(".md")).length;
-    if (mdFiles > MAX_DOC_FILES) {
-      return (
-        `docs/ has ${mdFiles} .md files (threshold: ${MAX_DOC_FILES}). ` +
-        `Indexing all of them will take a long time.\n\n` +
-        `- Call index_repository with skipDocs: true to skip documentation\n` +
-        `- Call index_repository with skipDocs: false (or omit it) to index docs anyway`
-      );
-    }
-  } catch { /* can't access docs — ignore */ }
-  return null;
+    const status = await deps.indexer.getIndexingStatus(repository);
+    if (!status.indexing) return text;
+    return `${indexingNoticeText(repository, status.pendingRelationships)}\n\n${text}`;
+  } catch {
+    return text;
+  }
+}
+
+/** Extract the repository name from a symbol ID ({repo}::{path}::{symbolPath}). */
+function repoFromSymbolId(symbolId: string): string {
+  return symbolId.split("::")[0] ?? "";
+}
+
+function looksLikePath(value: string): boolean {
+  return value.includes("/") || value.includes("\\") || /^[A-Za-z]:/.test(value);
 }
 
 // ============================================================
-// Resolve symbol ID from name
+// Resolve symbol IDs from name
 // ============================================================
 
+interface ResolvedSymbolRef {
+  /** Every exact-name match (one per namespace/kind). */
+  ids: string[];
+  /** Canonical rootPath used for the lookup; null when a symbolId was given. */
+  rootPath: string | null;
+}
+
+/**
+ * Resolve a symbol reference to EVERY exact match in the repository.
+ *
+ * The same name can identify several symbols (the classic DTO declared in two
+ * namespaces). Returning only the first one silently hid the other half of the
+ * usages, which is exactly what `rg` does not do.
+ *
+ * `repository` may be a display name or a path; it is normalized to the
+ * canonical rootPath first because Symbol.repository stores the rootPath.
+ */
+async function resolveSymbolIds(
+  args: Record<string, unknown>,
+  deps: McpDependencies,
+): Promise<ResolvedSymbolRef | ToolResult> {
+  const symbolId = args.symbolId as string | undefined;
+  if (symbolId) {
+    const repo = repoFromSymbolId(symbolId);
+    return { ids: [symbolId], rootPath: looksLikePath(repo) ? repo : null };
+  }
+
+  const name = args.name as string | undefined;
+  const repoPath = args.path as string | undefined;
+  const repoName = args.repository as string | undefined;
+
+  if (!name || (!repoName && !repoPath)) {
+    return {
+      content: [{ type: "text", text: "Either 'symbolId' or 'name' plus 'repository'/'path' are required." }],
+      isError: true,
+    };
+  }
+
+  const resolved = await resolveRepo(repoPath, repoName, deps.graphRepository);
+  if (!resolved) {
+    return notIndexed(repoPath ?? repoName);
+  }
+
+  const symbols = await deps.graphRepository.findSymbolByName(resolved.rootPath, name);
+  const exact = symbols.filter((s) => s.name === name);
+  if (exact.length > 0) {
+    return { ids: exact.map((s) => s.id), rootPath: resolved.rootPath };
+  }
+
+  // No exact match: accept a single fuzzy hit (old behaviour for names like
+  // "Load" → "LoadAsync"), but never guess between several.
+  if (symbols.length === 1) {
+    return { ids: [symbols[0]!.id], rootPath: resolved.rootPath };
+  }
+  if (symbols.length > 1) {
+    const candidates = symbols.slice(0, 10).map((s) => `${s.name} (${s.id})`).join("\n  ");
+    return {
+      content: [{
+        type: "text",
+        text: `Symbol "${name}" not found exactly in "${resolved.rootPath}". ` +
+          `Did you mean one of:\n  ${candidates}\n\nPass symbolId to pick one.`,
+      }],
+      isError: true,
+    };
+  }
+  return {
+    content: [{ type: "text", text: `Symbol "${name}" not found in repository "${resolved.rootPath}".` }],
+    isError: true,
+  };
+}
+
+/** Single-symbol resolver — errors out when the name is ambiguous. */
 async function resolveSymbolId(
   args: Record<string, unknown>,
   deps: McpDependencies,
 ): Promise<string | ToolResult> {
-  // If symbolId is directly provided, use it
-  const symbolId = args.symbolId as string | undefined;
-  if (symbolId) return symbolId;
+  const resolved = await resolveSymbolIds(args, deps);
+  if (!("ids" in resolved)) return resolved;
+  if (resolved.ids.length === 1) return resolved.ids[0]!;
 
-  // Otherwise, resolve from name + repository
-  const name = args.name as string | undefined;
-  const repoName = args.repository as string | undefined;
-
-  if (!name || !repoName) {
-    return {
-      content: [{ type: "text", text: "Either 'symbolId' or both 'name' and 'repository' are required." }],
-      isError: true,
-    };
-  }
-
-  const symbols = await deps.graphRepository.findSymbolByName(repoName, name);
-  if (symbols.length === 0) {
-    return {
-      content: [{ type: "text", text: `Symbol "${name}" not found in repository "${repoName}".` }],
-      isError: true,
-    };
-  }
-
-  // Prefer exact name match (findSymbolByName uses CONTAINS, so "Greeter"
-  // might return "SpanishGreeter" before "Greeter")
-  const exactMatch = symbols.find((s) => s.name === name);
-  return (exactMatch ?? symbols[0]!).id;
+  const candidates = resolved.ids.slice(0, 10).join("\n  ");
+  return {
+    content: [{
+      type: "text",
+      text: `Symbol "${args.name}" is ambiguous (${resolved.ids.length} matches). ` +
+        `Pass symbolId to pick one:\n  ${candidates}`,
+    }],
+    isError: true,
+  };
 }
 
 // ============================================================
 // Tool Handler Factory
 // ============================================================
 
+function vectorIndexMismatchMessage(): string {
+  return [
+    "The vector index dimension does not match the current embedding model — semantic search is degraded.",
+    "",
+    "This happens when the embedding provider/model changed since the last index.",
+    "",
+    "To fix it, the vector index must be rebuilt. This re-embeds every indexed symbol via the current",
+    "embedding provider and MAY INCUR API COSTS.",
+    "",
+    "Tell the user the impact and ask for explicit confirmation. If they confirm, run:",
+    "  yats reindex --rebuild-vectors",
+    "",
+    "Graph-only tools (find_symbol, find_callers, find_references, etc.) still work without the vector index.",
+  ].join("\n");
+}
+
 export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandler> {
   const handlers = new Map<string, ToolHandler>();
   const logger = createLogger("mcp:tools");
 
   handlers.set("search_code", async (args) => {
+    if (deps.vectorRepository.dimensionMismatch) {
+      return { content: [{ type: "text", text: vectorIndexMismatchMessage() }], isError: true };
+    }
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
     const query: RetrievalQuery = {
       query: args.query as string,
-      repository: resolved.name,
+      repository: resolved.rootPath,
       options: {
         maxVectorHits: 20,
         maxTotalResults: (args.limit as number) ?? 10,
@@ -641,6 +696,9 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("search_documentation", async (args) => {
+    if (deps.vectorRepository.dimensionMismatch) {
+      return { content: [{ type: "text", text: vectorIndexMismatchMessage() }], isError: true };
+    }
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
@@ -648,8 +706,22 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const hits = await deps.vectorRepository.search(CollectionName.DOCUMENTATION, result, {
       limit: (args.limit as number) ?? 10,
     });
+    const docs = hits
+      .filter(h => h.payload.repository === resolved.rootPath)
+      .map(h => ({
+        docSectionId: h.payload.docSectionId,
+        relativePath: h.payload.relativePath,
+        heading: h.payload.heading ?? null,
+        score: h.score,
+        // Content stored at index time — the agent usually answers from this
+        // without reading the file. Absent for repos indexed before this
+        // feature: re-index (`yats reindex <path>`) to populate it.
+        content: h.payload.content ?? null,
+        contentTruncated: h.payload.contentTruncated ?? false,
+        contentHash: h.payload.contentHash ?? null,
+      }));
     return {
-      content: [{ type: "text", text: JSON.stringify(hits.filter(h => h.payload.repository === resolved.name), null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(docs, null, 2) }],
     };
   });
 
@@ -658,7 +730,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const symbols = await deps.graphRepository.findSymbolByName(
-      resolved.name,
+      resolved.rootPath,
       args.name as string,
       args.kind as SymbolKind | undefined,
     );
@@ -668,52 +740,103 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("find_references", async (args) => {
-    const sid = await resolveSymbolId(args, deps);
-    if (typeof sid !== "string") return sid;
-    const refs = await deps.graphRepository.findReferences(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(refs), null, 2) }] };
+    const resolved = await resolveSymbolIds(args, deps);
+    if (!("ids" in resolved)) return resolved;
+
+    // 20 used to be the default and silently cut real answers: a DTO used
+    // across a codebase has far more sources than that.
+    const limit = (args.limit as number) ?? 200;
+    const rowsById = new Map<string, GraphSymbol & { matchedTargetIds?: string[] }>();
+    let totalRows = 0;
+
+    for (const id of resolved.ids) {
+      const refs = await deps.graphRepository.findReferences(id, limit);
+      totalRows += refs.length;
+      for (const ref of refs) {
+        const existing = rowsById.get(ref.id);
+        if (!existing) {
+          rowsById.set(ref.id, { ...ref, matchedTargetIds: [id] });
+          continue;
+        }
+        existing.relations = [...new Set([...(existing.relations ?? []), ...(ref.relations ?? [])])].sort();
+        const lineSet = new Set([...(existing.lines ?? []), ...(ref.lines ?? [])]);
+        existing.lines = [...lineSet].sort((a, b) => a - b);
+        existing.occurrences = existing.lines.length;
+        existing.matchedTargetIds = [...new Set([...(existing.matchedTargetIds ?? []), id])];
+      }
+    }
+
+    const all = [...rowsById.values()].sort((a, b) => a.id.localeCompare(b.id));
+    const truncated = all.length > limit;
+    const rows = all.slice(0, limit).map((sym) => {
+      const formatted = formatSymbol(sym) as Record<string, unknown>;
+      if (resolved.ids.length > 1) formatted.matchedTargetIds = sym.matchedTargetIds;
+      return formatted;
+    });
+
+    const text = await withIndexingNotice(
+      resolved.rootPath ?? "",
+      deps,
+      JSON.stringify(rows, null, 2),
+    );
+    const content: ToolResult["content"] = [{ type: "text", text }];
+    if (truncated) {
+      content.push({
+        type: "text",
+        text: `⚠️  Showing ${limit} of ${all.length} referencing symbols ` +
+          `(${totalRows} edge rows). Call find_references with a higher limit to see the rest.`,
+      });
+    }
+    return { content };
   });
 
   handlers.set("find_callers", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const callers = await deps.graphRepository.findCallers(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(callers), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(callers), null, 2)) }] };
   });
 
   handlers.set("find_callees", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const callees = await deps.graphRepository.findCallees(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(callees), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(callees), null, 2)) }] };
   });
 
   handlers.set("find_implementations", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const impls = await deps.graphRepository.findImplementations(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(impls), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(impls), null, 2)) }] };
   });
 
   handlers.set("find_inheritors", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const inheritors = await deps.graphRepository.findInheritors(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(inheritors), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(inheritors), null, 2)) }] };
   });
 
   handlers.set("find_tests", async (args) => {
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const tests = await deps.graphRepository.findTests(sid, (args.limit as number) ?? 20);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(tests), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(tests), null, 2)) }] };
   });
 
   handlers.set("find_routes", async (args) => {
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
-    const routes = await deps.graphRepository.findRoutes(resolved.name);
+    // P5 — honor the schema's method/routePath/limit filters (previously dead).
+    // Note: `path` means the repository root (consistent with sibling tools);
+    // the route path filter is `routePath`.
+    const routes = await deps.graphRepository.findRoutes(resolved.rootPath, {
+      method: args.method as string | undefined,
+      path: args.routePath as string | undefined,
+      limit: (args.limit as number) ?? 100,
+    });
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(routes), null, 2) }] };
   });
 
@@ -722,7 +845,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const configs = await deps.graphRepository.findConfiguration(
-      resolved.name,
+      resolved.rootPath,
       args.key as string | undefined,
     );
     return { content: [{ type: "text", text: JSON.stringify(formatSymbols(configs), null, 2) }] };
@@ -734,17 +857,25 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
       (args.hops as number) ?? 1,
       (args.relationshipTypes as RelationshipKind[]) ?? [],
     );
+    const resultText = JSON.stringify({
+      nodeCount: subgraph.nodes.length,
+      relationshipCount: subgraph.relationships.length,
+      nodes: formatSymbols(subgraph.nodes),
+      relationships: subgraph.relationships.map((rel) => ({
+        sourceId: rel.sourceSymbolId,
+        targetId: rel.targetSymbolId,
+        kind: rel.kind,
+      })),
+    }, null, 2);
     return {
-      content: [{ type: "text", text: JSON.stringify({
-        nodeCount: subgraph.nodes.length,
-        relationshipCount: subgraph.relationships.length,
-        nodes: formatSymbols(subgraph.nodes),
-        relationships: subgraph.relationships.map((rel) => ({
-          sourceId: rel.sourceSymbolId,
-          targetId: rel.targetSymbolId,
-          kind: rel.kind,
-        })),
-      }, null, 2) }],
+      content: [{
+        type: "text",
+        text: await withIndexingNotice(
+          repoFromSymbolId((args.symbolIds as string[])[0] ?? ""),
+          deps,
+          resultText,
+        ),
+      }],
     };
   });
 
@@ -752,7 +883,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const sid = await resolveSymbolId(args, deps);
     if (typeof sid !== "string") return sid;
     const related = await deps.graphRepository.relatedSymbols(sid, (args.limit as number) ?? 30);
-    return { content: [{ type: "text", text: JSON.stringify(formatSymbols(related), null, 2) }] };
+    return { content: [{ type: "text", text: await withIndexingNotice(repoFromSymbolId(sid), deps, JSON.stringify(formatSymbols(related), null, 2)) }] };
   });
 
   handlers.set("list_symbols", async (args) => {
@@ -760,7 +891,7 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const symbols = await deps.graphRepository.listSymbols(
-      resolved.name,
+      resolved.rootPath,
       args.kind as SymbolKind | undefined,
       (args.limit as number) ?? 50,
       (args.offset as number) ?? 0,
@@ -772,7 +903,15 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     const resolved = await ensureRepoIndexed(args, deps);
     if ("content" in resolved) return resolved;
 
-    const summary = await deps.graphRepository.repositorySummary(resolved.name);
+    const summary: any = await deps.graphRepository.repositorySummary(resolved.rootPath);
+    try {
+      const status = await deps.indexer.getIndexingStatus(resolved.rootPath);
+      if (status.indexing) {
+        summary.indexing = true;
+        summary.pendingRelationships = status.pendingRelationships;
+        summary.notice = indexingNoticeText(resolved.rootPath, status.pendingRelationships);
+      }
+    } catch { /* never block queries on status errors */ }
     return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
   });
 
@@ -781,15 +920,15 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
     if ("content" in resolved) return resolved;
 
     const controllers = await deps.graphRepository.listSymbols(
-      resolved.name, SymbolKind.CONTROLLER, 20, 0,
+      resolved.rootPath, SymbolKind.CONTROLLER, 20, 0,
     );
     const services = await deps.graphRepository.listSymbols(
-      resolved.name, SymbolKind.SERVICE, 20, 0,
+      resolved.rootPath, SymbolKind.SERVICE, 20, 0,
     );
     const entities = await deps.graphRepository.listSymbols(
-      resolved.name, SymbolKind.ENTITY, 20, 0,
+      resolved.rootPath, SymbolKind.ENTITY, 20, 0,
     );
-    const routes = await deps.graphRepository.findRoutes(resolved.name);
+    const routes = await deps.graphRepository.findRoutes(resolved.rootPath);
 
     return {
       content: [{
@@ -805,6 +944,9 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   });
 
   handlers.set("search_similar", async (args) => {
+    if (deps.vectorRepository.dimensionMismatch) {
+      return { content: [{ type: "text", text: vectorIndexMismatchMessage() }], isError: true };
+    }
     const symbol = await deps.graphRepository.findSymbol(args.symbolId as string);
     if (!symbol) {
       return { content: [{ type: "text", text: "Symbol not found" }], isError: true };
@@ -829,87 +971,97 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
   // Repository management
   handlers.set("list_repositories", async () => {
     const repos = await deps.graphRepository.listRepositories();
-    return { content: [{ type: "text", text: JSON.stringify(repos, null, 2) }] };
-  });
-
-  handlers.set("index_repository", async (args) => {
-    const repoPath = args.path as string;
-    if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
-
-    // Reject dangerous paths that would scan the entire filesystem
-    const dangerous = ["/", "/root", "/etc", "/dev", "/proc", "/sys", "/var", "/usr", "/home", "/tmp"];
-    const isWindowsRoot = /^[A-Z]:\?$/i.test(repoPath);
-    if (dangerous.includes(repoPath) || isWindowsRoot || repoPath === "/" || !repoPath.includes("/") || repoPath.length < 3) {
-      return {
-        content: [{ type: "text", text: `Refusing to index "${repoPath}" — this would scan the entire filesystem. Please provide a specific project path like /home/user/my-project or C:\\Users\\user\\project.` }],
-        isError: true,
-      };
-    }
-
-    const skipDocs = args.skipDocs === true;
-    const repoName = repoPath.split("/").pop() || repoPath;
-    const skipDocsFlag = skipDocs ? " --skip-docs" : "";
-
-    return {
-      content: [{
-        type: "text",
-        text: `Tell the user:\n\n"I'm going to index ${repoPath}. This will analyze your code, generate embeddings, and store the knowledge graph. It may take a few minutes depending on the repo size."\n\nTell the user to run:\n\n  yats index ${repoPath}${skipDocsFlag}\n\nAfter the command finishes, poll with:\n\n  repository_summary(repository: "${repoName}")\n\nWait until 'relationships' stops increasing between two consecutive checks. Then show the user the final summary.\n\nOnce indexing is complete, suggest keeping the index live:\n\n  "I can watch this repo for changes and keep the index up to date while we work. Run: yats watch ${repoPath}"\n\nThis starts a file watcher that automatically re-indexes modified files and removes deleted ones. The agent should offer this — if the user says yes, run the command. If the user is in autonomous mode (AGENTS.md/SKILL.md says the agent can execute commands directly), just run it.\n\nIf the user doesn't want to wait, tell them they can ask for the status anytime with 'repository_summary'.`,
-      }],
-    };
+    // Flag duplicate indexes of the same folder (legacy entries indexed under
+    // another spelling, e.g. "." or a path with a trailing slash). Never merge
+    // them automatically — the caller decides which one to keep.
+    const result = markDuplicateRepositories(repos);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
 
   handlers.set("delete_repository", async (args) => {
     const repoName = (args.repository as string) || undefined;
     const repoPath = (args.path as string) || undefined;
     const confirm = args.confirm === true;
+    const ref = repoPath ?? repoName;
 
-    // Resolve repository name
-    let targetName: string | null = null;
-    if (repoName) {
-      const repos = await deps.graphRepository.listRepositories();
-      const found = repos.find(r => r.name === repoName);
-      if (found) targetName = found.name;
-    } else if (repoPath) {
-      const repo = await deps.graphRepository.findRepositoryByPath(repoPath);
-      if (repo) targetName = repo.name;
-    }
-
-    if (!targetName) {
-      const hint = repoName || repoPath || "(nothing provided)";
+    if (!ref) {
       return {
-        content: [{ type: "text", text: `Repository "${hint}" not found in indexed repos. Use list_repositories to see available repos.` }],
+        content: [{ type: "text", text: "Provide 'repository' (name or path) or 'path'." }],
         isError: true,
       };
     }
 
-    // Get summary for the confirmation message
-    let summary = "";
-    try {
-      const s = await deps.graphRepository.repositorySummary(targetName);
-      summary = ` (${s.totalSymbols} symbols, ${s.totalRelationships} relationships)`;
-    } catch { /* ignore */ }
+    // Resolve to the stored identity (rootPath) BEFORE touching anything.
+    // Symbols, File rows and vectors are keyed by rootPath; deleting by the
+    // display name matches nothing, and Neo4j treats a zero-row DELETE as a
+    // success — that is how ghost symbols survived a "successful" delete.
+    let target: { name: string; rootPath: string } | null =
+      await deps.graphRepository.findRepositoryByPath(ref);
+    if (!target) {
+      const repos = await deps.graphRepository.listRepositories();
+      const found = repos.find((r) => r.name === ref || r.rootPath === ref);
+      if (found) target = { name: found.name, rootPath: found.rootPath };
+    }
+
+    if (!target) {
+      return {
+        content: [{
+          type: "text",
+          text: `Repository "${ref}" not found in indexed repos. Use list_repositories to see available repos.`,
+        }],
+        isError: true,
+      };
+    }
+
+    const targetRef = target.rootPath;
+    const targetCopy = target;
+
+    const summary = await deps.graphRepository.repositorySummary(targetRef);
 
     if (!confirm) {
       return {
         content: [{
           type: "text",
-          text: `⚠️  About to delete "${targetName}"${summary}.\n\nThis will permanently remove all indexed data (symbols, relationships, vectors). The source code files will NOT be affected.\n\nAsk the user for confirmation, then call delete_repository again with confirm: true.`,
+          text: `⚠️  About to delete "${targetCopy.name}" (${targetRef}): ${summary.totalSymbols} symbols, ${summary.totalRelationships} relationships.\n\n` +
+            `This will permanently remove all indexed data (symbols, relationships, vectors). ` +
+            `The source code files will NOT be affected.\n\n` +
+            `Ask the user for confirmation, then call delete_repository again with confirm: true.`,
         }],
       };
     }
 
-    // Confirmed — delete
     try {
-      await deps.graphRepository.clearRepository(targetName);
-      await deps.vectorRepository.clearVectorsByRepository(targetName);
-      // Also remove the Repository node itself
-      await deps.graphRepository.deleteRepositoryNode(targetName);
+      const cleared = await deps.graphRepository.clearRepository(targetRef);
+      await deps.vectorRepository.clearVectorsByRepository(targetRef);
+      await deps.graphRepository.deleteRepositoryNode(targetRef);
+
+      // Post-condition: a delete that reports success while rows remain is a
+      // lie and leaves unreachable ghost symbols behind.
+      const remaining = await deps.graphRepository.repositorySummary(targetRef);
+      const stillListed = (await deps.graphRepository.listRepositories())
+        .some((r) => r.rootPath === targetRef || r.name === targetCopy.name);
+      if (remaining.totalSymbols > 0 || stillListed) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Delete incomplete for "${targetRef}": ${remaining.totalSymbols} symbols and ` +
+              `${remaining.totalRelationships} relationships still present` +
+              `${stillListed ? ", repository still listed" : ""}. Nothing was hidden; retry or inspect the graph.`,
+          }],
+          isError: true,
+        };
+      }
+
       return {
-        content: [{ type: "text", text: `✅ Repository "${targetName}" deleted successfully${summary}.` }],
+        content: [{
+          type: "text",
+          text: `✅ Repository "${targetCopy.name}" (${targetRef}) deleted: ` +
+            `${cleared.symbols} symbols, ${cleared.files} files, ${summary.totalRelationships} relationships.`,
+        }],
       };
     } catch (err: any) {
       return {
-        content: [{ type: "text", text: `❌ Failed to delete "${targetName}": ${err.message}` }],
+        content: [{ type: "text", text: `❌ Failed to delete "${targetRef}": ${err.message}` }],
         isError: true,
       };
     }
@@ -917,75 +1069,28 @@ export function createToolHandlers(deps: McpDependencies): Map<string, ToolHandl
 
   // === Repository reindex & single-file index ===
 
-  handlers.set("reindex", async (args) => {
-    const repoPath = args.path as string;
-    if (!repoPath) return { content: [{ type: "text", text: "Error: 'path' is required" }], isError: true };
-
-    const { status, result } = await deps.indexer.ensureIndexed(repoPath);
-
-    if (status === "fresh") {
-      return { content: [{ type: "text", text: `Repository at "${repoPath}" is already up to date. No reindex needed.` }] };
-    }
-
+  handlers.set("rebuild_vectors", async () => {
     return {
       content: [{
         type: "text",
-        text: JSON.stringify({
-          status,
-          summary: result ? {
-            symbolsFound: result.symbolsFound,
-            relationshipsFound: result.relationshipsFound,
-            duration: `${(result.duration / 1000).toFixed(1)}s`,
-          } : null,
-        }, null, 2),
+        text: [
+          "The vector index needs to be rebuilt — the embedding model or its dimension changed.",
+          "",
+          "⚠️  IMPORTANT: Rebuilding re-embeds every indexed symbol using the current embedding provider",
+          "and MAY INCUR API COSTS. Do NOT run this automatically.",
+          "",
+          "Tell the user:",
+          "  - Semantic search is degraded until the vector index matches the current embedding model.",
+          "  - Rebuilding re-embeds all symbols across all indexed repositories and may cost money.",
+          "  - Ask for explicit confirmation before proceeding.",
+          "",
+          "If the user confirms, run:",
+          "  yats reindex --rebuild-vectors",
+          "",
+          "If the user declines, graph-only tools (find_symbol, find_callers, find_references, etc.) still work.",
+        ].join("\n"),
       }],
     };
-  });
-
-  handlers.set("index_file", async (args) => {
-    const filePath = args.path as string;
-    const repoName = args.repository as string;
-    if (!filePath) return { content: [{ type: "text", text: "Error: 'path' (absolute file path) is required" }], isError: true };
-    if (!repoName) return { content: [{ type: "text", text: "Error: 'repository' is required" }], isError: true };
-
-    try {
-      const result = await deps.indexer.indexFile(repoName, filePath);
-      if (result.status === "skipped") {
-        return {
-          content: [{ type: "text", text: `⚠️ File "${filePath}" skipped: ${result.reason || "unsupported"}.` }],
-        };
-      }
-      return {
-        content: [{ type: "text", text: `✅ File "${filePath}" re-indexed successfully in repository "${repoName}".` }],
-      };
-    } catch (err: any) {
-      return {
-        content: [{ type: "text", text: `❌ Failed to index file "${filePath}": ${err.message}` }],
-        isError: true,
-      };
-    }
-  });
-
-  handlers.set("remove_file", async (args) => {
-    const filePath = args.path as string;
-    const repoName = args.repository as string;
-    if (!filePath) return { content: [{ type: "text", text: "Error: 'path' (absolute file path) is required" }], isError: true };
-    if (!repoName) return { content: [{ type: "text", text: "Error: 'repository' is required" }], isError: true };
-
-    try {
-      const result = await deps.indexer.removeFile(repoName, filePath);
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Removed ${result.removed} symbols from index for deleted file "${filePath}" in repository "${repoName}".`,
-        }],
-      };
-    } catch (err: any) {
-      return {
-        content: [{ type: "text", text: `❌ Failed to remove file "${filePath}" from index: ${err.message}` }],
-        isError: true,
-      };
-    }
   });
 
   logger.info(`Registered ${handlers.size} tool handlers`);
@@ -1001,7 +1106,7 @@ function formatSymbols(symbols: any[]): any[] {
 }
 
 function formatSymbol(s: any): any {
-  return {
+  const out: any = {
     id: s.id,
     name: s.name,
     kind: s.kind,
@@ -1012,6 +1117,17 @@ function formatSymbol(s: any): any {
     signature: s.signature,
     parentClass: s.parentClass,
   };
+  // Reference queries aggregate edges per referencing symbol; surface the
+  // relation types and every recorded usage line (USES_TYPE/INSTANTIATES).
+  if (s.relations != null) out.relations = s.relations;
+  if (s.occurrences != null) out.occurrences = s.occurrences;
+  if (s.lines != null && s.lines.length > 0) out.lines = s.lines;
+  // Routes carry their HTTP method + path (P5) — surfaced for find_routes.
+  if (s.httpMethod != null || s.routePath != null) {
+    out.method = s.httpMethod ?? null;
+    out.path = s.routePath ?? null;
+  }
+  return out;
 }
 
 function formatContextItems(items: RankedContextItem[]): any[] {

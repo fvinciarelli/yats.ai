@@ -11,8 +11,31 @@ import { createSymbolId } from "@yats/shared";
 
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
+/**
+ * Type names that are language/builtin types, never repository symbols.
+ * Filtered at emission so the unresolved-relationship buffer stays small.
+ */
+const TS_BUILTIN_TYPES = new Set([
+  "string", "number", "boolean", "any", "unknown", "void", "never", "object",
+  "null", "undefined", "bigint", "symbol", "this", "true", "false",
+  "Array", "ReadonlyArray", "Map", "ReadonlyMap", "Set", "ReadonlySet",
+  "WeakMap", "WeakSet", "Promise", "PromiseLike", "Record", "Partial",
+  "Required", "Readonly", "Pick", "Omit", "Exclude", "Extract", "NonNullable",
+  "Parameters", "ReturnType", "InstanceType", "Awaited", "NonNullable",
+  "Date", "RegExp", "Error", "Function", "Object", "String", "Number",
+  "Boolean", "Symbol", "BigInt", "JSON", "Math", "Iterable", "Iterator",
+  "AsyncIterable", "AsyncIterator", "Generator", "AsyncGenerator",
+]);
+
 export class TypeScriptAnalyzer extends AbstractAnalyzer {
   readonly language = Language.TYPESCRIPT;
+
+  /** alias → module specifier, collected per analyze() call */
+  private imports = new Map<string, string>();
+  /** top-level variable names declared in the current file */
+  private localVars = new Set<string>();
+  /** type name → exact symbol ID for types declared in the current file */
+  private declaredTypeIds = new Map<string, string>();
 
   canAnalyze(filePath: string, _content: string): boolean {
     const ext = filePath.split(".").pop()?.toLowerCase();
@@ -38,6 +61,51 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         /* setParentNodes */ true,
         ts.ScriptKind.TSX,
       );
+
+      // Scope tracking: what is local to this file vs. external (library/global).
+      // Used to classify call targets — local vars stay synthetic (the
+      // post-index resolver rewrites them), imports of libraries and globals
+      // become `external::` ids so "where do I use X?" is answerable.
+      this.imports = new Map();
+      this.localVars = new Set();
+      const collectScope = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          const mod = node.moduleSpecifier.text;
+          const clause = node.importClause;
+          if (clause?.name) this.imports.set(clause.name.text, mod);
+          if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+            for (const el of clause.namedBindings.elements) {
+              this.imports.set(el.name.text, mod);
+              if (el.propertyName) this.imports.set(el.propertyName.text, mod);
+            }
+          } else if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+            this.imports.set(clause.namedBindings.name.text, mod);
+          }
+        } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+          this.localVars.add(node.name.text);
+        }
+        ts.forEachChild(node, collectScope);
+      };
+      collectScope(sourceFile);
+
+      // Types declared in this file get exact USES_TYPE targets (same-file
+      // resolution must never be rewritten against another file's symbol).
+      this.declaredTypeIds = new Map();
+      const namespace = this.getNamespace(sourceFile);
+      const collectDeclaredTypes = (n: ts.Node): void => {
+        if (
+          (ts.isClassDeclaration(n) || ts.isInterfaceDeclaration(n) ||
+            ts.isEnumDeclaration(n) || ts.isTypeAliasDeclaration(n)) &&
+          n.name
+        ) {
+          this.declaredTypeIds.set(
+            n.name.text,
+            createSymbolId(repositoryName, filePath, this.getNodePath(n, sourceFile, namespace)),
+          );
+        }
+        ts.forEachChild(n, collectDeclaredTypes);
+      };
+      collectDeclaredTypes(sourceFile);
 
       // Extract symbols by walking the AST
       this.extractSymbols(
@@ -191,6 +259,9 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         );
       }
 
+      // Interface member signatures (property types, method returns).
+      this.extractTypeUsages(node, sourceFile, id, filePath, repository, namespace, relationships);
+
       // Process interface members
       ts.forEachChild(node, (member) => {
         this.processClassMember(
@@ -255,6 +326,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
 
       // Extract calls from function body
       this.extractCalls(node, sourceFile, id, filePath, repository, namespace, symbols, relationships);
+      this.extractTypeUsages(node, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Variable statement
@@ -277,6 +349,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
             sourceSnippet: text.slice(0, 500),
             contentHash: hashContent(text),
           }));
+          this.extractTypeUsages(decl, sourceFile, varId, filePath, repository, namespace, relationships);
         }
       }
     }
@@ -298,25 +371,19 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         sourceSnippet: text.slice(0, 1000),
         contentHash: hashContent(text),
       }));
+      this.extractTypeUsages(node, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
-    // Import/Export declarations
+    // Import/Export declarations — no relationships are emitted for them:
+    // the source id (bare imported name) and target id (module specifier as
+    // path) never exist in the symbol table, so every one of these edges is
+    // dropped as dangling by the final flush. Pure noise.
     else if (ts.isImportDeclaration(node)) {
-      const moduleSpecifier = (node.moduleSpecifier as ts.StringLiteral)?.text;
-      if (moduleSpecifier) {
-        this.extractImport(node, sourceFile, filePath, repository, moduleSpecifier, id, relationships);
-        // Don't recurse into imports — they refer to other files
-        return;
-      }
+      // Don't recurse into imports — they refer to other files
+      return;
     }
     else if (ts.isExportDeclaration(node)) {
-      const moduleSpecifier = node.moduleSpecifier
-        ? (node.moduleSpecifier as ts.StringLiteral)?.text
-        : null;
-      if (moduleSpecifier) {
-        this.extractExport(node, filePath, repository, moduleSpecifier, id, relationships);
-        return;
-      }
+      return;
     }
 
     // Recurse into child nodes
@@ -385,6 +452,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
 
       // Extract calls from method body
       this.extractCalls(member, sourceFile, id, filePath, repository, namespace, symbols, relationships);
+      this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Constructor
@@ -413,6 +481,7 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
       );
 
       this.extractCalls(member, sourceFile, id, filePath, repository, namespace, symbols, relationships);
+      this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Property
@@ -440,6 +509,8 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
       relationships.push(
         this.createRelationship(parentId, id, RelationshipKind.CONTAINS),
       );
+
+      this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
     }
 
     // Getter/Setter
@@ -469,6 +540,8 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
         relationships.push(
           this.createRelationship(parentId, id, RelationshipKind.CONTAINS),
         );
+
+        this.extractTypeUsages(member, sourceFile, id, filePath, repository, namespace, relationships);
       }
     }
 
@@ -566,9 +639,25 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
           const methodName = parts[parts.length - 1]!;
           const objectPath = parts.slice(0, -1).join(".");
 
-          const calleeId = objectPath
-            ? createSymbolId(repository, filePath, `${namespace}.${objectPath}.${methodName}`)
-            : createSymbolId(repository, filePath, `${namespace}.${methodName}`);
+          let calleeId: string;
+          if (!objectPath) {
+            calleeId = createSymbolId(repository, filePath, `${namespace}.${methodName}`);
+          } else {
+            const base = parts[0]!;
+            if (!this.localVars.has(base) && this.imports.has(base)) {
+              // Call on an imported library instance: `i18n.changeLanguage()`
+              // where i18n comes from "i18next" → external::i18next::changeLanguage
+              const member = objectPath.slice(base.length).replace(/^\./, "");
+              calleeId = `external::${this.imports.get(base)}::${member ? `${member}.${methodName}` : methodName}`;
+            } else if (!this.localVars.has(base)) {
+              // Global (window, document, console…) → external::window.matchMedia
+              calleeId = `external::${objectPath}.${methodName}`;
+            } else {
+              // Local variable — synthetic id, the post-index resolver rewrites
+              // it against the full symbol table (e.g. apiClient.startEmulator).
+              calleeId = createSymbolId(repository, filePath, `${namespace}.${objectPath}.${methodName}`);
+            }
+          }
 
           relationships.push(
             this.createRelationship(callerId, calleeId, RelationshipKind.CALLS),
@@ -579,6 +668,142 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
     };
 
     ts.forEachChild(node, visitCall);
+  }
+
+  // ============================================================
+  // Type Usages — USES_TYPE
+  //
+  // A TS type is mentioned by annotations, generic arguments, casts,
+  // `instanceof` and `new` far more often than it is called: without these
+  // edges find_references(X) only saw calls. One edge per (enclosing symbol,
+  // type) carrying every usage line.
+  // ============================================================
+
+  private extractTypeUsages(
+    node: ts.Node,
+    sourceFile: ts.SourceFile,
+    callerId: string,
+    filePath: string,
+    repository: string,
+    namespace: string,
+    relationships: Relationship[],
+  ): void {
+    const usages = new Map<string, { name: string; lines: Set<number>; kinds: Set<string> }>();
+
+    const record = (rawName: string, at: ts.Node, kind: string): void => {
+      const name = rawName.split(".").pop()?.replace(/<.*$/, "") ?? "";
+      if (!name || TS_BUILTIN_TYPES.has(name)) return;
+      const targetId = this.declaredTypeIds.get(name) ??
+        createSymbolId(repository, filePath, name);
+      const line = sourceFile.getLineAndCharacterOfPosition(at.getStart(sourceFile)).line + 1;
+      const entry = usages.get(targetId) ?? {
+        name,
+        lines: new Set<number>(),
+        kinds: new Set<string>(),
+      };
+      entry.lines.add(line);
+      entry.kinds.add(kind);
+      usages.set(targetId, entry);
+    };
+
+    const collectType = (type: ts.TypeNode | undefined, kind: string): void => {
+      if (!type) return;
+      if (ts.isTypeReferenceNode(type)) {
+        record(type.typeName.getText(sourceFile), type, kind);
+        for (const arg of type.typeArguments ?? []) collectType(arg, "generic");
+        return;
+      }
+      if (ts.isArrayTypeNode(type)) return collectType(type.elementType, kind);
+      if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) {
+        for (const t of type.types) collectType(t, kind);
+        return;
+      }
+      if (ts.isParenthesizedTypeNode(type) || ts.isTypeOperatorNode(type)) {
+        return collectType(type.type, kind);
+      }
+      if (ts.isTupleTypeNode(type)) {
+        for (const element of type.elements) {
+          collectType(ts.isNamedTupleMember(element) ? element.type : element, kind);
+        }
+        return;
+      }
+      if (ts.isFunctionTypeNode(type) || ts.isConstructorTypeNode(type)) {
+        for (const parameter of type.parameters) collectType(parameter.type, "parameter");
+        collectType(type.type, "return");
+        return;
+      }
+      if (ts.isConditionalTypeNode(type)) {
+        collectType(type.checkType, kind);
+        collectType(type.extendsType, kind);
+        collectType(type.trueType, kind);
+        collectType(type.falseType, kind);
+        return;
+      }
+      if (ts.isTypeLiteralNode(type)) {
+        for (const member of type.members) {
+          if (ts.isPropertySignature(member)) collectType(member.type, "declaration");
+        }
+      }
+    };
+
+    const visit = (child: ts.Node): void => {
+      if (ts.isParameter(child)) collectType(child.type, "parameter");
+      else if (
+        ts.isVariableDeclaration(child) || ts.isPropertyDeclaration(child) ||
+        ts.isPropertySignature(child) || ts.isTypeAliasDeclaration(child)
+      ) {
+        collectType(child.type, "declaration");
+      }
+
+      if (ts.isFunctionLike(child)) {
+        collectType((child as ts.SignatureDeclaration).type, "return");
+      }
+
+      if (ts.isNewExpression(child)) {
+        if (ts.isIdentifier(child.expression)) record(child.expression.text, child, "new");
+        for (const arg of child.typeArguments ?? []) collectType(arg, "generic");
+      }
+
+      if (
+        ts.isAsExpression(child) || ts.isSatisfiesExpression(child) ||
+        ts.isTypeAssertionExpression(child)
+      ) {
+        collectType(child.type, "cast");
+      }
+
+      if (ts.isCallExpression(child)) {
+        for (const arg of child.typeArguments ?? []) collectType(arg, "generic");
+      }
+
+      if (
+        ts.isBinaryExpression(child) &&
+        child.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword &&
+        ts.isIdentifier(child.right)
+      ) {
+        record(child.right.text, child, "instanceof");
+      }
+
+      if (ts.isTypeOfExpression(child) && ts.isIdentifier(child.expression)) {
+        record(child.expression.text, child, "typeof");
+      }
+
+      ts.forEachChild(child, visit);
+    };
+
+    visit(node);
+
+    for (const [targetId, usage] of usages) {
+      const lines = [...usage.lines].sort((a, b) => a - b);
+      relationships.push(
+        this.createRelationship(callerId, targetId, RelationshipKind.USES_TYPE, {
+          typeName: usage.name,
+          namespace,
+          lines,
+          count: lines.length,
+          usageKinds: [...usage.kinds].sort(),
+        }),
+      );
+    }
   }
 
   // ============================================================
@@ -721,51 +946,144 @@ export class TypeScriptAnalyzer extends AbstractAnalyzer {
       }
     }
 
-    // Detect decorator-based conventions
-    this.visitDecorators(sourceFile, (decoratorName, parentNode) => {
-      const containingClass = this.findContainingClass(parentNode, sourceFile);
-      if (!containingClass) return;
+    // Detect decorator-based conventions.
+    // Pass 1: collect NestJS controller route prefixes (@Controller('api')).
+    const controllerPrefixes = new Map<string, string>();
+    this.visitDecorators(sourceFile, (decoratorName, parentNode, decoratorNode) => {
+      const decoLower = decoratorName.toLowerCase();
+      if (decoLower !== "controller" && !decoLower.includes("controller")) return;
+      if (!ts.isClassDeclaration(parentNode) || !parentNode.name) return;
+      controllerPrefixes.set(parentNode.name.text, this.decoratorStringArg(decoratorNode) ?? "");
+    });
 
-      const matchingSymbol = symbols.find(
-        (s) => s.name === containingClass && s.kind === SymbolKind.CLASS,
-      );
-      if (!matchingSymbol) return;
-
+    // Pass 2: class-level conventions + method-level route decorators.
+    const ROUTE_VERBS = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"]);
+    this.visitDecorators(sourceFile, (decoratorName, parentNode, decoratorNode) => {
       const decoLower = decoratorName.toLowerCase();
 
-      if (decoLower === "controller" || decoLower.includes("controller")) {
-        matchingSymbol.kind = SymbolKind.CONTROLLER;
-        matchingSymbol.metadata["framework"] = "nestjs";
-      } else if (decoLower === "injectable") {
-        matchingSymbol.kind = SymbolKind.SERVICE;
-        matchingSymbol.metadata["framework"] = "nestjs";
-      } else if (decoLower === "module") {
-        matchingSymbol.kind = SymbolKind.MODULE;
-        matchingSymbol.metadata["framework"] = "nestjs";
-      } else if (decoLower === "entity") {
-        matchingSymbol.kind = SymbolKind.ENTITY;
-        matchingSymbol.metadata["framework"] = "typeorm";
-      } else if (
-        decoLower === "get" ||
-        decoLower === "post" ||
-        decoLower === "put" ||
-        decoLower === "patch" ||
-        decoLower === "delete"
-      ) {
-        matchingSymbol.kind = SymbolKind.ROUTE;
-        matchingSymbol.metadata["httpMethod"] = decoratorName.toUpperCase();
+      // Class-level decorators (NestJS / TypeORM)
+      if (ts.isClassDeclaration(parentNode) && parentNode.name) {
+        const clsSym = symbols.find(
+          (s) => s.name === parentNode.name!.text && s.kind === SymbolKind.CLASS,
+        );
+        if (!clsSym) return;
+
+        if (decoLower === "controller" || decoLower.includes("controller")) {
+          clsSym.kind = SymbolKind.CONTROLLER;
+          clsSym.metadata["framework"] = "nestjs";
+        } else if (decoLower === "injectable") {
+          clsSym.kind = SymbolKind.SERVICE;
+          clsSym.metadata["framework"] = "nestjs";
+        } else if (decoLower === "module") {
+          clsSym.kind = SymbolKind.MODULE;
+          clsSym.metadata["framework"] = "nestjs";
+        } else if (decoLower === "entity") {
+          clsSym.kind = SymbolKind.ENTITY;
+          clsSym.metadata["framework"] = "typeorm";
+        }
+        return;
       }
+
+      // Method-level route decorators (@Get('/users')) — mark the METHOD
+      // symbol as the route (per-endpoint granularity, P5).
+      if (!ROUTE_VERBS.has(decoLower)) return;
+      const memberName = this.getDecoratedMemberName(parentNode);
+      if (!memberName) return;
+      const containingClass = this.findContainingClass(parentNode, sourceFile);
+      const methodSym = symbols.find(
+        (s) =>
+          s.name === memberName &&
+          s.parentClass === containingClass &&
+          s.kind === SymbolKind.METHOD,
+      );
+      if (!methodSym) return;
+
+      methodSym.kind = SymbolKind.ROUTE;
+      methodSym.metadata["framework"] = "nestjs";
+      methodSym.metadata["httpMethod"] = decoratorName.toUpperCase();
+      const prefix = containingClass ? (controllerPrefixes.get(containingClass) ?? "") : "";
+      methodSym.metadata["routePath"] = this.joinRoutePaths(
+        prefix,
+        this.decoratorStringArg(decoratorNode) ?? "",
+      );
     });
+
+    // Express / plain router patterns (P5)
+    this.detectExpressRoutes(sourceFile, symbols);
+  }
+
+  /** @Controller('users') + @Get(':id') → "users/:id". */
+  private joinRoutePaths(prefix: string, suffix: string): string {
+    if (!prefix) return suffix;
+    if (!suffix) return prefix;
+    return `${prefix.replace(/\/+$/, "")}/${suffix.replace(/^\/+/, "")}`;
+  }
+
+  /** The string argument of a decorator call: @Controller('users') → "users". */
+  private decoratorStringArg(node: ts.Decorator): string | null {
+    if (!ts.isCallExpression(node.expression)) return null;
+    const arg = node.expression.arguments[0];
+    return arg && ts.isStringLiteral(arg) ? arg.text : null;
+  }
+
+  private getDecoratedMemberName(node: ts.Node): string | null {
+    if (ts.isMethodDeclaration(node) || ts.isPropertyDeclaration(node)) {
+      if (node.name && ts.isIdentifier(node.name)) return node.name.text;
+      if (node.name && ts.isStringLiteral(node.name)) return node.name.text;
+    }
+    return null;
+  }
+
+  /**
+   * Express / plain-TS route detection (P5): app.get('/users', handler),
+   * router.post('/x', this.handler), this.app.get(...). The handler argument
+   * must reference a function/method symbol in the same file (inline
+   * callbacks have no symbol to mark).
+   */
+  private detectExpressRoutes(sourceFile: ts.SourceFile, symbols: Symbol[]): void {
+    const verbs = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"]);
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const calleeText = node.expression.getText(sourceFile);
+        const m = calleeText.match(/^(?:(?:this|self)\.)?(app|router|server|api)\.([a-zA-Z]+)$/);
+        if (m && verbs.has(m[2]!.toLowerCase()) && node.arguments.length >= 2) {
+          const pathArg = node.arguments[0];
+          if (pathArg && ts.isStringLiteral(pathArg)) {
+            let handlerName: string | null = null;
+            const handlerArg = node.arguments[1];
+            if (handlerArg && ts.isIdentifier(handlerArg)) handlerName = handlerArg.text;
+            else if (handlerArg && ts.isPropertyAccessExpression(handlerArg)) handlerName = handlerArg.name.text;
+
+            if (handlerName) {
+              const sym = symbols.find(
+                (s) =>
+                  s.name === handlerName &&
+                  (s.kind === SymbolKind.METHOD || s.kind === SymbolKind.FUNCTION),
+              );
+              if (sym) {
+                sym.kind = SymbolKind.ROUTE;
+                sym.metadata["framework"] = "express";
+                sym.metadata["httpMethod"] = m[2]!.toUpperCase();
+                sym.metadata["routePath"] = pathArg.text;
+              }
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(sourceFile, visit);
   }
 
   private visitDecorators(
     sourceFile: ts.SourceFile,
-    visitor: (decoratorName: string, parent: ts.Node) => void,
+    visitor: (decoratorName: string, parent: ts.Node, decoratorNode: ts.Decorator) => void,
   ): void {
     const visit = (node: ts.Node): void => {
       if (ts.isDecorator(node)) {
         const name = node.expression.getText(sourceFile).split("(")[0]!;
-        visitor(name, node.parent);
+        visitor(name, node.parent, node);
       }
       ts.forEachChild(node, visit);
     };

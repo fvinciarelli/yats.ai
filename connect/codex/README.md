@@ -1,25 +1,22 @@
 # Codex CLI — YATS Setup
 
-Two files to place:
+Install from your repo root:
 
----
+```bash
+yats connect --install codex
+```
 
-## 1. `AGENTS.md` — Agent behavior
+This creates/updates:
 
-**Copy to:** repo root (e.g., `~/my-project/AGENTS.md`)
+| File | Purpose |
+|------|---------|
+| `AGENTS.md` (repo root) | Teaches Codex to use YATS MCP tools directly (no subagents) — golden rule, workflow, call budget |
+| `.codex/config.toml` | Connects Codex to the YATS bridge via stdio (`[mcp_servers.yats]`) and forces `multi_agent = false` |
 
-Codex reads this at session start. It tells Codex to use YATS MCP tools directly (no subagents) and limits MCP calls.
+Existing files are never overwritten: `AGENTS.md` gets an appended YATS block
+after confirmation, and `config.toml` only gets the `[mcp_servers.yats]`
+section added if it isn't there already.
 
-> **Important:** Codex must NOT spawn subagents. `multi_agent = false` in `config.toml` enforces this — subagents don't inherit MCP tools.
+> Note: `yats` must be in your PATH for the stdio bridge to start. Check with `which yats`.
 
----
-
-## 2. `config.toml` — Connection + behavior config
-
-**Copy to:** `.codex/config.toml` (repo root) or `~/.codex/config.toml` (global)
-
-Connects Codex to the YATS bridge via stdio and sets subagent policy.
-
-> Update the `args` path if `yats` is not in your PATH. Use the full path: `which yats`.
-
-Done.
+See the full docs at https://github.com/fvinciarelli/yats.ai/tree/main/connect/codex

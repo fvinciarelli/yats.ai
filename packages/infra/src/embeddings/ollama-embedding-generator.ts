@@ -19,13 +19,21 @@ function loadOllamaConfig(): OllamaConfig {
   };
 }
 
+const OLLAMA_MODEL_DIMENSIONS: Record<string, number> = {
+  "nomic-embed-text": 768,
+  "mxbai-embed-large": 1024,
+  "bge-m3": 1024,
+  "snowflake-arctic-embed": 1024,
+};
+
 export class OllamaEmbeddingGenerator implements EmbeddingGenerator {
-  readonly dimensions = 768; // nomic-embed-text
+  readonly dimensions: number;
   private readonly config: OllamaConfig;
   private readonly logger: Logger;
 
   constructor(config?: Partial<OllamaConfig>) {
     this.config = { ...loadOllamaConfig(), ...config };
+    this.dimensions = OLLAMA_MODEL_DIMENSIONS[this.config.model] ?? 768;
     this.logger = createLogger("embeddings:ollama");
   }
 

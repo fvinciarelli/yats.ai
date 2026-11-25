@@ -1,0 +1,1 @@
+How does `abslang run` execute a session against an agent? Trace the flow: where is the run command defined, what does it load, how does it invoke the agent, and how are results stored or reported? Name the key functions or modules involved.

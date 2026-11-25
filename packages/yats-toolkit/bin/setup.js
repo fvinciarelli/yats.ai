@@ -4,11 +4,12 @@
  *
  * Usage:
  *   yats setup              # One-time setup wizard
- *   yats index <path>       # Index a repository
+ *   yats index <path>       # Index a repo (--skip-docs, --no-config, --force)
  *   yats search <query>     # Search indexed code
  *   yats list               # List indexed repositories
  *   yats summary <repo>     # Show repository summary
- *   yats clear <repo>       # Delete indexed data
+ *   yats clear <repo>       # Delete indexed data by name
+ *   yats remove <path>      # Delete indexed data by path
  *   yats status             # Check indexed repos
  *   yats stop               # Stop all YATS services
  *   yats start              # Start YATS services
@@ -16,23 +17,52 @@
  *   yats update-base        # Update Docker images
  *   yats bridge             # MCP stdio ↔ HTTP proxy (for Copilot, Claude)
  *   yats benchmark          # AI agent token comparison
- *   yats watch <path>       # Watch a repo and keep the index live
+ *   yats watch <path>       # Keep the index in sync with git commits
+ *   yats watch <path> --live  # Also re-index on every save
+ *   yats connect [agent]    # Show or install agent config
  */
 
 const cmd = process.argv[2] || "setup";
 const args = process.argv.slice(3);
 
+function parseFlags(arr) {
+  const flags = {};
+  for (let i = 0; i < arr.length; i++) {
+    const a = arr[i];
+    if (a === "--provider" && arr[i + 1]) flags.provider = arr[++i];
+    else if (a === "--api-key" && arr[i + 1]) flags.apiKey = arr[++i];
+    else if (a === "--endpoint" && arr[i + 1]) flags.endpoint = arr[++i];
+    else if (a === "--model" && arr[i + 1]) flags.model = arr[++i];
+    else if (a === "--port" && arr[i + 1]) flags.port = arr[++i];
+    else if (a === "--batch" && arr[i + 1]) flags.batch = arr[++i];
+    else if (a === "--no-docs") flags.noDocs = true;
+    else if (a === "--yes") flags.skipConfirm = true;
+  }
+  // Azure additionally requires an endpoint URL to run unattended.
+  flags.nonInteractive = !!(flags.provider && flags.apiKey && (flags.provider !== "azure" || flags.endpoint));
+  return flags;
+}
+
 switch (cmd) {
   case "setup":
-    import("../src/setup.js").then(m => m.default());
+    import("../src/setup.js").then(m => m.default(parseFlags(args)));
     break;
   case "index":
   case "add": {
     const skipDocs = args.includes("--skip-docs");
-    const cleanArgs = args.filter(a => a !== "--skip-docs");
-    import("../src/indexer.js").then(m => m.default(cleanArgs, { skipDocs }));
+    const noConfig = args.includes("--no-config");
+    const force = args.includes("--force");
+    const cleanArgs = args.filter(
+      (a) => a !== "--skip-docs" && a !== "--no-config" && a !== "--force",
+    );
+    import("../src/indexer.js").then((m) =>
+      m.default(cleanArgs, { skipDocs, noConfig, force }),
+    );
     break;
   }
+  case "reindex":
+    import("../src/reindex.js").then(m => m.default(args));
+    break;
   case "search":
     import("../src/search.js").then(m => m.default(args));
     break;
@@ -44,6 +74,9 @@ switch (cmd) {
     break;
   case "clear":
     import("../src/clear.js").then(m => m.default(args));
+    break;
+  case "remove":
+    import("../src/remove.js").then(m => m.default(args));
     break;
   case "status":
     import("../src/status.js").then(m => m.default());
@@ -67,7 +100,10 @@ switch (cmd) {
     import("../src/benchmark.js").then(m => m.runBenchmark());
     break;
   case "watch":
-    import("../src/watch.js");
+    import("../src/watch.js").then(m => m.default(args));
+    break;
+  case "connect":
+    import("../src/connect.js").then(m => m.default(args));
     break;
   case "--version":
   case "-v":
@@ -83,11 +119,12 @@ switch (cmd) {
     console.log(`YATS Toolkit — Code intelligence for AI agents`);
     console.log(``);
     console.log(`  yats setup              Setup wizard`);
-    console.log(`  yats index <path>       Index a repository`);
+    console.log(`  yats index <path>       Index a repo (--skip-docs, --no-config)`);
     console.log(`  yats search <query>     Search indexed code`);
     console.log(`  yats list               List indexed repositories`);
     console.log(`  yats summary <repo>     Show repository summary`);
-    console.log(`  yats clear <repo>       Delete indexed data`);
+    console.log(`  yats clear <repo>       Delete indexed data by name`);
+    console.log(`  yats remove <path>      Delete indexed data by path`);
     console.log(`  yats status             Check indexed repos`);
     console.log(`  yats stop               Stop YATS services`);
     console.log(`  yats start              Start YATS services`);
@@ -95,6 +132,7 @@ switch (cmd) {
     console.log(`  yats update-base        Update Docker images`);
     console.log(`  yats bridge             Stdio proxy for Copilot/Claude`);
     console.log(`  yats benchmark          AI agent token comparison`);
-    console.log(`  yats watch <path>       Keep index in sync with live edits`);
+    console.log(`  yats watch <path>       Sync index with git commits (--live, --no-config)`);
+    console.log(`  yats connect [agent]    Show agent setup config`);
     break;
 }

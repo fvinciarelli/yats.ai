@@ -6,9 +6,10 @@ set -e
 QUESTION_FILE="$1"
 USE_YATS="$2"
 MODEL="${YATS_BENCH_MODEL:-haiku}"
+REPOS_DIR="${YATS_BENCH_REPOS_DIR:-$HOME/yats-bench-repos}"
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Resolve repo from question path (e.g. questions/go/lab_hub/... → lab_hub)
+# Resolve repo from question path (e.g. questions/go/hub-lab/... → hub-lab)
 REPO=$(echo "$QUESTION_FILE" | sed 's|.*/\([^/]*\)/[^/]*\.md|\1|')
 QUESTION=$(cat "$QUESTION_FILE")
 RUN_ID=$(basename "$QUESTION_FILE" .md)-$(date +%H%M%S)
@@ -17,7 +18,7 @@ RUN_ID=$(basename "$QUESTION_FILE" .md)-$(date +%H%M%S)
 if [ "$USE_YATS" = "--with-yats" ]; then
   TAG="yats"
   cat > ~/.claude.json << EOF
-{"env":{"API_TIMEOUT_MS":"3000000"},"permissions":{"defaultMode":"default"},"projects":{"/home/franco/cosas/$REPO":{"mcpServers":{"yats":{"type":"sse","url":"http://localhost:5555/mcp/sse"}}}}}
+{"env":{"API_TIMEOUT_MS":"3000000"},"permissions":{"defaultMode":"default"},"projects":{"$REPOS_DIR/$REPO":{"mcpServers":{"yats":{"type":"sse","url":"http://localhost:5555/mcp/sse"}}}}}
 EOF
 else
   TAG="baseline"
@@ -29,7 +30,7 @@ fi
 OUT="$BENCH_DIR/results/${REPO}_${TAG}_${RUN_ID}.jsonl"
 
 # ── Run ─────────────────────────────────────────────────
-cd "/home/franco/cosas/$REPO"
+cd "$REPOS_DIR/$REPO"
 
 if [ "$USE_YATS" != "--with-yats" ]; then
   rm -rf .claude/skills/yats 2>/dev/null || true

@@ -1,7 +1,7 @@
 import type { Symbol, Relationship, SymbolKind, RelationshipKind } from "@yats/shared";
-import type { GraphSymbol, Subgraph, RepositorySummary } from "@yats/shared";
+import type { GraphSymbol, Subgraph, RepositorySummary, SymbolLite } from "@yats/shared";
 import type { GraphRepository } from "@yats/shared";
-import { createLogger, type Logger } from "@yats/shared";
+import { createLogger, type Logger, canonicalRepoPath, repoPathKey } from "@yats/shared";
 import { Neo4jConnection } from "./neo4j-connection.js";
 
 // ============================================================
@@ -18,6 +18,16 @@ export class Neo4jGraphRepository implements GraphRepository {
   // ============================================================
   // Symbol CRUD
   // ============================================================
+
+  async upsertExternalSymbol(id: string, name: string): Promise<void> {
+    await this.connection.write(
+      `
+      MERGE (s:Symbol {id: $id})
+      SET s:External, s.name = $name, s.kind = 'external', s.namespace = 'external', s.repository = '', s.relativePath = ''
+      `,
+      { id, name },
+    );
+  }
 
   async upsertSymbol(symbol: Symbol): Promise<void> {
     const labels = this.buildLabels(symbol.kind);
@@ -83,7 +93,21 @@ export class Neo4jGraphRepository implements GraphRepository {
     );
   }
 
-  async clearRepository(repository: string): Promise<void> {
+  async clearRepository(repository: string): Promise<{ symbols: number; files: number }> {
+    // `repository` is the rootPath stored on every Symbol/File row. A display
+    // name matches nothing here and Neo4j treats a zero-row DELETE as success,
+    // so the count is measured before deleting and returned to the caller.
+    const symbolRows = await this.connection.read<{ n: number }>(
+      `MATCH (s:Symbol {repository: $repository}) RETURN count(s) AS n`,
+      { repository },
+    );
+    const fileRows = await this.connection.read<{ n: number }>(
+      `MATCH (f:File {repo: $repository}) RETURN count(f) AS n`,
+      { repository },
+    );
+    const symbols = Number(symbolRows[0]?.n ?? 0);
+    const files = Number(fileRows[0]?.n ?? 0);
+
     await this.connection.write(
       `
       MATCH (s:Symbol {repository: $repository})
@@ -94,13 +118,19 @@ export class Neo4jGraphRepository implements GraphRepository {
 
     await this.connection.write(
       `
-      MATCH (r:Repository {name: $repository})
-      DELETE r
+      MATCH (f:File {repo: $repository})
+      DETACH DELETE f
       `,
       { repository },
     );
 
-    this.logger.info(`Cleared all data for repository: ${repository}`);
+    // The Repository node is removed last, by the caller, once vectors are
+    // gone too: if anything fails midway the repo stays discoverable and the
+    // delete can simply be retried.
+    this.logger.info(
+      `Cleared ${symbols} symbols and ${files} files for repository: ${repository}`,
+    );
+    return { symbols, files };
   }
 
   // ============================================================
@@ -149,13 +179,18 @@ export class Neo4jGraphRepository implements GraphRepository {
     }
   }
 
-  async deleteRelationships(symbolId: string): Promise<void> {
+  async deleteRelationships(symbolIds: string[]): Promise<void> {
+    if (symbolIds.length === 0) return;
+
+    // Outgoing only — incoming edges from other files must survive a re-index
+    // of their target file (P2: in-place symbol updates).
     await this.connection.write(
       `
-      MATCH (s:Symbol {id: $id})-[r]-()
+      UNWIND $ids AS id
+      MATCH (s:Symbol {id: id})-[r]->()
       DELETE r
       `,
-      { id: symbolId },
+      { ids: symbolIds },
     );
   }
 
@@ -184,27 +219,61 @@ export class Neo4jGraphRepository implements GraphRepository {
     let cypher: string;
     let params: Record<string, unknown>;
 
+    // Exact matches first: a name like "OrderDto" must never be pushed out of
+    // the result by 500 unrelated "*Dto*" rows cut off by the cap.
     if (kind) {
       cypher = `
         MATCH (s:Symbol {repository: $repository})
         WHERE toLower(s.name) CONTAINS toLower($name)
           AND s.kind = $kind
         RETURN s, labels(s) AS labels, id(s) AS nodeId
+        ORDER BY CASE WHEN s.name = $name THEN 0 ELSE 1 END, s.name
         LIMIT $limit
       `;
-      params = { repository, name, kind, limit: 50 };
+      params = { repository, name, kind, limit: 500 };
     } else {
       cypher = `
         MATCH (s:Symbol {repository: $repository})
         WHERE toLower(s.name) CONTAINS toLower($name)
         RETURN s, labels(s) AS labels, id(s) AS nodeId
+        ORDER BY CASE WHEN s.name = $name THEN 0 ELSE 1 END, s.name
         LIMIT $limit
       `;
-      params = { repository, name, limit: 50 };
+      params = { repository, name, limit: 500 };
     }
 
     const rows = await this.connection.read<any>(cypher, params);
     return rows.map((r) => this.rowToGraphSymbol(r));
+  }
+
+  async listAllSymbols(repository: string): Promise<SymbolLite[]> {
+    const rows = await this.connection.read<any>(
+      `
+      MATCH (s:Symbol {repository: $repository})
+      RETURN s.id AS id, s.name AS name, s.kind AS kind, s.namespace AS namespace, s.relativePath AS relativePath, s.parentClass AS parentClass
+      `,
+      { repository },
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name ?? "",
+      kind: r.kind ?? null,
+      namespace: r.namespace ?? "",
+      relativePath: r.relativePath ?? "",
+      parentClass: r.parentClass ?? null,
+    }));
+  }
+
+  async listSymbolIdsByFile(repository: string, relativePath: string): Promise<string[]> {
+    const rows = await this.connection.read<any>(
+      `
+      MATCH (s:Symbol {repository: $repository})
+      WHERE s.relativePath = $relativePath OR s.id CONTAINS $relativePath
+      RETURN s.id AS id
+      `,
+      { repository, relativePath },
+    );
+    return rows.map((r) => r.id as string);
   }
 
   async listSymbols(
@@ -238,17 +307,45 @@ export class Neo4jGraphRepository implements GraphRepository {
     symbolId: string,
     limit = 20,
   ): Promise<GraphSymbol[]> {
+    // One row per (source, relation). Rows are aggregated below so a single
+    // source symbol that uses the target 40 times is one result with 40 lines
+    // — not 40 results that blow up LIMIT, and not one result with the count
+    // lost (the previous `RETURN DISTINCT source` hid every extra usage).
     const rows = await this.connection.read<any>(
       `
       MATCH (target:Symbol {id: $symbolId})
-      MATCH (source:Symbol)-[r:REFERENCES|CALLS|IMPORTS|INSTANTIATES]->(target)
-      RETURN DISTINCT source AS s, labels(source) AS labels, id(source) AS nodeId, type(r) AS relType
-      LIMIT $limit
+      MATCH (source:Symbol)-[r:REFERENCES|CALLS|IMPORTS|INSTANTIATES|USES_TYPE]->(target)
+      RETURN source AS s, labels(source) AS labels, id(source) AS nodeId,
+             type(r) AS relType, r.lines AS lines
+      ORDER BY source.id
+      LIMIT 5000
       `,
-      { symbolId, limit },
+      { symbolId },
     );
 
-    return rows.map((r) => this.rowToGraphSymbol(r));
+    const merged = new Map<string, GraphSymbol>();
+    for (const row of rows) {
+      const sym = this.rowToGraphSymbol(row);
+      const rowLines = Array.isArray(row.lines)
+        ? row.lines.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+        : [];
+      const existing = merged.get(sym.id);
+      if (!existing) {
+        merged.set(sym.id, {
+          ...sym,
+          relations: [row.relType],
+          lines: [...rowLines].sort((a, b) => a - b),
+          occurrences: rowLines.length,
+        });
+        continue;
+      }
+      existing.relations = [...new Set([...(existing.relations ?? []), row.relType])].sort();
+      const lineSet = new Set([...(existing.lines ?? []), ...rowLines]);
+      existing.lines = [...lineSet].sort((a, b) => a - b);
+      existing.occurrences = existing.lines.length;
+    }
+
+    return [...merged.values()].slice(0, limit);
   }
 
   async findCallers(
@@ -348,14 +445,36 @@ export class Neo4jGraphRepository implements GraphRepository {
       .map((r: any) => this.rowToGraphSymbol(r));
   }
 
-  async findRoutes(repository: string): Promise<GraphSymbol[]> {
+  async findRoutes(
+    repository: string,
+    options?: { method?: string; path?: string; limit?: number },
+  ): Promise<GraphSymbol[]> {
+    // Filter on the dedicated route properties (httpMethod / routePath) that
+    // analyzers store on Route nodes. Parameterized filters — no hardcoded
+    // LIMIT 100 (P5).
+    const filters: string[] = [];
+    const params: Record<string, unknown> = { repository };
+
+    if (options?.method) {
+      filters.push("s.httpMethod = $method");
+      params.method = options.method.toUpperCase();
+    }
+    if (options?.path) {
+      filters.push("s.routePath CONTAINS $path");
+      params.path = options.path;
+    }
+
+    const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const limit = options?.limit ?? 100;
+
     const rows = await this.connection.read<any>(
       `
       MATCH (s:Route {repository: $repository})
+      ${where}
       RETURN s, labels(s) AS labels, id(s) AS nodeId
-      LIMIT 100
+      LIMIT $limit
       `,
-      { repository },
+      { ...params, limit },
     );
     return rows.map((r) => this.rowToGraphSymbol(r));
   }
@@ -519,7 +638,7 @@ export class Neo4jGraphRepository implements GraphRepository {
 
     const relCount = await this.connection.read<{ cnt: number }>(
       `
-      MATCH (s:Symbol {repository: $repository})-[r]-()
+      MATCH (s:Symbol {repository: $repository})-[r]->()
       RETURN count(r) AS cnt
       `,
       { repository },
@@ -554,12 +673,21 @@ export class Neo4jGraphRepository implements GraphRepository {
   // ============================================================
 
   async upsertRepositoryMetadata(name: string, rootPath: string): Promise<void> {
+    // The repository identity is its rootPath — the name is display metadata
+    // (two clones of the same repo are two distinct indexes). `rootKey` is the
+    // canonical form used for lookups, so every spelling of the same folder
+    // (`C:\Repo\`, `C:/Repo`, `/c/Repo`) resolves to this node.
     await this.connection.write(
       `
-      MERGE (r:Repository {name: $name})
-      SET r.rootPath = $rootPath, r.updatedAt = $updatedAt
+      MERGE (r:Repository {rootPath: $rootPath})
+      SET r.name = $name, r.rootKey = $rootKey, r.updatedAt = $updatedAt
       `,
-      { name, rootPath, updatedAt: new Date().toISOString() },
+      {
+        name,
+        rootPath,
+        rootKey: repoPathKey(rootPath, { cwd: "" }),
+        updatedAt: new Date().toISOString(),
+      },
     );
   }
 
@@ -571,32 +699,123 @@ export class Neo4jGraphRepository implements GraphRepository {
   }
 
   async findRepositoryByPath(rootPath: string): Promise<{name: string, rootPath: string} | null> {
+    // Match on the canonical key first (so `C:\Repo\`, `C:/Repo` and `/c/Repo`
+    // are the same repository), then fall back to the exact stored string for
+    // legacy entries indexed before path canonicalization (e.g. `"."` or a
+    // path with a trailing slash).
+    const canonical = canonicalRepoPath(rootPath, { cwd: "" });
+    const key = repoPathKey(rootPath, { cwd: "" });
     const results = await this.connection.read<{name: string, rootPath: string}>(
-      `MATCH (r:Repository {rootPath: $rootPath}) RETURN r.name AS name, r.rootPath AS rootPath`,
-      { rootPath },
+      `
+      MATCH (r:Repository)
+      WHERE r.rootPath = $canonical
+         OR r.rootPath = $exact
+         OR coalesce(r.rootKey, '') = $key
+      RETURN r.name AS name, r.rootPath AS rootPath
+      ORDER BY CASE WHEN r.rootPath = $canonical THEN 0 ELSE 1 END
+      LIMIT 1
+      `,
+      { canonical, exact: rootPath, key },
     );
-    return results.length > 0 ? { name: (results[0] as any).name, rootPath: (results[0] as any).rootPath } : null;
+    if (results.length > 0) {
+      return { name: (results[0] as any).name, rootPath: (results[0] as any).rootPath };
+    }
+
+    // Legacy entries were stored before canonicalization existed (trailing
+    // slash, another case, Git Bash spelling). Compare canonical forms without
+    // rewriting the stored path: symbols are keyed by that prefix.
+    const all = await this.listRepositories();
+    const legacy = all.find((r) => repoPathKey(r.rootPath, { cwd: "" }) === key);
+    return legacy ? { name: legacy.name, rootPath: legacy.rootPath } : null;
   }
 
-  async getLastIndexedCommit(name: string): Promise<string | null> {
+  async getLastIndexedCommit(rootPath: string): Promise<string | null> {
     const results = await this.connection.read<{commit: string | null}>(
-      `MATCH (r:Repository {name: $name}) RETURN r.lastIndexedCommit AS commit`,
-      { name },
+      `MATCH (r:Repository {rootPath: $rootPath}) RETURN r.lastIndexedCommit AS commit`,
+      { rootPath },
     );
     return (results[0] as any)?.commit ?? null;
   }
 
-  async setLastIndexedCommit(name: string, commit: string): Promise<void> {
+  async setLastIndexedCommit(rootPath: string, commit: string): Promise<void> {
     await this.connection.write(
-      `MATCH (r:Repository {name: $name}) SET r.lastIndexedCommit = $commit, r.updatedAt = $updatedAt`,
-      { name, commit, updatedAt: new Date().toISOString() },
+      `MATCH (r:Repository {rootPath: $rootPath}) SET r.lastIndexedCommit = $commit, r.updatedAt = $updatedAt`,
+      { rootPath, commit, updatedAt: new Date().toISOString() },
     );
   }
 
-  async deleteRepositoryNode(name: string): Promise<void> {
+  // ============================================================
+  // File content-hash state + analyzer version (skip-unchanged)
+  // ============================================================
+
+  async getFileHashes(rootPath: string, analyzerVersion: number): Promise<Record<string, string>> {
+    const results = await this.connection.read<{ path: string; contentHash: string }>(
+      `MATCH (f:File {repo: $rootPath})
+       WHERE f.analyzerVersion = $version
+       RETURN f.path AS path, f.contentHash AS contentHash`,
+      { rootPath, version: analyzerVersion },
+    );
+    const out: Record<string, string> = {};
+    for (const r of results) out[(r as any).path] = (r as any).contentHash;
+    return out;
+  }
+
+  async getFileState(
+    rootPath: string,
+    relativePath: string,
+  ): Promise<{ contentHash: string | null; analyzerVersion: number | null }> {
+    const results = await this.connection.read<{ contentHash: string | null; analyzerVersion: number | null }>(
+      `MATCH (f:File {repo: $rootPath, path: $path})
+       RETURN f.contentHash AS contentHash, f.analyzerVersion AS analyzerVersion`,
+      { rootPath, path: relativePath },
+    );
+    return {
+      contentHash: (results[0] as any)?.contentHash ?? null,
+      analyzerVersion: (results[0] as any)?.analyzerVersion ?? null,
+    };
+  }
+
+  async upsertFileHash(
+    rootPath: string,
+    relativePath: string,
+    contentHash: string,
+    analyzerVersion: number,
+  ): Promise<void> {
     await this.connection.write(
-      `MATCH (r:Repository {name: $name}) DETACH DELETE r`,
-      { name },
+      `MERGE (f:File {repo: $rootPath, path: $path})
+       SET f.contentHash = $contentHash, f.analyzerVersion = $analyzerVersion`,
+      { rootPath, path: relativePath, contentHash, analyzerVersion },
+    );
+  }
+
+  async removeFileHash(rootPath: string, relativePath: string): Promise<void> {
+    await this.connection.write(
+      `MATCH (f:File {repo: $rootPath, path: $path}) DETACH DELETE f`,
+      { rootPath, path: relativePath },
+    );
+  }
+
+  async getAnalyzerVersion(rootPath: string): Promise<number | null> {
+    const results = await this.connection.read<{ version: number | null }>(
+      `MATCH (r:Repository {rootPath: $rootPath}) RETURN r.analyzerVersion AS version`,
+      { rootPath },
+    );
+    return (results[0] as any)?.version ?? null;
+  }
+
+  async setAnalyzerVersion(rootPath: string, version: number): Promise<void> {
+    await this.connection.write(
+      `MATCH (r:Repository {rootPath: $rootPath}) SET r.analyzerVersion = $version`,
+      { rootPath, version },
+    );
+  }
+
+  async deleteRepositoryNode(repositoryRef: string): Promise<void> {
+    await this.connection.write(
+      `MATCH (r:Repository)
+       WHERE r.rootPath = $ref OR r.name = $ref
+       DETACH DELETE r`,
+      { ref: repositoryRef },
     );
   }
 
@@ -612,7 +831,13 @@ export class Neo4jGraphRepository implements GraphRepository {
     const labels: string[] = [];
     // Capitalize first letter for Neo4j convention
     const label = kind.charAt(0).toUpperCase() + kind.slice(1);
-    labels.push(label);
+    // "Repository" is reserved for repo-metadata nodes (unique constraint on
+    // Repository.name). Symbol nodes must never carry it — a class named
+    // e.g. Neo4jGraphRepository (kind=repository) would collide with the
+    // constraint and pollute listRepositories with phantoms.
+    if (label !== "Repository") {
+      labels.push(label);
+    }
     return labels;
   }
 
@@ -637,6 +862,9 @@ export class Neo4jGraphRepository implements GraphRepository {
       startColumn: symbol.location.startColumn,
       endColumn: symbol.location.endColumn,
       metadata: JSON.stringify(symbol.metadata ?? {}),
+      // Route-specific properties — queryable by find_routes filters (P5)
+      httpMethod: (symbol.metadata?.["httpMethod"] as string) ?? null,
+      routePath: (symbol.metadata?.["routePath"] as string) ?? null,
       updatedAt: new Date().toISOString(),
     };
   }

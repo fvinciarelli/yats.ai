@@ -138,7 +138,7 @@
     <a href="#live-sync">Live sync</a>
     <a href="#tutorials">Tutorials</a>
     <a href="#pricing">Pricing</a>
-    <a href="https://github.com/fvinciarelli/yats" class="btn btn-ghost" target="_blank">
+    <a href="https://github.com/fvinciarelli/yats.ai" class="btn btn-ghost" target="_blank">
       ⭐ Star on GitHub
     </a>
   </div>
@@ -152,7 +152,7 @@
     Your agent queries the graph instead of reading files one by one. Less tokens, better answers.
   </p>
   <div class="actions">
-    <a href="https://github.com/fvinciarelli/yats" class="btn btn-primary" target="_blank">Start on GitHub →</a>
+    <a href="https://github.com/fvinciarelli/yats.ai" class="btn btn-primary" target="_blank">Start on GitHub →</a>
     <a href="https://www.npmjs.com/package/yats-toolkit" class="btn btn-outline" target="_blank">yats-toolkit on npm</a>
   </div>
 </div>
@@ -220,7 +220,7 @@ Everything → Tree-sitter fallback
     <tr><td>"Where are the tests?"</td><td><span class="inline-code">find_tests("UserService")</span></td></tr>
     <tr><td>"What's connected?"</td><td><span class="inline-code">expand_graph(symbolId)</span></td></tr>
   </table>
-  <a href="https://github.com/fvinciarelli/yats#mcp-tools-20" target="_blank">All 22 tools →</a>
+  <a href="https://github.com/fvinciarelli/yats.ai#mcp-tools-20" target="_blank">All 22 tools →</a>
 </section>
 
 <hr class="divider">
@@ -282,7 +282,7 @@ yats benchmark
     More agents and repos being tested — <span class="inline-code">yats benchmark</span> supports all five agents today.
   </p>
   <p style="text-align: center;">
-    <a href="https://github.com/fvinciarelli/yats/tree/master/packages/yats-toolkit/benchmark" target="_blank">Full benchmark suite and raw data →</a>
+    <a href="https://github.com/fvinciarelli/yats.ai/tree/master/packages/yats-toolkit/benchmark" target="_blank">Full benchmark suite and raw data →</a>
   </p>
 </section>
 
@@ -356,38 +356,38 @@ yats benchmark
 # 1. Start YATS (needs Docker)
 npx yats-toolkit
 
-# 2. Connect your agent — copy two files into your repo
+# 2. Connect your agent — run `yats connect` and pick your agent
   </div>
 
   <table class="bench-table">
-    <tr><th>Your agent</th><th>Copy these</th><th>Into</th></tr>
+    <tr><th>Your agent</th><th>yats connect --install</th><th>Installs</th></tr>
     <tr>
       <td>Claude Code</td>
       <td><span class="inline-code">SKILL.md</span> + <span class="inline-code">mcp.json</span></td>
-      <td><a href="https://github.com/fvinciarelli/yats/tree/master/connect/claude" target="_blank">.claude/skills/yats/ + .mcp.json</a></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/claude" target="_blank">.claude/skills/yats/ + .mcp.json</a></td>
     </tr>
     <tr>
       <td>Gemini CLI</td>
       <td><span class="inline-code">GEMINI.md</span> + <span class="inline-code">mcp.json</span></td>
-      <td><a href="https://github.com/fvinciarelli/yats/tree/master/connect/gemini" target="_blank">repo root + .gemini/settings.json</a></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/gemini" target="_blank">repo root + .gemini/settings.json</a></td>
     </tr>
     <tr>
       <td>Copilot CLI</td>
       <td><span class="inline-code">instructions.md</span> + <span class="inline-code">mcp.json</span></td>
-      <td><a href="https://github.com/fvinciarelli/yats/tree/master/connect/copilot" target="_blank">.github/ + .copilot/</a></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/copilot" target="_blank">.github/ + .copilot/</a></td>
     </tr>
     <tr>
       <td>Codex CLI</td>
       <td><span class="inline-code">AGENTS.md</span> + <span class="inline-code">config.toml</span></td>
-      <td><a href="https://github.com/fvinciarelli/yats/tree/master/connect/codex" target="_blank">repo root + .codex/</a></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/codex" target="_blank">repo root + .codex/</a></td>
     </tr>
     <tr>
       <td>Cursor</td>
       <td><span class="inline-code">rules.mdc</span> + <span class="inline-code">mcp.json</span></td>
-      <td><a href="https://github.com/fvinciarelli/yats/tree/master/connect/cursor" target="_blank">.cursor/rules/ + .cursor/</a></td>
+      <td><a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect/cursor" target="_blank">.cursor/rules/ + .cursor/</a></td>
     </tr>
   </table>
-  <a href="https://github.com/fvinciarelli/yats/tree/master/connect" target="_blank">Step-by-step for each agent →</a>
+  <a href="https://github.com/fvinciarelli/yats.ai/tree/master/connect" target="_blank">Step-by-step for each agent →</a>
 </section>
 
 <hr class="divider">
@@ -470,10 +470,10 @@ npx yats-toolkit
 
 <!-- Pricing -->
 <section id="pricing">
-  <h2>Fair pricing, based on your team size</h2>
+  <h2>Simple pricing — one price per team</h2>
   <p style="text-align: center; max-width: 600px; margin: 0 auto 16px;">
-    Same product. Same features. No support or SLA at any tier.
-    Just an annual flat fee to use YATS legally — no per-seat math, no surprise bills.
+    <strong>Not per seat. One flat annual fee for your entire organization.
+    Same product, same features at every tier.</strong>
   </p>
 
   <div style="max-width: 750px; margin: 40px auto; display: flex; align-items: stretch; justify-content: center; gap: 12px; flex-wrap: wrap;">
@@ -484,53 +484,52 @@ npx yats-toolkit
         <div style="font-size: 2.2em; font-weight: 700; color: #1a1a2e;">€0</div>
         <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">&lt; 25 developers</div>
       </div>
-      <a href="https://www.npmjs.com/package/yats-toolkit" class="btn btn-primary" style="width: 100%; justify-content: center;" target="_blank">Get started</a>
     </div>
 
-    <!-- 25–149 -->
+    <!-- 25–74 -->
     <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
       <div>
-        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Small team</div>
+        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Steel</div>
         <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€150<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
-        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">25 – 149 devs</div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">25 – 74 developers</div>
       </div>
-      <a href="#" class="btn btn-outline" style="width: 100%; justify-content: center;">Buy license</a>
+      <a href="https://buy.stripe.com/00w14m1SV52v1cmaTJ1Nu00" class="btn btn-outline" style="width: 100%; justify-content: center;" target="_blank">Buy license</a>
     </div>
 
-    <!-- 150–499 -->
+    <!-- 75–199 -->
     <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
       <div>
-        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Growing</div>
-        <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€400<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
-        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">150 – 499 devs</div>
+        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Titanium</div>
+        <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€350<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">75 – 199 developers</div>
       </div>
-      <a href="#" class="btn btn-outline" style="width: 100%; justify-content: center;">Buy license</a>
+      <a href="https://buy.stripe.com/14A14mcxz8eH4oy7Hx1Nu01" class="btn btn-outline" style="width: 100%; justify-content: center;" target="_blank">Buy license</a>
     </div>
 
-    <!-- 500–999 -->
+    <!-- 200–499 -->
     <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
       <div>
-        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Large</div>
-        <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€800<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
-        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">500 – 999 devs</div>
+        <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Platinum</div>
+        <div style="font-size: 1.8em; font-weight: 700; color: #1a1a2e;">€600<span style="font-size: 0.45em; color: #888; font-weight: 400;">/year</span></div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">200 – 499 developers</div>
       </div>
-      <a href="#" class="btn btn-outline" style="width: 100%; justify-content: center;">Buy license</a>
+      <a href="https://buy.stripe.com/3cIdR8aprbqT7AK9PF1Nu02" class="btn btn-outline" style="width: 100%; justify-content: center;" target="_blank">Buy license</a>
     </div>
 
-    <!-- 1000+ -->
+    <!-- 500+ -->
     <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px 20px; text-align: center; flex: 1; min-width: 130px; display: flex; flex-direction: column; justify-content: space-between;">
       <div>
         <div style="font-size: 0.7em; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Enterprise</div>
         <div style="font-size: 1.3em; font-weight: 700; color: #1a1a2e; padding: 8px 0;">Contact us</div>
-        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">1,000+ devs</div>
+        <div style="font-size: 0.85em; color: #666; margin: 8px 0 16px;">500+ developers</div>
       </div>
       <a href="mailto:vinciarellifranco@gmail.com" class="btn btn-outline" style="width: 100%; justify-content: center;">Contact us</a>
     </div>
   </div>
 
   <p style="text-align: center; color: #888; font-size: 0.85em; max-width: 550px; margin: 0 auto;">
-    Annual flat fee per organization. Same product at every tier.
-    &nbsp;·&nbsp; <a href="https://github.com/fvinciarelli/yats/blob/master/LICENSE" target="_blank">Full license terms</a>
+    Annual subscription with auto-renewal. Cancel anytime.
+    &nbsp;·&nbsp; <a href="https://github.com/fvinciarelli/yats.ai/blob/master/LICENSE" target="_blank">Full license terms</a>
   </p>
 </section>
 
@@ -542,9 +541,9 @@ npx yats-toolkit
     <strong>YATS</strong> — Yet Another Token Saver
   </div>
   <div class="links">
-    <a href="https://github.com/fvinciarelli/yats" target="_blank">GitHub</a>
+    <a href="https://github.com/fvinciarelli/yats.ai" target="_blank">GitHub</a>
     <a href="https://www.npmjs.com/package/yats-toolkit" target="_blank">npm</a>
-    <a href="https://github.com/fvinciarelli/yats/blob/master/LICENSE" target="_blank">License</a>
+    <a href="https://github.com/fvinciarelli/yats.ai/blob/master/LICENSE" target="_blank">License</a>
     <a href="mailto:vinciarellifranco@gmail.com">Contact</a>
   </div>
 </footer>

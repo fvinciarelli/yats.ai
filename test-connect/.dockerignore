@@ -1,0 +1,4 @@
+# NEVER let credentials (homes/) or fixtures into the image build context
+homes/
+results/
+fixture/

@@ -16,6 +16,14 @@ import { getAllToolDefinitions } from "../tools/all-tools.js";
 // Mock dependencies
 // ============================================================
 
+/** Mutable indexing status used by the indexer mock — tests flip this. */
+let mockIndexing: { indexing: boolean; pendingRelationships: number } = {
+  indexing: false,
+  pendingRelationships: 0,
+};
+
+let lastFindRoutesCall: { repo: string; options?: any } | null = null;
+
 function makeMockDeps(): McpDependencies {
   return {
     retriever: {
@@ -34,7 +42,10 @@ function makeMockDeps(): McpDependencies {
       findImplementations: async () => [],
       findInheritors: async () => [],
       findTests: async () => [],
-      findRoutes: async () => [],
+      findRoutes: async (repo: string, options?: any) => {
+        lastFindRoutesCall = { repo, options };
+        return [];
+      },
       findConfiguration: async () => [],
       expandGraph: async () => ({ nodes: [], relationships: [] }),
       relatedSymbols: async () => [],
@@ -48,14 +59,15 @@ function makeMockDeps(): McpDependencies {
         languages: [],
       }),
       listRepositories: async () => [{ name: "test-repo", rootPath: "/tmp/test-repo" }],
-      findRepositoryByPath: async () => ({ name: "test-repo", rootPath: "/tmp/test-repo" }),
+      findRepositoryByPath: async (p: string) =>
+        p === "/tmp/test-repo" ? { name: "test-repo", rootPath: "/tmp/test-repo" } : null,
       upsertSymbols: async () => {},
       upsertRelationships: async () => {},
       upsertRepositoryMetadata: async () => {},
       setLastIndexedCommit: async () => {},
       getLastIndexedCommit: async () => null,
       deleteSymbols: async () => {},
-      clearRepository: async () => {},
+      clearRepository: async () => ({ symbols: 0, files: 0 }),
       deleteRepositoryNode: async () => {},
     },
     vectorRepository: {
@@ -81,31 +93,12 @@ function makeMockDeps(): McpDependencies {
       resolvePath: async () => "/tmp/test-repo",
     },
     indexer: {
-      indexRepository: async () => ({
-        repository: "test-repo",
-        symbolsFound: 10,
-        relationshipsFound: 5,
-        vectorsCreated: 10,
-        docsIndexed: 2,
-        errors: 0,
-        duration: 1000,
-        timings: { walkMs: 100, analyzeMs: 500, embedMs: 200, storeMs: 200, docsMs: 0, totalMs: 1000 },
-      }),
-      ensureIndexed: async () => ({ status: "fresh" }),
-      indexFile: async () => {},
+      registerRepository: async () => {},
       indexFileContent: async () => {},
-      incrementalIndex: async () => ({
-        repository: "test-repo",
-        symbolsFound: 1,
-        relationshipsFound: 0,
-        vectorsCreated: 1,
-        docsIndexed: 0,
-        errors: 0,
-        duration: 100,
-        timings: { walkMs: 0, analyzeMs: 50, embedMs: 30, storeMs: 20, docsMs: 0, totalMs: 100 },
-      }),
       removeFile: async () => ({ removed: 3 }),
-      indexDocumentation: async () => 0,
+      finalizeRepository: async () => ({ stored: 0, filtered: 0, rewritten: 0 }),
+      rebuildVectors: async () => ({ repositories: 1, symbols: 10, errors: 0 }),
+      getIndexingStatus: async () => ({ ...mockIndexing }),
     },
     repositoriesRoot: "/tmp/repos",
   };
@@ -169,9 +162,14 @@ describe("MCP Server — protocol", () => {
     const toolNames = tools.map((t: any) => t.name);
     assert.ok(toolNames.includes("search_code"), "search_code should exist");
     assert.ok(toolNames.includes("find_symbol"), "find_symbol should exist");
-    assert.ok(toolNames.includes("index_repository"), "index_repository should exist");
-    assert.ok(toolNames.includes("reindex"), "reindex should exist");
-    assert.ok(toolNames.includes("index_file"), "index_file should exist");
+    assert.ok(toolNames.includes("list_repositories"), "list_repositories should exist");
+
+    // Indexing tools were removed — the server never walks the host filesystem.
+    // Indexing happens exclusively through the host CLI (`yats index`).
+    assert.ok(!toolNames.includes("index_repository"), "index_repository should NOT exist");
+    assert.ok(!toolNames.includes("reindex"), "reindex should NOT exist");
+    assert.ok(!toolNames.includes("index_file"), "index_file should NOT exist");
+    assert.ok(!toolNames.includes("remove_file"), "remove_file should NOT exist");
   });
 
   it("each tool has required fields", async () => {
@@ -226,6 +224,60 @@ describe("MCP Server — protocol", () => {
     const content = (response as any).result.content;
     const parsed = JSON.parse(content[0].text);
     assert.equal(parsed.totalSymbols, 42);
+    assert.equal(parsed.indexing, undefined, "no indexing notice when idle");
+  });
+
+  it("repository_summary returns indexing notice while indexing", async () => {
+    mockIndexing = { indexing: true, pendingRelationships: 137 };
+    try {
+      const response = await server.handleRequest({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "repository_summary",
+          arguments: { repository: "test-repo" },
+        },
+      });
+      const parsed = JSON.parse((response as any).result.content[0].text);
+      assert.equal(parsed.indexing, true);
+      assert.equal(parsed.pendingRelationships, 137);
+      assert.ok(
+        parsed.notice.includes("currently being indexed"),
+        "notice should explain indexing is in progress",
+      );
+      assert.ok(
+        parsed.notice.includes("repository_summary"),
+        "notice should tell the agent to re-query",
+      );
+    } finally {
+      mockIndexing = { indexing: false, pendingRelationships: 0 };
+    }
+  });
+
+  it("graph tools prepend indexing notice while indexing", async () => {
+    mockIndexing = { indexing: true, pendingRelationships: 5 };
+    try {
+      const response = await server.handleRequest({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "find_callers",
+          arguments: {
+            symbolId: "test-repo::src/a.py::a.foo",
+          },
+        },
+      });
+      const text = (response as any).result.content[0].text as string;
+      assert.ok(text.startsWith("⏳"), "notice should be prepended");
+      assert.ok(text.includes("currently being indexed"), "notice text present");
+      // The actual JSON result must still be present and parseable after the notice
+      const jsonPart = text.slice(text.indexOf("\n\n") + 2);
+      assert.ok(Array.isArray(JSON.parse(jsonPart)), "JSON result should remain parseable");
+    } finally {
+      mockIndexing = { indexing: false, pendingRelationships: 0 };
+    }
   });
 
   it("returns error for unknown tool", async () => {
@@ -267,69 +319,283 @@ describe("MCP Server — input validation", () => {
     server = new McpServer(makeMockDeps());
   });
 
-  it("rejects reindex with system path /", async () => {
-    const response = await server.handleRequest({
-      jsonrpc: "2.0",
-      id: 10,
-      method: "tools/call",
-      params: {
-        name: "reindex",
-        arguments: { path: "/" },
-      },
-    });
-
-    assert.equal(response.id, 10);
-    assert.ok((response as any).error, "should have validation error");
-    assert.equal((response as any).error.code, -32602, "should be invalid params");
-    assert.ok(
-      (response as any).error.message.includes("system"),
-      "error should mention system path",
-    );
+  it("removed indexing tools return method-not-found", async () => {
+    for (const [name, args] of [
+      ["index_repository", { path: "/home/user/my-project" }],
+      ["reindex", { path: "/home/user/my-project" }],
+      ["index_file", { path: "/home/user/project/src/file.ts", repository: "test-repo" }],
+      ["remove_file", { path: "/home/user/project/src/file.ts", repository: "test-repo" }],
+    ] as const) {
+      const response = await server.handleRequest({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: { name, arguments: args as any },
+      });
+      assert.ok((response as any).error, `${name} should be unknown`);
+      assert.equal((response as any).error.code, -32601, `${name} should be method not found`);
+    }
   });
 
-  it("rejects reindex with path /home", async () => {
+  it("search tool on unindexed repo returns the yats index command", async () => {
     const response = await server.handleRequest({
       jsonrpc: "2.0",
       id: 11,
       method: "tools/call",
       params: {
-        name: "reindex",
-        arguments: { path: "/home" },
+        name: "search_code",
+        arguments: { query: "whatever", path: "/home/user/my-project" },
       },
     });
 
-    assert.ok((response as any).error, "should have validation error");
+    const content = (response as any).result?.content;
+    assert.ok(content, "should have content");
+    const text = content[0].text as string;
+    assert.ok(text.includes("yats index /full/path/to/my-project"), "should suggest yats index command");
+    assert.ok(text.includes("full path"), "should instruct to use the full path");
+    assert.ok(!text.includes("I can run it for you"), "should not claim the server can run commands");
   });
 
-  it("rejects path traversal attempts", async () => {
+  it("find_routes passes method/routePath/limit filters to the repository (P5)", async () => {
+    lastFindRoutesCall = null;
     const response = await server.handleRequest({
       jsonrpc: "2.0",
       id: 12,
       method: "tools/call",
       params: {
-        name: "index_repository",
-        arguments: { path: "../../etc/passwd" },
+        name: "find_routes",
+        arguments: { path: "/tmp/test-repo", method: "GET", routePath: "/users", limit: 5 },
       },
     });
 
-    assert.ok((response as any).error, "should have validation error");
-    assert.ok(
-      (response as any).error.message.includes("Path traversal"),
-      "error should mention path traversal",
-    );
+    const result = (response as any).result;
+    assert.ok(result, "should return a result");
+    assert.ok(lastFindRoutesCall, "findRoutes should have been called");
+    assert.equal(lastFindRoutesCall!.repo, "/tmp/test-repo");
+    assert.equal(lastFindRoutesCall!.options?.method, "GET");
+    assert.equal(lastFindRoutesCall!.options?.path, "/users");
+    assert.equal(lastFindRoutesCall!.options?.limit, 5);
+  });
+});
+
+// ============================================================
+// Repository identity / reference completeness
+// ============================================================
+
+function makeSymbol(id: string, name: string, file: string, lines: number[] = []) {
+  return {
+    id,
+    name,
+    kind: "class",
+    language: "typescript",
+    location: { relativePath: file, startLine: lines[0] ?? 1 },
+    namespace: file.split("/")[0],
+    relations: ["USES_TYPE"],
+    lines,
+    occurrences: lines.length,
+  } as any;
+}
+
+describe("references and deletion by canonical rootPath", () => {
+  let server: McpServer;
+  let deps: McpDependencies;
+
+  function callTool(name: string, args: Record<string, unknown>) {
+    return server.handleRequest({
+      jsonrpc: "2.0",
+      id: 100,
+      method: "tools/call",
+      params: { name, arguments: args },
+    });
+  }
+
+  before(() => {
+    deps = makeMockDeps();
+    server = new McpServer(deps);
   });
 
-  it("accepts valid path", async () => {
-    const response = await server.handleRequest({
-      jsonrpc: "2.0",
-      id: 13,
-      method: "tools/call",
-      params: {
-        name: "reindex",
-        arguments: { path: "/home/user/my-project" },
-      },
-    });
+  it("find_references aggregates every exact match (same DTO, two namespaces)", async () => {
+    deps.graphRepository.findSymbolByName = async (repo: string) => {
+      assert.equal(repo, "/tmp/test-repo", "name must be resolved to rootPath");
+      return [
+        makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+        makeSymbol("/tmp/test-repo::b.ts::B.OrderDto", "OrderDto", "b.ts"),
+      ];
+    };
+    deps.graphRepository.findReferences = async (id: string) =>
+      id.includes("A.OrderDto")
+        ? [makeSymbol("/tmp/test-repo::a.ts::A.Svc.save", "save", "a.ts", [5, 6])]
+        : [makeSymbol("/tmp/test-repo::b.ts::B.Svc.load", "load", "b.ts", [4, 9])];
 
-    assert.ok((response as any).result, "should succeed with valid path");
+    // Short display name (what list_repositories returns) must work too.
+    const response = await callTool("find_references", { name: "OrderDto", repository: "test-repo" });
+    const result = (response as any).result;
+    assert.ok(!result.isError, JSON.stringify(result));
+
+    const rows = JSON.parse(result.content[0].text);
+    assert.equal(rows.length, 2, "both namespaces must be present");
+    assert.deepEqual(rows.map((r: any) => r.file).sort(), ["a.ts", "b.ts"]);
+    assert.deepEqual(rows[0].matchedTargetIds.length, 1);
+    assert.ok(rows.some((r: any) => r.lines.includes(9)));
+  });
+
+  it("find_references accepts path= instead of repository=", async () => {
+    deps.graphRepository.findSymbolByName = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+    ];
+    deps.graphRepository.findReferences = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.Svc.save", "save", "a.ts", [5]),
+    ];
+
+    const response = await callTool("find_references", { name: "OrderDto", path: "/tmp/test-repo" });
+    const rows = JSON.parse((response as any).result.content[0].text);
+    assert.equal(rows.length, 1);
+  });
+
+  it("find_references returns more than 20 sources by default", async () => {
+    deps.graphRepository.findSymbolByName = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+    ];
+    deps.graphRepository.findReferences = async () =>
+      Array.from({ length: 25 }, (_, i) =>
+        makeSymbol(`/tmp/test-repo::a.ts::A.m${i}`, `m${i}`, "a.ts", [i + 1]),
+      );
+
+    const response = await callTool("find_references", { name: "OrderDto", repository: "test-repo" });
+    const rows = JSON.parse((response as any).result.content[0].text);
+    assert.equal(rows.length, 25, "default limit must not truncate at 20");
+  });
+
+  it("find_callers rejects an ambiguous name instead of guessing", async () => {
+    deps.graphRepository.findSymbolByName = async () => [
+      makeSymbol("/tmp/test-repo::a.ts::A.OrderDto", "OrderDto", "a.ts"),
+      makeSymbol("/tmp/test-repo::b.ts::B.OrderDto", "OrderDto", "b.ts"),
+    ];
+    const response = await callTool("find_callers", { name: "OrderDto", repository: "test-repo" });
+    const result = (response as any).result;
+    assert.ok(result.isError);
+    assert.ok(result.content[0].text.includes("ambiguous"));
+  });
+
+  it("delete_repository deletes by rootPath and verifies the outcome", async () => {
+    let summaryCalls = 0;
+    let clearedWith: string | null = null;
+    let nodeWith: string | null = null;
+    let vectorsWith: string | null = null;
+    let deleted = false;
+
+    deps.graphRepository.repositorySummary = async (repo: string) => {
+      summaryCalls += 1;
+      return {
+        repository: repo,
+        totalSymbols: summaryCalls === 1 ? 5 : 0,
+        totalRelationships: summaryCalls === 1 ? 5 : 0,
+        symbolsByKind: {},
+        symbolsByLanguage: {},
+        languages: [],
+      };
+    };
+    deps.graphRepository.clearRepository = async (repo: string) => {
+      clearedWith = repo;
+      deleted = true;
+      return { symbols: 5, files: 2 };
+    };
+    deps.graphRepository.deleteRepositoryNode = async (ref: string) => {
+      nodeWith = ref;
+    };
+    deps.vectorRepository.clearVectorsByRepository = async (ref: string) => {
+      vectorsWith = ref;
+    };
+    deps.graphRepository.listRepositories = async () =>
+      deleted ? [] : [{ name: "test-repo", rootPath: "/tmp/test-repo" }];
+
+    const response = await callTool("delete_repository", {
+      repository: "test-repo",
+      confirm: true,
+    });
+    const result = (response as any).result;
+    assert.ok(!result.isError, JSON.stringify(result));
+    assert.equal(clearedWith, "/tmp/test-repo", "must clear by rootPath, never by name");
+    assert.equal(nodeWith, "/tmp/test-repo");
+    assert.equal(vectorsWith, "/tmp/test-repo");
+    assert.ok(result.content[0].text.includes("5 symbols"));
+  });
+
+  it("delete_repository fails loudly when symbols survive", async () => {
+    deps.graphRepository.repositorySummary = async (repo: string) => ({
+      repository: repo,
+      totalSymbols: 5,
+      totalRelationships: 5,
+      symbolsByKind: {},
+      symbolsByLanguage: {},
+      languages: [],
+    });
+    deps.graphRepository.clearRepository = async () => ({ symbols: 0, files: 0 });
+    deps.graphRepository.deleteRepositoryNode = async () => {};
+    deps.graphRepository.listRepositories = async () => [];
+
+    const response = await callTool("delete_repository", {
+      path: "/tmp/test-repo",
+      confirm: true,
+    });
+    const result = (response as any).result;
+    assert.ok(result.isError, "leftover data must be an error");
+    assert.ok(result.content[0].text.includes("incomplete"));
+  });
+
+  it("search_documentation returns section content, not just metadata", async () => {
+    deps.vectorRepository.search = async () => [
+      {
+        id: "doc-1", score: 0.9, vector: [],
+        payload: {
+          repository: "/tmp/test-repo",
+          docSectionId: "/tmp/test-repo::docs/readme.md#Intro",
+          relativePath: "docs/readme.md",
+          heading: "docs/readme.md > Intro",
+          content: "Full section text here.",
+          contentTruncated: false,
+          contentHash: "abc",
+        },
+      },
+      {
+        // a hit from another repo must be filtered out
+        id: "doc-2", score: 0.5, vector: [],
+        payload: { repository: "/other/repo", docSectionId: "x", relativePath: "y", content: "nope" },
+      },
+    ] as any;
+
+    const response = await callTool("search_documentation", {
+      query: "intro docs",
+      path: "/tmp/test-repo",
+    });
+    deps.vectorRepository.search = async () => [];
+
+    const text = (response as any).result?.content?.[0]?.text;
+    const docs = JSON.parse(text);
+    assert.equal(docs.length, 1, "only the matching repository's docs");
+    assert.equal(docs[0].relativePath, "docs/readme.md");
+    assert.equal(docs[0].content, "Full section text here.");
+    assert.equal(docs[0].contentTruncated, false);
+    assert.equal(docs[0].score, 0.9);
+  });
+
+  it("search_documentation reports content:null for legacy payloads (pre-content index)", async () => {
+    deps.vectorRepository.search = async () => [
+      {
+        id: "doc-1", score: 0.8, vector: [],
+        payload: { repository: "/tmp/test-repo", docSectionId: "x", relativePath: "y", contentHash: "abc" },
+      },
+    ] as any;
+
+    const response = await callTool("search_documentation", {
+      query: "anything",
+      path: "/tmp/test-repo",
+    });
+    deps.vectorRepository.search = async () => [];
+
+    const text = (response as any).result?.content?.[0]?.text;
+    const docs = JSON.parse(text);
+    assert.equal(docs[0].content, null);
+    assert.equal(docs[0].contentTruncated, false);
   });
 });

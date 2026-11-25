@@ -1,0 +1,17 @@
+# Local override for the running YATS stack (~/.yats/docker-compose.yml).
+# Rebuilds the `yats` service from this repo instead of the published image.
+# Usage:
+#   docker compose -f ~/.yats/docker-compose.yml -f test-connect/yats-local-override.yml \
+#     up -d --build yats
+services:
+  yats:
+    image: yats-server-local:dev
+    build:
+      # absolute: build context resolves relative to the first -f file (~/.yats)
+      context: /home/franco/cosas/code_indexer
+      dockerfile: docker/Dockerfile
+      args:
+        INCLUDE_GO: "false"
+        INCLUDE_PHP: "false"
+        INCLUDE_JAVA: "false"
+        INCLUDE_RUST: "false"

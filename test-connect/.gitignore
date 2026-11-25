@@ -1,0 +1,15 @@
+# Agent homes (auth, config, caches) — isolated per agent, NEVER touched on host
+homes/
+
+# Test results / transcripts
+results/
+
+# Local npm packs fed into the image
+*.tgz
+
+# fixture copy (source: ~/cosas/abs)
+fixture/
+.env
+
+# the repo-wide `bin/` ignore must not swallow the test-connect runner scripts
+!bin/

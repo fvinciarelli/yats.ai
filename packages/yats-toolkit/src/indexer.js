@@ -1,159 +1,531 @@
 /**
- * yats index <path> — Index a repository by sending files to YATS server.
- * Reads each file from the host and POSTs it via HTTP.
+ * yats index <path> [--skip-docs] [--no-config] — Index a repository by
+ * sending files to YATS server. Reads each file from the host and POSTs it
+ * via HTTP.
+ *
+ * --skip-docs: skip documentation files (DOC_EXTENSIONS, default .md/.mdx/
+ * .rst/.txt/.adoc/.org/.wiki/.readme) instead of only .md files.
+ * --no-config: ignore the repo's .yats/config.json and use machine defaults.
+ *
+ * Per-repo config (`.yats/config.json`, all keys optional):
+ *
+ *   {
+ *     "indexDocs": false,                        // skip ALL docs for this repo
+ *     "docExtensions": [".md"],                 // REPLACES the machine's DOC_EXTENSIONS
+ *     "docPatterns": ["docs/", "README.md"],     // whitelist: only these doc files are sent
+ *     "ignoredDirs": ["sandbox"],                // ADDED to the machine's IGNORED_DIRS
+ *     "skipExtensions": [".snap"]                // ADDED to the machine's SKIP_EXTENSIONS
+ *   }
  */
-import { readFileSync, statSync, readdirSync } from "node:fs";
-import { join, relative, basename, extname } from "node:path";
+import { readFileSync, statSync, readdirSync, readSync } from "node:fs";
+import { join, relative } from "node:path";
+import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { canonicalRepoPath } from "./repo-path.js";
 
 const YATS_URL = process.env.YATS_URL || "http://localhost:5555";
 
-// Read configurable filters from env, with defaults
-const IGNORED_DIRS = new Set(
-  (process.env.IGNORED_DIRS || "node_modules,.git,dist,build,.next,__pycache__,vendor,target,bin,obj,.venv,venv,.yarn,.pnpm")
-    .split(",").map(d => d.trim()).filter(Boolean)
-);
+const CONFIG_SCHEMA_HINT = `{
+  "indexDocs": false,
+  "docExtensions": [".md"],
+  "docPatterns": ["docs/", "README.md"],
+  "ignoredDirs": ["sandbox"],
+  "skipExtensions": [".snap"]
+}`;
 
-const SKIP_EXTENSIONS = new Set(
-  (process.env.SKIP_EXTENSIONS || "")
-    .split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
-);
+export const IGNORED = new Set([
+  "node_modules", ".git", "dist", "build", ".next", "__pycache__",
+  "vendor", "target", "bin", "obj", ".venv", "venv", ".yarn", ".pnpm",
+]);
 
-function shouldSkipFile(filePath) {
-  if (SKIP_EXTENSIONS.size === 0) return false;
-  const ext = extname(filePath).toLowerCase();
-  // Also check compound extensions like .min.js
-  const base = basename(filePath).toLowerCase();
-  for (const skipExt of SKIP_EXTENSIONS) {
-    if (base.endsWith(skipExt)) return true;
+export const DEFAULT_DOC_EXTENSIONS = ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme";
+
+/**
+ * Diff plan for one index run.
+ *
+ * @param walkedFiles [{path, hash}] — files found on disk with their content hash
+ * @param state          server state from GET /index/state: {files, reanalyzeAll}
+ * @param options.force  re-analyze everything (skips the state diff)
+ *
+ * send: files to POST /index/file (changed, new, or forced)
+ * remove: paths present in the server state but gone from disk
+ * unchanged: files skipped because hash + analyzer version match
+ */
+export function planIndex(walkedFiles, state, { force = false } = {}) {
+  const files = state?.files ?? {};
+  const reanalyzeAll = !!state?.reanalyzeAll;
+  const send = [];
+  const remove = [];
+  let unchanged = 0;
+  const seen = new Set();
+
+  for (const f of walkedFiles) {
+    seen.add(f.path);
+    if (force || reanalyzeAll || files[f.path] !== f.hash) {
+      send.push(f.path);
+    } else {
+      unchanged++;
+    }
   }
+
+  // Deletion detection: state entries not on disk anymore. Skipped on forced
+  // runs (state is not fetched) — the next normal run cleans them up.
+  if (!force) {
+    for (const p of Object.keys(files)) {
+      if (!seen.has(p)) remove.push(p);
+    }
+  }
+
+  return { send, remove, unchanged };
+}
+
+/**
+ * Read the YATS config written by `yats setup` (~/.yats/.env), so the CLI
+ * filters files consistently with the server (DOC_EXTENSIONS, SKIP_EXTENSIONS,
+ * IGNORED_DIRS). Accepts an explicit path for tests.
+ */
+export function loadYatsEnv(envPath = null) {
+  const file = envPath ?? join(homedir(), ".yats", ".env");
+  const env = {};
+  try {
+    for (const line of readFileSync(file, "utf-8").split("\n")) {
+      if (!line.trim() || line.trim().startsWith("#")) continue;
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m) env[m[1]] = m[2];
+    }
+  } catch {
+    // No .env — use built-in defaults.
+  }
+  return env;
+}
+
+/**
+ * Decide whether a repository-relative path must be skipped client-side.
+ * Pure helper (exported for tests):
+ *  - skipDocs: drop files whose extension is in docExtensions
+ *  - skipExtensions: drop files ending with any of these suffixes
+ *  - docPatterns (prefix whitelist): when set, doc files are only sent if
+ *    their path starts with one of the prefixes (code files always sent)
+ */
+export function shouldSkipFile(
+  relPath,
+  { skipDocs = false, docExtensions = [], skipExtensions = [], docPatterns = null } = {},
+) {
+  const lower = relPath.toLowerCase();
+  const isDoc = docExtensions.some((e) => lower.endsWith(e));
+  if (isDoc) {
+    if (skipDocs) return true;
+    if (docPatterns && !docPatterns.some((p) => relPath.startsWith(p))) return true;
+  }
+  if (skipExtensions.some((e) => lower.endsWith(e))) return true;
   return false;
 }
 
-async function walk(dir) {
+// ============================================================
+// Per-repo config — .yats/config.json (P6)
+// ============================================================
+
+/** Validate a parsed repo config. Returns {ok:false,error} with a human
+ * (and AI-agent) readable explanation of what is wrong. */
+export function validateRepoConfig(raw) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, error: `not valid JSON: ${err.message}` };
+  }
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return { ok: false, error: "must be a JSON object (not an array or a plain value)" };
+  }
+  const errors = [];
+  if (data.indexDocs !== undefined && typeof data.indexDocs !== "boolean") {
+    errors.push('"indexDocs" must be true or false');
+  }
+  for (const key of ["docExtensions", "docPatterns", "ignoredDirs", "skipExtensions"]) {
+    if (data[key] !== undefined && (!Array.isArray(data[key]) || !data[key].every((v) => typeof v === "string"))) {
+      errors.push(`"${key}" must be an array of strings`);
+    }
+  }
+  if (errors.length > 0) return { ok: false, error: errors.join("; ") };
+  return { ok: true, config: data };
+}
+
+/**
+ * Load and validate the repo's .yats/config.json.
+ * Returns { ok:true, config, path, exists } or { ok:false, error, path, exists }.
+ * A missing file is NOT an error — machine defaults apply.
+ */
+export function loadRepoConfig(repoPath) {
+  const configPath = join(repoPath, ".yats", "config.json");
+  let raw;
+  try {
+    raw = readFileSync(configPath, "utf-8");
+  } catch {
+    return { ok: true, config: {}, path: configPath, exists: false };
+  }
+  const result = validateRepoConfig(raw);
+  return { ...result, path: configPath, exists: true };
+}
+
+/**
+ * Merge the machine config (~/.yats/.env) with the repo config.
+ * Rule: a repo can only NARROW what the machine allows — ignoredDirs and
+ * skipExtensions are UNIONs, docExtensions REPLACES the global list, and
+ * indexDocs=false can only turn docs off (never on, if the machine forbids).
+ */
+export function mergeRepoConfig(globalEnv, repoConfig) {
+  const toList = (v) => v.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+
+  const docExtensions = Array.isArray(repoConfig.docExtensions)
+    ? repoConfig.docExtensions.map((e) => e.trim().toLowerCase()).filter(Boolean)
+    : toList(globalEnv.DOC_EXTENSIONS ?? DEFAULT_DOC_EXTENSIONS);
+
+  return {
+    docExtensions,
+    skipExtensions: [
+      ...toList(globalEnv.SKIP_EXTENSIONS ?? ""),
+      ...(Array.isArray(repoConfig.skipExtensions) ? repoConfig.skipExtensions : []),
+    ],
+    ignoredDirs: [
+      ...toList(globalEnv.IGNORED_DIRS ?? ""),
+      ...(Array.isArray(repoConfig.ignoredDirs) ? repoConfig.ignoredDirs : []),
+    ],
+    docPatterns: Array.isArray(repoConfig.docPatterns) ? repoConfig.docPatterns : null,
+    indexDocs: repoConfig.indexDocs !== false,
+  };
+}
+
+/**
+ * The message printed when .yats/config.json is invalid. Written for BOTH
+ * humans and AI agents running `yats index`: it explains what is wrong, why
+ * indexing stopped (a broken filter could index something huge), and the
+ * three ways out (fix + re-run, delete the file, or --no-config).
+ */
+export function configErrorText(repoPath, configPath, error) {
+  return [
+    `✗ Invalid repo config: ${configPath}`,
+    ``,
+    `  ${error}`,
+    ``,
+    `  Indexing stopped before reading any file. A broken config could mean`,
+    `  wrong filters (e.g. indexing a huge folder that was meant to be ignored).`,
+    ``,
+    `  How to fix — pick ONE:`,
+    ``,
+    `  1. Correct ${configPath} (valid JSON, schema below) and re-run:`,
+    ``,
+    `       yats index ${repoPath}`,
+    ``,
+    `  2. Delete the file to fall back to the machine defaults (~/.yats/.env).`,
+    ``,
+    `  3. Re-run with --no-config to ignore the file for this run only:`,
+    ``,
+    `       yats index ${repoPath} --no-config`,
+    ``,
+    `  Valid schema (every key is optional):`,
+    ``,
+    ...CONFIG_SCHEMA_HINT.split("\n").map((l) => `    ${l}`),
+    ``,
+    `  Semantics: ignoredDirs/skipExtensions ADD to the machine config;`,
+    `  docExtensions REPLACES it; docPatterns whitelists which doc files are`,
+    `  sent (prefix match); indexDocs=false skips all docs for this repo.`,
+  ].join("\n");
+}
+
+function promptYesNo(question) {
+  process.stdout.write(question);
+  try {
+    const buf = Buffer.alloc(16);
+    const n = readSync(0, buf, 0, 16);
+    return buf.toString("utf-8", 0, n).trim().toLowerCase() === "y";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the repo config, stopping the run on a malformed file.
+ * - Non-TTY (the normal case — an AI agent runs yats): exit 1 with the
+ *   configErrorText so the agent can fix the file and re-run.
+ * - TTY (a human): ask whether to open $EDITOR to fix it, re-validate and
+ *   retry in a loop until valid or declined.
+ */
+export function resolveRepoConfig(repoPath, noConfig = false) {
+  if (noConfig) return {};
+  for (;;) {
+    const res = loadRepoConfig(repoPath);
+    if (res.ok) return res.config;
+
+    console.error(configErrorText(repoPath, res.path, res.error));
+
+    if (!process.stdin.isTTY) process.exit(1);
+
+    const editor = process.env.EDITOR || process.env.VISUAL || "vi";
+    const answer = promptYesNo(`\n  Open ${editor} to fix it and retry? [y/N] `);
+    if (!answer) process.exit(1);
+    spawnSync(editor, [res.path], { stdio: "inherit" });
+    console.log("  Re-reading the config...");
+  }
+}
+
+
+async function walk(dir, ignored) {
   const files = [];
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const e of entries) {
-    if (IGNORED_DIRS.has(e.name) || e.name.startsWith(".")) continue;
+    if (ignored.has(e.name) || e.name.startsWith(".")) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      files.push(...await walk(full));
+      files.push(...await walk(full, ignored));
     } else if (e.isFile()) {
-      if (!shouldSkipFile(full)) {
-        files.push(full);
-      }
+      files.push(full);
     }
   }
   return files;
 }
 
 export default async function indexRepo(args, options = {}) {
-  const skipDocs = options.skipDocs || false;
-  const repoPath = args[0];
-  if (!repoPath) {
-    console.error("Usage: npx yats index <path>");
+  const skipDocsFlag = options.skipDocs || false;
+  const noConfig = options.noConfig || false;
+  const force = options.force === true;
+  const rawPath = args[0];
+  if (!rawPath) {
+    console.error("Usage: npx yats index <path> [--skip-docs] [--no-config]");
     process.exit(1);
   }
 
-  const repoName = basename(repoPath);
-  const repoStat = statSync(repoPath);
-  if (!repoStat.isDirectory()) {
+  // The repository identity is its canonical full path
+  // (`C:\Repo\`, `C:/Repo` and `/c/Repo` are the same repo) — never the
+  // basename, and never the raw string the user typed: `yats index .` used to
+  // register a repo literally named ".", which split the index in two.
+  const repoPath = canonicalRepoPath(rawPath);
+  let stat;
+  try {
+    stat = statSync(repoPath);
+  } catch {
+    console.error(`Path not found: ${repoPath}`);
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
     console.error(`Not a directory: ${repoPath}`);
     process.exit(1);
   }
 
-  // Register repo
+  // P4/P6 — machine config (~/.yats/.env) + repo config (.yats/config.json).
+  // A malformed repo config STOPS the run (never index with broken filters).
+  const yatsEnv = loadYatsEnv();
+  const repoConfig = resolveRepoConfig(repoPath, noConfig);
+  const effective = mergeRepoConfig(yatsEnv, repoConfig);
+  const skipDocs = skipDocsFlag || effective.indexDocs === false;
+  const ignoredDirs = new Set([...IGNORED, ...effective.ignoredDirs]);
+
+  // Register repo. The server owns the identity: it canonicalizes the path and
+  // answers with the rootPath already stored for this folder. That keeps a
+  // legacy index (indexed under another spelling) working instead of creating
+  // a duplicate, and `yats index .` / `yats watch .` agree on the same repo.
+  //
+  // Older servers answer with the *basename* instead of the full rootPath, so
+  // only trust the field when it looks like an absolute path (a CLI upgrade can
+  // land before the server image does).
+  let repoName = repoPath;
   try {
-    const regRes = await fetch(`${YATS_URL}/index`, {
+    const res = await fetch(`${YATS_URL}/index`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: repoPath }),
     });
-    if (!regRes.ok) {
-      const errBody = await regRes.text();
-      console.error(`Failed to register repository: ${regRes.status} ${errBody}`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      console.error(
+        `Cannot register repository: ${data?.error ?? `HTTP ${res.status}`}`,
+      );
       process.exit(1);
+    }
+    if (data?.warning) console.warn(`\n  ⚠ ${data.warning}\n`);
+    const answered = typeof data?.repository === "string" ? data.repository : "";
+    if (answered && (answered.includes("/") || answered.includes("\\"))) {
+      repoName = answered;
     }
   } catch {
     console.error(`Cannot reach YATS at ${YATS_URL}. Is it running?`);
     process.exit(1);
   }
 
-  // Walk and send files
+  // Walk the tree and hash every file up front — reading + sha256 is cheap;
+  // it lets us diff against the server state instead of re-sending everything.
   console.log(`Indexing ${repoPath}...`);
-  const files = await walk(repoPath);
-  // Send files concurrently in batches
-  const CONCURRENCY = 10;
-  const batch = [];
-  
-  for (const file of files) {
+  const walked = [];
+  for (const file of await walk(repoPath, ignoredDirs)) {
     const relPath = relative(repoPath, file);
-    if (skipDocs && relPath.endsWith(".md")) continue;
-    batch.push(file);
+    if (shouldSkipFile(relPath, {
+      skipDocs,
+      docExtensions: effective.docExtensions,
+      skipExtensions: effective.skipExtensions,
+      docPatterns: effective.docPatterns,
+    })) continue;
+    try {
+      const content = readFileSync(file, "utf-8");
+      if (content.includes("\0") || content.length > 1_000_000) continue;
+      walked.push({
+        file,
+        relPath,
+        content,
+        hash: createHash("sha256").update(content).digest("hex"),
+      });
+    } catch {
+      // Unreadable file — skip it.
+    }
+  }
+
+  // Server state: which files were analyzed with which content hash, and
+  // whether the analyzer version forces a full re-analysis pass.
+  let state = { files: {}, reanalyzeAll: true };
+  if (!force) {
+    try {
+      const res = await fetch(
+        `${YATS_URL}/index/state?repository=${encodeURIComponent(repoName)}`,
+      );
+      if (res.ok) state = await res.json();
+    } catch {
+      // Server unreachable or endpoint missing — full pass.
+    }
+  }
+
+  const plan = planIndex(
+    walked.map((w) => ({ path: w.relPath, hash: w.hash })),
+    state,
+    { force },
+  );
+  const byPath = new Map(walked.map((w) => [w.relPath, w]));
+
+  // Remove files that disappeared since the last index
+  let removed = 0;
+  for (const relPath of plan.remove) {
+    try {
+      const res = await fetch(`${YATS_URL}/index/remove`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repository: repoName, path: relPath }),
+      });
+      if (res.ok) removed++;
+    } catch {
+      // Non-fatal — the next run retries.
+    }
   }
 
   let sent = 0;
-  let skipped = 0;
   let errors = 0;
-  const errorMessages = [];
+  let serverSkipped = 0;
+  const failedPaths = [];
+  const CONCURRENCY = 10;
+  const batch = plan.send.map((p) => byPath.get(p));
   const total = batch.length;
 
   for (let i = 0; i < batch.length; i += CONCURRENCY) {
     const chunk = batch.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(chunk.map(async (file) => {
-      const relPath = relative(repoPath, file);
+    const results = await Promise.all(chunk.map(async (entry) => {
+      const relPath = entry.relPath;
       try {
-        const content = readFileSync(file, "utf-8");
-        // Skip binary files and files > 1MB
-        if (content.includes("\0") || content.length > 1_000_000) {
-          return { status: "skipped", file: relPath, reason: "binary or too large" };
-        }
         const res = await fetch(`${YATS_URL}/index/file`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repoName, filePath: relPath, content }),
+          body: JSON.stringify({
+            repoName,
+            filePath: relPath,
+            content: entry.content,
+            contentHash: entry.hash,
+          }),
         });
-        const body = await res.json().catch(() => ({}));
-        if (res.ok) {
-          // Server may return { ok: true, status: "skipped" } for unsupported files
-          if (body.status === "skipped") {
-            return { status: "skipped", file: relPath, reason: body.reason || "unsupported" };
-          }
-          return { status: "indexed", file: relPath };
-        } else {
-          const errMsg = body.error || `HTTP ${res.status}`;
-          return { status: "error", file: relPath, reason: errMsg };
-        }
-      } catch (err) {
-        return { status: "error", file: relPath, reason: err.message };
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, serverSkipped: data.skipped === true };
+      } catch {
+        return { ok: false, serverSkipped: false };
       }
     }));
-    
+
     for (const r of results) {
-      if (r.status === "indexed") sent++;
-      else if (r.status === "skipped") skipped++;
-      else {
-        errors++;
-        errorMessages.push(`  ${r.file}: ${r.reason}`);
-      }
+      if (r.ok && !r.serverSkipped) sent++;
+      else if (r.ok) serverSkipped++;
+      else errors++;
     }
-    process.stdout.write(`\r  ${sent + skipped + errors}/${total} files`);
+    for (const entry of chunk) {
+      const r = results[chunk.indexOf(entry)];
+      if (r && !r.ok) failedPaths.push(entry.relPath);
+    }
+    process.stdout.write(`\r  ${sent + errors}/${total} files`);
+  }
+  console.log(
+    `\r  ✓ ${sent} files indexed` +
+    `${serverSkipped > 0 ? `, ${serverSkipped} skipped by server` : ""}` +
+    `${plan.unchanged > 0 ? `, ${plan.unchanged} unchanged` : ""}` +
+    `${removed > 0 ? `, ${removed} removed` : ""}` +
+    `${errors > 0 ? `, ${errors} failed` : ""}`,
+  );
+  if (failedPaths.length > 0) {
+    console.log(`  ! failed: ${failedPaths.slice(0, 5).join(", ")}${failedPaths.length > 5 ? ` (+${failedPaths.length - 5} more)` : ""}`);
   }
 
-  // Summary
-  console.log(`\r  ✓ ${sent} indexed, ${skipped} skipped${errors > 0 ? `, ${errors} errors` : ""}`);
-  if (errorMessages.length > 0) {
-    console.log("");
-    console.log(`  Errors:`);
-    for (const msg of errorMessages.slice(0, 20)) {
-      console.log(msg);
+  // Finalize: resolve cross-file references and store relationships.
+  // The server also flushes automatically after a quiet period, but an
+  // explicit call makes the graph available immediately.
+  try {
+    const res = await fetch(`${YATS_URL}/index/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repository: repoName }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      console.log(`  ✓ Graph finalized (${data.stored} relationships in final flush)`);
     }
-    if (errorMessages.length > 20) {
-      console.log(`  ... and ${errorMessages.length - 20} more errors`);
-    }
+  } catch {
+    // Non-fatal — the server flushes on its own debounce timer.
   }
-  console.log("");
 
-  if (errors > 0) {
-    process.exit(1);
+  // Record the indexed commit so `yats watch` knows where to start diffing
+  // from (P1: the index reflects the last commit, not the last save).
+  try {
+    const { execSync } = await import("node:child_process");
+    const commit = execSync("git rev-parse HEAD", {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    if (commit) {
+      await fetch(`${YATS_URL}/index/commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repository: repoName, commit }),
+      });
+      console.log(`  ✓ Indexed commit recorded: ${commit.slice(0, 8)}`);
+    }
+  } catch {
+    // Not a git repo (or server unreachable) — watch will handle it.
   }
+
+  // Report the real totals from the graph. The server flushes incrementally
+  // while files stream in, so the final flush above may report 0 even though
+  // thousands of relationships are already stored.
+  try {
+    const res = await fetch(`${YATS_URL}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "repository_summary", arguments: { path: repoName } },
+      }),
+    });
+    const data = await res.json();
+    const text = data?.result?.content?.[0]?.text;
+    if (text) {
+      const summary = JSON.parse(text);
+      console.log(`  ✓ Indexed ${summary.totalSymbols} symbols, ${summary.totalRelationships} relationships`);
+    }
+  } catch {
+    // Non-fatal — summary is informational.
+  }
+  console.log(``);
 }

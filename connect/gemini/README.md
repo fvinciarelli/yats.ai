@@ -1,27 +1,19 @@
 # Gemini CLI — YATS Setup
 
-Two files to place:
-
----
-
-## 1. `GEMINI.md` — Agent behavior
-
-**Copy to:** repo root (e.g., `~/my-project/GEMINI.md`)
-
-Gemini reads this automatically when you open a repo. It tells Gemini to use YATS MCP tools first, before reading files.
-
----
-
-## 2. `mcp.json` — Connection config
-
-**Copy to:** `.gemini/settings.json` (in your repo root)
-
-Connects Gemini to the YATS bridge via stdio. Also set the env var:
+Install from your repo root:
 
 ```bash
-export GEMINI_CLI_TRUST_WORKSPACE=true   # add to ~/.bashrc or ~/.zshrc
+yats connect --install gemini
 ```
 
-> Without `GEMINI_CLI_TRUST_WORKSPACE=true`, Gemini will ask permission for every MCP tool call.
+This creates/updates:
 
-Done.
+| File | Purpose |
+|------|---------|
+| `GEMINI.md` (repo root) | Teaches Gemini to use YATS tools before reading files |
+| `.gemini/settings.json` | Connects Gemini to the YATS MCP server (your existing entries are preserved) |
+
+Existing files are never overwritten: `GEMINI.md` gets an appended YATS block
+after confirmation, and `.gemini/settings.json` entries are merged.
+
+See the full docs at https://github.com/fvinciarelli/yats.ai/tree/main/connect/gemini

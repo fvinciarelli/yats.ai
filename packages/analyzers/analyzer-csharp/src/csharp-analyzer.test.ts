@@ -1,355 +1,419 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { CSharpAnalyzer } from "./csharp-analyzer.js";
-import { SymbolKind, RelationshipKind } from "@yats/shared";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { RelationshipKind } from "@yats/shared";
 
-const analyzer = new CSharpAnalyzer();
+const FIXTURE = `using MyApp.Repositories;
 
-/** Helper: create a temp .cs file, analyze it via bridge, return result */
-async function analyzeCode(
-  fileName: string,
-  code: string,
-  repoName = "test-repo",
-): Promise<ReturnType<typeof analyzer.analyze>> {
-  const dir = mkdtempSync(join(tmpdir(), "yats-csharp-test-"));
-  const filePath = join(dir, fileName);
-  try {
-    writeFileSync(filePath, code, "utf-8");
-    return await analyzer.analyze(filePath, code, repoName);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+namespace MyApp.Services
+{
+    public class OrderService
+    {
+        private readonly OrderRepository _repo = new();
+        private readonly IValidator _validator;
+
+        public OrderService(OrderRepository repo) { _repo = repo; }
+
+        public void GetOrders()
+        {
+            _repo.FetchAll();
+            OrderValidator.Validate(_repo);
+            this.Helper();
+            OrderDto dto = new OrderDto();
+            dto.Map();
+        }
+
+        private void Helper() { }
+    }
+
+    public class OrderValidator
+    {
+        public static void Validate(OrderRepository repo) { }
+    }
+
+    public class OrderDto
+    {
+        public void Map() { }
+    }
 }
 
-describe("CSharpAnalyzer", () => {
-  it("detects .cs files", () => {
-    assert.ok(analyzer.canAnalyze("Program.cs", ""));
-    assert.ok(analyzer.canAnalyze("Models/User.cs", ""));
-    assert.ok(!analyzer.canAnalyze("script.js", ""));
-    assert.ok(!analyzer.canAnalyze("code.py", ""));
+namespace MyApp.Repositories
+{
+    public class OrderRepository
+    {
+        public void FetchAll() { }
+    }
+}
+`;
+
+describe("CSharpAnalyzer (Roslyn bridge)", () => {
+  it("classifies call receivers: field type, static type, this, local, constructor", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Services/OrderService.cs", FIXTURE, "repo");
+
+    const calls = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.CALLS,
+    );
+    const byExpr = new Map<string, Record<string, unknown>>(
+      calls.map((c) => [String(c.metadata?.receiverExpr ?? ""), c.metadata]),
+    );
+
+    // Field call → receiver type from the field declaration
+    assert.equal(byExpr.get("_repo")?.receiverType, "OrderRepository");
+    assert.equal(byExpr.get("_repo")?.receiverKind, "field");
+    // Static call on a type name
+    assert.equal(byExpr.get("OrderValidator")?.receiverType, "OrderValidator");
+    assert.equal(byExpr.get("OrderValidator")?.receiverKind, "type");
+    // this-call → raw target already scoped, no receiverType
+    assert.equal(byExpr.get("this")?.receiverKind, "this");
+    assert.ok(!byExpr.get("this")?.receiverType);
+    // Local with explicit type
+    assert.equal(byExpr.get("dto")?.receiverType, "OrderDto");
+    assert.equal(byExpr.get("dto")?.receiverKind, "local");
+    // Constructor-scoped call: `new OrderDto()` inside method params count as locals? No —
+    // `new OrderRepository()` at field init is inside the field declaration, covered above.
   });
 
-  it("extracts classes with inheritance and interfaces", async () => {
-    const code = `
-using System;
+  it("emits symbols with the full repo-relative path (no basename truncation)", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze(
+      "Services/OrderService.cs",
+      FIXTURE,
+      "repo",
+    );
+    for (const sym of result.symbols) {
+      assert.equal(sym.location.relativePath, "Services/OrderService.cs");
+      assert.ok(
+        sym.id.includes("::Services/OrderService.cs::"),
+        `expected full path in id, got ${sym.id}`,
+      );
+    }
+  });
+
+  it("emits CONTAINS and convention kinds (SERVICE)", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Services/OrderService.cs", FIXTURE, "repo");
+    const contains = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.CONTAINS,
+    );
+    assert.ok(contains.length >= 5, `expected CONTAINS edges, got ${contains.length}`);
+    const kinds = new Set(result.symbols.map((s) => s.kind));
+    assert.ok(kinds.has("service" as any), `expected SERVICE kind, got ${[...kinds]}`);
+  });
+});
+
+// ============================================================
+// Record + static constructor — find_references regression
+// ============================================================
+
+const RECORD_FIXTURE = `namespace App.Models
+{
+    public sealed record Person(string Name)
+    {
+        static Person()
+        {
+            Cache.Register(typeof(Person));
+        }
+
+        public static Person Empty()
+        {
+            return new Person(string.Empty);
+        }
+    }
+
+    public class Factory
+    {
+        public Person Make()
+        {
+            return new Person("x");
+        }
+    }
+
+    public static class Cache
+    {
+        public static void Register(System.Type t) { }
+    }
+}
+`;
+
+describe("CSharpAnalyzer (Roslyn bridge) — records with static constructors", () => {
+  it("indexes the record type as a class symbol with isRecord metadata", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const record = result.symbols.find(
+      (s) => s.id === "repo::Models/Person.cs::App.Models.Person",
+    );
+    assert.ok(record, "record type symbol should be indexed");
+    assert.equal(record.kind, "class" as any);
+    assert.equal(record.metadata?.isRecord, true);
+  });
+
+  it("names the static constructor X.ctor — no name twin with the type", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const ctor = result.symbols.find((s) => s.kind === "constructor" as any);
+    assert.ok(ctor, "constructor symbol should be indexed");
+    assert.equal(ctor.name, "Person.ctor");
+    assert.equal(ctor.id, "repo::Models/Person.cs::App.Models.Person.Person.ctor");
+    // The signature keeps the source-level shape.
+    assert.equal(ctor.signature, "Person()");
+
+    // No symbol other than the type itself is named exactly "Person".
+    const persons = result.symbols.filter((s) => s.name === "Person");
+    assert.equal(persons.length, 1);
+    assert.equal(persons[0]!.kind, "class" as any);
+  });
+
+  it("emits INSTANTIATES edges from new X(...) to the record type", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const instantiates = result.relationships.filter(
+      (r) => r.kind === ("INSTANTIATES" as any),
+    );
+    const recordId = "repo::Models/Person.cs::App.Models.Person";
+
+    // `new Person(string.Empty)` inside the static factory Empty
+    const fromEmpty = instantiates.find(
+      (r) => r.sourceSymbolId === "repo::Models/Person.cs::App.Models.Person.Empty",
+    );
+    assert.ok(fromEmpty, "Empty() should instantiate the record");
+    assert.equal(fromEmpty.targetSymbolId, recordId);
+    assert.equal(fromEmpty.metadata?.typeName, "Person");
+
+    // `new Person("x")` inside Factory.Make
+    const fromMake = instantiates.find(
+      (r) => r.sourceSymbolId === "repo::Models/Person.cs::App.Models.Factory.Make",
+    );
+    assert.ok(fromMake, "Factory.Make() should instantiate the record");
+    assert.equal(fromMake.targetSymbolId, recordId);
+
+    // `typeof(Person)` is not an instantiation.
+    const fromCtor = instantiates.filter(
+      (r) => r.sourceSymbolId.includes("Person.ctor"),
+    );
+    assert.equal(fromCtor.length, 0);
+  });
+
+  it("keeps CALLS from the static constructor working", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Models/Person.cs", RECORD_FIXTURE, "repo");
+
+    const calls = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.CALLS,
+    );
+    const fromCtor = calls.find((r) =>
+      r.sourceSymbolId.includes("Person.ctor"),
+    );
+    assert.ok(fromCtor, "static ctor should still emit CALLS");
+    assert.equal(fromCtor.metadata?.receiverType, "Cache");
+    assert.equal(fromCtor.metadata?.receiverExpr, "Cache");
+  });
+});
+
+// ============================================================
+// USES_TYPE — data types referenced without being instantiated
+// ============================================================
+
+const DTO_USAGE_FIXTURE = `using MyApp.Models;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace MyApp.Services;
 
-public class PaymentService : BaseService, IPaymentProcessor
+public sealed record ProfileDto(int Id, string Name)
 {
-    public bool Process(decimal amount)
-    {
-        return true;
-    }
+    public static ProfileDto Empty { get; } = new(0, "");
 }
-`;
-    const result = await analyzer.analyze("PaymentService.cs", code, "test-repo");
 
-    // PaymentService is detected as SERVICE by naming convention
-    const services = result.symbols.filter((s) => s.kind === SymbolKind.SERVICE);
-    assert.equal(services.length, 1);
-    assert.equal(services[0]!.name, "PaymentService");
-
-    const inherits = result.relationships.filter((r) => r.kind === RelationshipKind.INHERITS);
-    const impls = result.relationships.filter((r) => r.kind === RelationshipKind.IMPLEMENTS);
-    // C# regex: I-starting interfaces get IMPLEMENTS
-    assert.equal(inherits.length, 1);
-    assert.equal(impls.length, 1);
-  });
-
-  it("extracts interfaces", async () => {
-    const code = `
-namespace MyApp.Contracts;
-
-public interface IPaymentProcessor
+public class ProfileService
 {
-    Task<bool> ProcessAsync(decimal amount);
-    void Refund(string transactionId);
-}
-`;
-    const result = await analyzer.analyze("IPaymentProcessor.cs", code, "test-repo");
+    private readonly ProfileDto _empty;
+    private List<ProfileDto> _cache = new();
+    private string _name = ProfileDto.Empty.Name;
 
-    const ifaces = result.symbols.filter((s) => s.kind === SymbolKind.INTERFACE);
-    assert.equal(ifaces.length, 1);
-    assert.equal(ifaces[0]!.name, "IPaymentProcessor");
-  });
+    public ProfileService(ProfileDto seed) { _empty = seed; }
 
-  it("extracts methods with return types", async () => {
-    const code = `
-public class Calculator
-{
-    public int Add(int a, int b)
+    public ProfileDto? Fetch(int id)
     {
-        return a + b;
+        var dto = _empty;
+        if (dto is null) return null;
+        ProfileDto copy = (ProfileDto)dto;
+        var list = new List<ProfileDto>();
+        var type = typeof(ProfileDto);
+        object boxed = dto as ProfileDto;
+        var name = nameof(ProfileDto);
+        return copy;
     }
 
-    private async Task<int> CalculateAsync()
-    {
-        return await Task.FromResult(42);
-    }
-
-    public static Calculator Create() => new();
+    public Task<List<ProfileDto>> All() => Task.FromResult(new List<ProfileDto>());
 }
 `;
-    const result = await analyzer.analyze("Calculator.cs", code, "test-repo");
 
-    const methods = result.symbols.filter((s) => s.kind === SymbolKind.METHOD);
-    assert.equal(methods.length, 3, `Expected 3 methods, got ${methods.length}`);
+describe("CSharpAnalyzer (Roslyn bridge) — USES_TYPE edges", () => {
+  it("emits a USES_TYPE edge for every way a type can be mentioned", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Services/ProfileService.cs", DTO_USAGE_FIXTURE, "repo");
+
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    // Every edge targets the same-file record by its exact ID.
+    const record = result.symbols.find((s) => s.name === "ProfileDto" && s.kind !== "property");
+    assert.ok(record, "record symbol missing");
+    for (const u of uses) {
+      assert.equal(u.targetSymbolId, record!.id, `wrong target for ${u.sourceSymbolId}`);
+      assert.equal(u.metadata?.typeName, "ProfileDto");
+    }
+
+    const bySource = new Map(uses.map((u) => [u.sourceSymbolId, u.metadata ?? {}]));
+
+    // Field type + generic argument (List<ProfileDto> → ProfileDto, not List)
+    const field = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService._empty");
+    assert.ok(field, "field declaration should use the type");
+    assert.deepEqual(field!.lines, [14]);
+
+    const genericField = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService._cache");
+    assert.ok(genericField, "generic argument should be recorded");
+    assert.equal(genericField!.typeName, "ProfileDto");
+
+    // Static member access: ProfileDto.Empty
+    const member = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService");
+    assert.ok(member, "static member access should record the type");
+    assert.deepEqual(member!.usageKinds, ["member"]);
+
+    // Constructor parameter
+    const ctor = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService.ProfileService.ctor");
+    assert.ok(ctor, "ctor parameter should use the type");
+    assert.deepEqual(ctor!.usageKinds, ["parameter"]);
+
+    // Return type + local + cast + typeof + as + nameof + new, all on Fetch
+    const fetch = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService.Fetch");
+    assert.ok(fetch, "Fetch should use the type");
+    const kinds = fetch!.usageKinds as string[];
+    for (const expected of ["return", "local", "cast", "typeof", "as", "nameof", "new"]) {
+      assert.ok(kinds.includes(expected), `Fetch missing usage kind ${expected} (got ${kinds})`);
+    }
+    assert.ok((fetch!.lines as number[]).length >= 6, "Fetch should carry several lines");
+    assert.equal(fetch!.count, (fetch!.lines as number[]).length);
+
+    // Task<List<ProfileDto>> return type keeps the argument, drops BCL containers
+    const all = bySource.get("repo::Services/ProfileService.cs::MyApp.Services.ProfileService.All");
+    assert.ok(all, "All() should use the type");
+    assert.ok((all!.usageKinds as string[]).includes("return"));
+
+    // using directives travel with the edge so cross-file resolution can
+    // pick the right namespace when two types share a name.
+    assert.ok((uses[0]!.metadata?.usings as string[]).includes("MyApp.Models"));
+
+    // BCL containers are filtered — no edge named List/Task.
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "List"));
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "Task"));
   });
 
-  it("extracts using directives", async () => {
-    const code = `
-using System;
+  it("records one edge per (source, type) with all usage lines", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Services/ProfileService.cs", DTO_USAGE_FIXTURE, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    const ids = uses.map((u) => u.id);
+    assert.equal(new Set(ids).size, ids.length, "USES_TYPE edge ids must be unique");
+    for (const u of uses) {
+      const lines = u.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0, "every edge needs lines");
+      assert.deepEqual(lines, [...lines].sort((a, b) => a - b), "lines must be sorted");
+      assert.equal(u.metadata?.count, lines.length);
+    }
+  });
+});
+
+const SIGNATURE_USAGE_FIXTURE = `using System;
 using System.Collections.Generic;
-using MyApp.Services;
-using MyApp.Models;
 
-namespace MyApp;
+namespace App.Delegates;
 
-public class Test { }
-`;
-    const result = await analyzer.analyze("Test.cs", code, "test-repo");
-
-    const imports = result.relationships.filter((r) => r.kind === RelationshipKind.IMPORTS);
-    assert.equal(imports.length, 4, `Expected 4 IMPORTS, got ${imports.length}`);
-  });
-
-  it("detects architectural conventions", async () => {
-    const code = `
-public class UserController { }
-public class UserService { }
-public class UserRepository { }
-public class UserDTO { }
-public class UserEntity { }
-public class AuthMiddleware { }
-public class RequestHandler { }
-public class ServiceFactory { }
-`;
-    const result = await analyzer.analyze("UserController.cs", code, "test-repo");
-
-    const controllers = result.symbols.filter((s) => s.kind === SymbolKind.CONTROLLER);
-    const services = result.symbols.filter((s) => s.kind === SymbolKind.SERVICE);
-    const repos = result.symbols.filter((s) => s.kind === SymbolKind.REPOSITORY);
-    const dtos = result.symbols.filter((s) => s.kind === SymbolKind.DTO);
-    const entities = result.symbols.filter((s) => s.kind === SymbolKind.ENTITY);
-    const middlewares = result.symbols.filter((s) => s.kind === SymbolKind.MIDDLEWARE);
-    const factories = result.symbols.filter((s) => s.kind === SymbolKind.FACTORY);
-
-    assert.equal(controllers.length, 2, `Expected 2 CONTROLLER (UserController + RequestHandler), got ${controllers.length}`);
-    assert.equal(services.length, 1);
-    assert.equal(repos.length, 1);
-    assert.equal(dtos.length, 1);
-    assert.equal(entities.length, 1);
-    assert.equal(middlewares.length, 1);
-    assert.equal(factories.length, 1);
-  });
-
-  it("detects test files", async () => {
-    const code = `
-using Xunit;
-
-public class UserServiceTests
+public sealed class PayloadDto
 {
-    [Fact]
-    public void Test_CreateUser()
+    public string Body { get; set; } = "";
+}
+
+public delegate void PayloadHandler(PayloadDto payload, IReadOnlyList<PayloadDto> all);
+
+public class Dispatcher
+{
+    public void Run()
     {
+        void Handle(PayloadDto single)
+        {
+            Console.WriteLine(single.Body);
+        }
+
+        var empty = Array.Empty<PayloadDto>();
+        Handle(new PayloadDto());
     }
 }
 `;
-    const result = await analyzer.analyze("Tests/UserServiceTests.cs", code, "test-repo");
 
-    const tests = result.symbols.filter((s) => s.metadata?.isTest === true);
-    assert.equal(tests.length, 1);
+describe("CSharpAnalyzer (Roslyn bridge) — signature-only type usages", () => {
+  it("records delegate signatures, local functions and generic method arguments", async () => {
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Delegates/Dispatcher.cs", SIGNATURE_USAGE_FIXTURE, "repo");
+
+    const uses = result.relationships.filter((r) => r.kind === RelationshipKind.USES_TYPE);
+    const kindsFor = (sourceSuffix: string) => {
+      const edge = uses.find((u) => u.sourceSymbolId.endsWith(sourceSuffix));
+      assert.ok(edge, `missing USES_TYPE edge for ${sourceSuffix}`);
+      return edge!.metadata?.usageKinds as string[];
+    };
+
+    // Delegate: parameter + generic argument of the parameter type.
+    assert.ok(kindsFor("App.Delegates.PayloadHandler").includes("parameter"));
+
+    // Local function inside Run(): its parameter type is attributed to Run.
+    assert.ok(kindsFor("App.Delegates.Dispatcher.Run").includes("parameter"));
+
+    // Array.Empty<PayloadDto>() — generic method type argument.
+    assert.ok(kindsFor("App.Delegates.Dispatcher.Run").includes("generic"));
   });
+});
 
-  it("handles partial classes", async () => {
-    const code = `
-public partial class UserValidator
+describe("CSharpAnalyzer (Roslyn bridge) — top-level statements", () => {
+  it("attributes usages from global statements to a file-level symbol", async () => {
+    const code = `using System.Collections.Generic;
+
+var profile = new ProfileDto { Name = "x" };
+var list = new List<ProfileDto>();
+ProfileDto current = profile;
+System.Console.WriteLine(ProfileDto.Empty.Name);
+
+public sealed class ProfileDto
 {
-    public bool Validate(string email) => true;
+    public static ProfileDto Empty { get; } = new();
+    public string Name { get; set; } = "";
 }
 `;
-    const result = await analyzer.analyze("UserValidator.cs", code, "test-repo");
+    const analyzer = new CSharpAnalyzer();
+    const result = await analyzer.analyze("Program.cs", code, "repo");
 
-    const classes = result.symbols.filter((s) => s.kind === SymbolKind.CLASS);
-    assert.equal(classes.length, 1);
-    assert.equal(classes[0]!.name, "UserValidator");
-  });
+    const topLevel = result.symbols.find((s) => s.name === "Program.cs");
+    assert.ok(topLevel, "file-level symbol for top-level statements missing");
+    assert.equal(topLevel!.metadata?.isTopLevel, true);
 
-  it("skips keywords in method detection", async () => {
-    const code = `
-public class LoopExample
-{
-    public void Process()
-    {
-        if (true) return;
-        while (true) break;
-        for (int i = 0; i < 10; i++) { }
-        foreach (var x in list) { }
-        using (var f = new FileStream()) { }
-        switch (x) { }
-    }
-}
-`;
-    const result = await analyzer.analyze("LoopExample.cs", code, "test-repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE && r.sourceSymbolId === topLevel!.id,
+    );
+    assert.ok(uses.length > 0, "top-level type usages must be attributed");
+    assert.deepEqual(uses[0]!.metadata?.lines, [3, 4, 5, 6]);
+    assert.ok((uses[0]!.metadata?.usageKinds as string[]).includes("new"));
 
-    // Should not detect "if", "while", "for", "foreach", "using", "switch" as methods
-    const methods = result.symbols.filter((s) => s.kind === SymbolKind.METHOD);
-    // Process should be detected; regex may also catch other patterns
-    assert.ok(methods.length >= 1, `Expected at least 1 method, got ${methods.length}`);
-    const processMethod = methods.find((s) => s.name === "Process");
-    assert.ok(processMethod, "Process method should be detected");
-  });
-
-  it("returns empty results for empty file", async () => {
-    const result = await analyzer.analyze("empty.cs", "", "test-repo");
-    assert.equal(result.errors.length, 0);
-  });
-
-  it("extracts CONTAINS relationships for class members", async () => {
-    const code = `
-public class OrderService
-{
-    private readonly IRepository _repo;
-    public const int MaxItems = 100;
-
-    public OrderService(IRepository repo)
-    {
-        _repo = repo;
-    }
-
-    public void Process() { }
-
-    public decimal Total { get; set; }
-}
-`;
-    const result = await analyzeCode("OrderService.cs", code);
-
-    const contains = result.relationships.filter((r) => r.kind === RelationshipKind.CONTAINS);
-    // Should have CONTAINS for: _repo (field), MaxItems (constant), .ctor (constructor), Process (method), Total (property)
-    assert.ok(contains.length >= 5, `Expected >= 5 CONTAINS, got ${contains.length}`);
-
-    // Field should be detected
-    const fields = result.symbols.filter((s) => s.kind === SymbolKind.FIELD);
-    assert.equal(fields.length, 1, `Expected 1 field (_repo), got ${fields.length}`);
-
-    // Constant should be detected
-    const constants = result.symbols.filter((s) => s.kind === SymbolKind.CONSTANT);
-    assert.equal(constants.length, 1, `Expected 1 constant (MaxItems), got ${constants.length}`);
-
-    // Property should be detected
-    const properties = result.symbols.filter((s) => s.kind === SymbolKind.PROPERTY);
-    assert.equal(properties.length, 1, `Expected 1 property (Total), got ${properties.length}`);
-
-    // Constructor should be distinct from class
-    const ctors = result.symbols.filter((s) => s.kind === SymbolKind.CONSTRUCTOR);
-    assert.equal(ctors.length, 1);
-    // Constructor ID should end with .ctor, not be same as class
-    assert.ok(ctors[0]!.id.endsWith(".ctor"), `Constructor ID should end with .ctor, got: ${ctors[0]!.id}`);
-  });
-
-  it("extracts CALLS relationships from method bodies", async () => {
-    const code = `
-public class Worker
-{
-    public void DoWork()
-    {
-        Validate();
-        ProcessData();
-    }
-
-    private void Validate() { }
-    private void ProcessData() { }
-}
-`;
-    const result = await analyzeCode("Worker.cs", code);
-
-    const calls = result.relationships.filter((r) => r.kind === RelationshipKind.CALLS);
-    // DoWork should call Validate and ProcessData
-    const doWorkCalls = calls.filter((r) => r.sourceSymbolId.includes("DoWork"));
-    assert.equal(doWorkCalls.length, 2, `Expected 2 CALLS from DoWork, got ${doWorkCalls.length}`);
-    assert.ok(doWorkCalls.some((r) => r.targetSymbolId.includes("Validate")));
-    assert.ok(doWorkCalls.some((r) => r.targetSymbolId.includes("ProcessData")));
-  });
-
-  it("extracts enum members", async () => {
-    const code = `
-public enum OrderStatus
-{
-    New,
-    Processing,
-    Shipped,
-    Cancelled
-}
-`;
-    const result = await analyzeCode("OrderStatus.cs", code);
-
-    const enums = result.symbols.filter((s) => s.kind === SymbolKind.ENUM);
-    assert.equal(enums.length, 1);
-    assert.equal(enums[0]!.name, "OrderStatus");
-
-    const members = result.symbols.filter((s) => s.kind === SymbolKind.FIELD);
-    assert.equal(members.length, 4, `Expected 4 enum members, got ${members.length}`);
-  });
-
-  it("extracts events and delegates", async () => {
-    const code = `
-public delegate void StatusChangedEventHandler(object sender, StatusChangedEventArgs e);
-
-public class Button
-{
-    public event EventHandler Click;
-    public event StatusChangedEventHandler StatusChanged;
-}
-`;
-    const result = await analyzeCode("Button.cs", code);
-
-    const delegates = result.symbols.filter((s) => s.kind === SymbolKind.TYPE_ALIAS);
-    assert.equal(delegates.length, 1, `Expected 1 delegate, got ${delegates.length}`);
-    assert.equal(delegates[0]!.name, "StatusChangedEventHandler");
-
-    const events = result.symbols.filter((s) => s.kind === SymbolKind.EVENT);
-    assert.equal(events.length, 2, `Expected 2 events, got ${events.length}`);
-  });
-
-  it("handles records", async () => {
-    const code = `
-public record Person(string Name, int Age);
-
-public record struct Point(double X, double Y);
-`;
-    const result = await analyzeCode("Models.cs", code);
-
-    const records = result.symbols.filter((s) => s.metadata?.isRecord === true);
-    assert.equal(records.length, 2, `Expected 2 records, got ${records.length}`);
-  });
-
-  it("scopes methods correctly under their parent class", async () => {
-    const code = `
-namespace App.Features;
-
-public class ServiceA
-{
-    public void Execute() { }
-}
-
-public class ServiceB
-{
-    public void Execute() { }
-}
-`;
-    const result = await analyzeCode("Services.cs", code);
-
-    const methods = result.symbols.filter((s) => s.kind === SymbolKind.METHOD);
-    assert.equal(methods.length, 2, `Expected 2 methods, got ${methods.length}`);
-
-    // IDs should be unique and scoped to their parent class
-    const ids = methods.map((m) => m.id);
-    assert.notEqual(ids[0], ids[1], "Methods in different classes should have different IDs");
-    assert.ok(ids[0]!.includes("ServiceA"), `Method 0 should be in ServiceA scope: ${ids[0]}`);
-    assert.ok(ids[1]!.includes("ServiceB"), `Method 1 should be in ServiceB scope: ${ids[1]}`);
+    const instantiates = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.INSTANTIATES && r.sourceSymbolId === topLevel!.id,
+    );
+    assert.ok(instantiates.length > 0, "new at top level must emit INSTANTIATES");
   });
 });

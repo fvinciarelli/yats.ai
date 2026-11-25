@@ -1,15 +1,15 @@
 {
   "python": [
     { "name": "fastapi", "url": "https://github.com/fastapi/fastapi", "desc": "FastAPI web framework" },
-    { "name": "django", "url": "https://github.com/django/django", "desc": "Django web framework" }
+    { "name": "flask", "url": "https://github.com/pallets/flask", "desc": "Flask micro web framework" }
   ],
   "typescript": [
-    { "name": "nestjs", "url": "https://github.com/nestjs/nest", "desc": "NestJS progressive Node.js framework" },
-    { "name": "nextjs", "url": "https://github.com/vercel/next.js", "desc": "Next.js React framework" }
+    { "name": "express", "url": "https://github.com/expressjs/express", "desc": "Express web framework" },
+    { "name": "koa", "url": "https://github.com/koajs/koa", "desc": "Koa web framework" }
   ],
   "go": [
     { "name": "gin", "url": "https://github.com/gin-gonic/gin", "desc": "Gin HTTP web framework" },
-    { "name": "terraform", "url": "https://github.com/hashicorp/terraform", "desc": "Terraform IaC tool" }
+    { "name": "chi", "url": "https://github.com/go-chi/chi", "desc": "Chi lightweight router" }
   ],
   "csharp": [
     { "name": "MediatR", "url": "https://github.com/jbogard/MediatR", "desc": "MediatR CQRS/Mediator library" },
@@ -17,7 +17,6 @@
     { "name": "Carter", "url": "https://github.com/CarterCommunity/Carter", "desc": "Minimal APIs framework for ASP.NET Core" }
   ],
   "php": [
-    { "name": "laravel", "url": "https://github.com/laravel/framework", "desc": "Laravel PHP framework" },
-    { "name": "symfony", "url": "https://github.com/symfony/symfony", "desc": "Symfony PHP framework" }
+    { "name": "slim", "url": "https://github.com/slimphp/Slim", "desc": "Slim PHP micro framework" }
   ]
 }

@@ -1,12 +1,12 @@
 {
   "name": "yats-toolkit",
-  "version": "0.1.15",
+  "version": "0.9.0",
   "description": "YATS — Yet Another Token Saver. One-command MCP server that indexes your codebase into a knowledge graph so AI agents (Claude, Cursor, Copilot) can search and navigate it without burning tokens.",
   "author": "Franco Vinciarelli <vinciarellifranco@gmail.com>",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fvinciarelli/yats.git"
+    "url": "git+https://github.com/fvinciarelli/yats.ai.git"
   },
   "keywords": [
     "mcp",
@@ -40,6 +40,7 @@
   "files": [
     "bin/",
     "src/",
+    "connect/",
     "benchmark/questions/",
     "benchmark/targets/",
     "benchmark/scripts/",
@@ -47,9 +48,13 @@
     "README.md"
   ],
   "scripts": {
-    "start": "node bin/setup.js"
+    "start": "node bin/setup.js",
+    "test": "node --test --test-concurrency=1 src/*.test.js"
   },
   "dependencies": {},
+  "devDependencies": {
+    "yaml": "^2.7.0"
+  },
   "engines": {
     "node": ">=18.0.0"
   }

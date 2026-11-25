@@ -26,16 +26,44 @@ license. The fee is flat per organization — not per developer, not per seat.
 | Developers in organization | Annual license fee (EUR) |
 |---|---|
 | < 25 | Free |
-| 25 – 149 | €150 |
-| 150 – 499 | €400 |
-| 500 – 999 | €800 |
-| 1,000+ | Contact for pricing |
+| 25 – 74 | €150 |
+| 75 – 199 | €350 |
+| 200 – 499 | €600 |
+| 500+ | Contact for pricing |
 
 Commercial licenses grant the same rights as the Free License. A commercial
 license does **not** include support, SLAs, warranties, or additional
 obligations from the Licensor.
 
-To purchase: vinciarellifranco@gmail.com
+### Renewal
+
+Licenses are billed annually and **renew automatically each year** on the
+anniversary of purchase. You may cancel the renewal at any time before the
+next billing date; upon cancellation the license remains valid until the
+end of the current paid period.
+
+### Tier changes
+
+It is your sole responsibility to purchase the correct tier based on your
+organization's developer count. If your headcount changes and you cross
+into a new tier before the start of the next renewal period, you must
+purchase the appropriate license. The Licensor is not required to notify
+you, prorate, or downgrade your license mid-period.
+
+### No refunds
+
+**All payments are final.** No refunds, full or prorated, will be issued
+under any circumstances — including but not limited to: you stop using the
+Software, your developer count decreases, or you cancel the renewal before
+the period ends.
+
+If you are a consumer in the European Union, you acknowledge that the
+Software is digital content delivered immediately upon purchase and that
+you expressly waive your 14-day right of withdrawal under Article 16(m) of
+Directive 2011/83/EU.
+
+To purchase: the Licensor provides payment links at the project website.
+For alternate payment methods or the 500+ tier, contact vinciarellifranco@gmail.com.
 
 ---
 

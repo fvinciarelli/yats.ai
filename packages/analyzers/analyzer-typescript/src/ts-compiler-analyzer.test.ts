@@ -131,7 +131,7 @@ class UserServiceTestHelper {
     assert.ok(tests.length >= 1, `Expected TEST symbols, got ${tests.length}`);
   });
 
-  it("extracts imports", async () => {
+  it("does not emit import relationships (ids never exist in the symbol table)", async () => {
     const code = `
 import { PaymentService } from "./PaymentService";
 import type { User } from "./types";
@@ -146,7 +146,7 @@ export class OrderService {
     const imports = result.relationships.filter(
       (r) => r.kind === RelationshipKind.IMPORTS,
     );
-    assert.ok(imports.length >= 1, `Expected IMPORTS, got ${imports.length}`);
+    assert.ok(imports.length === 0, `Expected no IMPORTS, got ${imports.length}`);
   });
 
   it("extracts enums and type aliases", async () => {
@@ -173,5 +173,136 @@ export type PaymentResult = {
   it("returns empty results for empty file", async () => {
     const result = await analyzer.analyze("src/empty.ts", "", "test-repo");
     assert.equal(result.errors.length, 0);
+  });
+
+  it("detects NestJS routes per method with controller prefix (P5)", async () => {
+    const code = `
+import { Controller, Get, Post } from "@nestjs/common";
+
+@Controller("users")
+export class UsersController {
+  @Get(":id")
+  findOne(): string {
+    return "user";
+  }
+
+  @Post()
+  create(): string {
+    return "created";
+  }
+}
+`;
+    const result = await analyzer.analyze("src/users.controller.ts", code, "test-repo");
+
+    const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
+    assert.equal(routes.length, 2, `Expected 2 routes, got ${routes.length}`);
+
+    const findOne = routes.find((r) => r.name === "findOne");
+    assert.ok(findOne, "findOne should be a route");
+    assert.equal(findOne.metadata["httpMethod"], "GET");
+    assert.equal(findOne.metadata["routePath"], "users/:id");
+
+    const create = routes.find((r) => r.name === "create");
+    assert.ok(create, "create should be a route");
+    assert.equal(create.metadata["httpMethod"], "POST");
+    assert.equal(create.metadata["routePath"], "users");
+
+    // The controller class itself is a CONTROLLER, not a ROUTE
+    const controller = result.symbols.find((s) => s.name === "UsersController");
+    assert.equal(controller.kind, SymbolKind.CONTROLLER);
+  });
+
+  it("detects Express routes (P5)", async () => {
+    const code = `
+import express from "express";
+
+const app = express();
+
+export class UserRouter {
+  getUsers(): string {
+    return "[]";
+  }
+}
+
+app.get("/health", (req, res) => res.send("ok"));
+app.get("/users", getUsersHandler);
+app.post("/users", createUser);
+
+function getUsersHandler(): string {
+  return "[]";
+}
+function createUser(): string {
+  return "created";
+}
+`;
+    const result = await analyzer.analyze("src/app.ts", code, "test-repo");
+
+    const routes = result.symbols.filter((s) => s.kind === SymbolKind.ROUTE);
+    assert.equal(routes.length, 2, `Expected 2 routes, got ${routes.length}`);
+
+    const getRoute = routes.find((r) => r.name === "getUsersHandler");
+    assert.ok(getRoute, "getUsersHandler should be a route");
+    assert.equal(getRoute.metadata["httpMethod"], "GET");
+    assert.equal(getRoute.metadata["routePath"], "/users");
+    assert.equal(getRoute.metadata["framework"], "express");
+
+    const postRoute = routes.find((r) => r.name === "createUser");
+    assert.ok(postRoute, "createUser should be a route");
+    assert.equal(postRoute.metadata["httpMethod"], "POST");
+    assert.equal(postRoute.metadata["routePath"], "/users");
+  });
+});
+
+describe("TypeScriptAnalyzer — USES_TYPE edges", () => {
+  it("records annotations, generics, casts, instanceof and new", async () => {
+    const code = `
+export class ProfileDto {
+  id = 0;
+  name = "";
+}
+
+export class ProfileStore {
+  private cache = new Map<string, ProfileDto>();
+
+  get(id: number): ProfileDto | null {
+    return this.cache.get(String(id)) ?? null;
+  }
+
+  save(dto: ProfileDto): void {
+    if (dto instanceof ProfileDto) {
+      const copy = dto as ProfileDto;
+      const list: ProfileDto[] = [];
+      list.push(copy, new ProfileDto());
+    }
+  }
+}
+`;
+    const result = await analyzer.analyze("src/profiles.ts", code, "repo");
+    const uses = result.relationships.filter(
+      (r) => r.kind === RelationshipKind.USES_TYPE,
+    );
+    assert.ok(uses.length > 0, "expected USES_TYPE edges");
+
+    const profile = result.symbols.find((s) => s.name === "ProfileDto");
+    assert.ok(profile, "ProfileDto symbol missing");
+    for (const edge of uses) {
+      assert.equal(edge.targetSymbolId, profile!.id, `wrong target from ${edge.sourceSymbolId}`);
+      assert.equal(edge.metadata?.typeName, "ProfileDto");
+      const lines = edge.metadata?.lines as number[];
+      assert.ok(Array.isArray(lines) && lines.length > 0);
+      assert.equal(edge.metadata?.count, lines.length);
+    }
+
+    const kinds = new Set<string>();
+    for (const edge of uses) {
+      for (const kind of (edge.metadata?.usageKinds as string[]) ?? []) kinds.add(kind);
+    }
+    for (const expected of ["declaration", "generic", "return", "parameter", "cast", "instanceof", "new"]) {
+      assert.ok(kinds.has(expected), `missing usage kind ${expected} (got ${[...kinds]})`);
+    }
+
+    // The store class keeps the generic argument, not the BCL container.
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "Map"));
+    assert.ok(!uses.some((u) => u.metadata?.typeName === "String"));
   });
 });

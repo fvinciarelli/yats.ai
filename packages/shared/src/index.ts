@@ -4,6 +4,7 @@
 export * from "./domain/enums.js";
 export * from "./domain/models.js";
 export * from "./domain/value-objects.js";
+export * from "./domain/analysis-version.js";
 
 // Ports (interfaces)
 export * from "./ports/language-analyzer.interface.js";
@@ -27,4 +28,5 @@ export * from "./dto/graph.dto.js";
 // Utils
 export * from "./utils/hash.js";
 export * from "./utils/id-generator.js";
+export * from "./utils/repo-path.js";
 export * from "./utils/logger.js";

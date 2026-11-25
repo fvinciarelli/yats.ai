@@ -20,12 +20,13 @@ Zero understanding of relationships
 
 We index your entire codebase into a **knowledge graph**: every function, class, interface, and relationship across TypeScript, C#, Python, PHP, and Go. When your agent needs answers, it queries the graph — not the raw files.
 
-**The best part: you don't index manually.** When your agent connects to YATS and starts working in a directory, the first thing it does is check if that project is indexed. If not, it indexes it automatically. No extra step. No remembering to run a command.
+**The best part: you don't index manually.** When your agent searches a directory that isn't indexed yet, YATS hands it the exact `yats index` command — the agent runs it once, and from then on every query hits the graph. With `yats watch` running, even re-indexing takes care of itself.
 
 ```
-Agent enters your project
+Agent searches your project
   → "Is this indexed?" → No
-  → Indexes it automatically (analyzers parse every file, build the graph)
+  → YATS returns: yats index /path/to/project
+  → Agent runs it (analyzers parse every file, build the graph)
   → Done. Now every query hits the graph.
 
 3,000 tokens. Two tool calls. Exactly right.
@@ -53,7 +54,7 @@ Interactive wizard. In 5 steps:
 4. Your agent answers the same questions twice — with and without YATS
 5. You get a side-by-side comparison: tokens, credits, cost
 
-[Full benchmark suite and raw data →](https://github.com/fvinciarelli/yats/tree/master/packages/yats-toolkit/benchmark)
+[Full benchmark suite and raw data →](https://github.com/fvinciarelli/yats.ai/tree/master/packages/yats-toolkit/benchmark)
 
 ---
 
@@ -100,7 +101,7 @@ Instead of reading 15 files, your agent calls:
 | "Where are the tests?" | `find_tests("UserService")` |
 | "What's connected to this?" | `expand_graph(symbolId)` |
 
-[All 22 tools →](https://github.com/fvinciarelli/yats#mcp-tools-20)
+[All 20 tools →](https://github.com/fvinciarelli/yats.ai#all-20-tools)
 
 ---
 
@@ -123,7 +124,7 @@ npx yats-toolkit
 | Codex CLI | `AGENTS.md` + `config.toml` | repo root + `.codex/` |
 | Cursor | `rules.mdc` + `mcp.json` | `.cursor/rules/` + `.cursor/` |
 
-[Step-by-step for each agent →](https://github.com/fvinciarelli/yats/tree/master/connect)
+[Step-by-step for each agent →](https://github.com/fvinciarelli/yats.ai/tree/master/connect)
 
 That's it. Your agent now enters your project, auto-indexes it, and queries the graph instead of reading files.
 
@@ -133,4 +134,4 @@ That's it. Your agent now enters your project, auto-indexes it, and queries the 
 
 No catch. No trial. Just install it.
 
-[GitHub](https://github.com/fvinciarelli/yats) · [npm](https://www.npmjs.com/package/yats-toolkit) · [License](https://github.com/fvinciarelli/yats/blob/master/LICENSE)
+[GitHub](https://github.com/fvinciarelli/yats.ai) · [npm](https://www.npmjs.com/package/yats-toolkit) · [License](https://github.com/fvinciarelli/yats.ai/blob/master/LICENSE)

@@ -211,8 +211,8 @@ if [ "$AGENT" = "gemini" ] || [ "$AGENT" = "copilot-cli" ] || [ "$AGENT" = "code
 {
   "mcpServers": {
     "yats": {
-      "command": "node",
-      "args": ["/home/franco/cosas/code_indexer/packages/yats-toolkit/benchmark/adapters/mcp-bridge-stdio.cjs", "--stdio"],
+      "command": "yats",
+      "args": ["bridge"],
       "trust": true
     }
   }

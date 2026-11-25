@@ -12,13 +12,24 @@ import type {
   Symbol,
   Relationship,
 } from "@yats/shared";
+import { createHash } from "node:crypto";
 import { AnalyzerFactory } from "@yats/analyzer-interface";
 import { MemorySymbolStore } from "@yats/infra";
 import { FileWalker } from "../../infrastructure/file-walker.js";
 import { detectLanguage } from "../../infrastructure/language-detector.js";
-import { hashContent, type RelationshipKind } from "@yats/shared";
+import { hashContent, ANALYSIS_SCHEMA_VERSION, type RelationshipKind } from "@yats/shared";
 import { GlobalSymbolTable, resolveRelationships, type SymbolTableEntry } from "./global-symbol-table.js";
 import { IncrementalIndexerService } from "./incremental-indexer.service.js";
+import { PendingRelationshipStore } from "./pending-relationships.js";
+import { synchronizeFileSymbols } from "./file-symbol-sync.js";
+
+/** SHA-256 of the raw file content — identity of the last successful analysis. */
+function hashFileContent(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/** Max chars of a doc section stored in the vector payload (returned to agents). */
+const DOC_SECTION_CONTENT_MAX = 2000;
 
 // ============================================================
 // Indexer Service — orchestrates the full indexing pipeline
@@ -39,11 +50,17 @@ export class IndexerService implements Indexer {
   private readonly embedBatchSize: number;
   private readonly pipelineChunkSize: number;
   private readonly batchAnalyzerSize: number;
+  private readonly pendingRelationships: PendingRelationshipStore;
 
   constructor(
     private readonly deps: IndexerDependencies,
   ) {
     this.logger = createLogger("indexer:service");
+    this.pendingRelationships = new PendingRelationshipStore(
+      deps.graphRepository,
+      deps.embeddingGenerator,
+      deps.vectorRepository,
+    );
 
     // Resolve config with provider-aware defaults.
     // Env vars override; without them, defaults adapt to the embedding provider.
@@ -79,6 +96,7 @@ export class IndexerService implements Indexer {
     // Provider-specific defaults
     const defaults: Record<string, { concurrency: number; embedBatch: number; batchAnalyzer: number }> = {
       openai:   { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
+      azure:    { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
       mistral:  { concurrency: 8,  embedBatch: 50,  batchAnalyzer: 50  },
       voyage:   { concurrency: 4,  embedBatch: 50,  batchAnalyzer: 50  },
       ollama:   { concurrency: 4,  embedBatch: 4,   batchAnalyzer: 50  },
@@ -95,6 +113,43 @@ export class IndexerService implements Indexer {
     };
   }
 
+  /**
+   * Register repository metadata without walking the filesystem.
+   * Used by the host CLI (`yats index`) which streams files via /index/file.
+   */
+  async registerRepository(repositoryName: string, rootPath: string): Promise<void> {
+    await this.deps.graphRepository.upsertRepositoryMetadata(repositoryName, rootPath);
+    this.pendingRelationships.touch(repositoryName);
+    this.logger.info(`Registered repository "${repositoryName}" at ${rootPath} (files arrive via CLI)`);
+  }
+
+  /**
+   * Whether a repository is currently mid-indexing (relationships incomplete).
+   * Graph tools use this to tell agents to wait instead of showing partial data.
+   */
+  async getIndexingStatus(repositoryName: string): Promise<{ indexing: boolean; pendingRelationships: number }> {
+    return this.pendingRelationships.status(repositoryName);
+  }
+
+  /**
+   * Flush pending per-file relationships: resolve cross-file references
+   * against the full symbol table and store them. Called by the debounce
+   * timer after indexing quiets down, or explicitly via POST /index/complete.
+   */
+  async finalizeRepository(repositoryName: string): Promise<{ stored: number; filtered: number; rewritten: number }> {
+    // Commit the analysis pipeline version at the repo level. This is the
+    // END of the run — per-file hashes carry their own version, so a version
+    // bump re-analyzes everything while an unchanged repo skips fast.
+    try {
+      await this.deps.graphRepository.setAnalyzerVersion(repositoryName, ANALYSIS_SCHEMA_VERSION);
+    } catch {
+      // Non-fatal — file-level versions still drive the skip logic.
+    }
+    // Final flush: the symbol table is complete by now — resolve everything
+    // held back and drop whatever is still unresolvable (imports, builtins).
+    return this.pendingRelationships.flush(repositoryName, { final: true });
+  }
+
   // ============================================================
   // Full Repository Index (Pipeline Architecture)
   //
@@ -108,6 +163,22 @@ export class IndexerService implements Indexer {
     const totalStart = Date.now();
     const repoName = this.getRepoName(repositoryPath);
     this.logger.info(`Indexing repository: ${repoName} at ${repositoryPath}`);
+
+    // Fail loudly instead of reporting a successful 0-symbol index. The server
+    // may run in a container without access to host paths — indexing must go
+    // through the host CLI (`yats index`), which streams files over HTTP.
+    let pathExists = false;
+    try {
+      pathExists = await this.deps.fileSystem.exists(repositoryPath);
+    } catch { /* stat failed — treat as inaccessible */ }
+    if (!pathExists) {
+      throw new Error(
+        `Repository path not accessible from the YATS server: "${repositoryPath}". ` +
+        `The server cannot walk host files. Index from the host machine instead:\n\n` +
+        `  yats index ${repositoryPath}\n\n` +
+        `Then poll with repository_summary(path: "${repositoryPath}").`,
+      );
+    }
 
     // Track cumulative metrics
     let totalRelationships = 0;
@@ -180,8 +251,10 @@ export class IndexerService implements Indexer {
             symbolTableEntries.push({
               id: symbol.id,
               name: symbol.name,
+              kind: symbol.kind,
               namespace: symbol.namespace,
               relativePath: symbol.location.relativePath,
+              parentClass: symbol.parentClass ?? undefined,
             });
           }
           for (const rel of batch.relationships) {
@@ -261,7 +334,7 @@ export class IndexerService implements Indexer {
             try {
               const batchResults = await analyzer.analyzeBatch(
                 subGroup.map((g) => ({ filePath: g.file.relativePath, content: g.content })),
-                repoName,
+                repositoryPath,
               );
               for (const result of batchResults) {
                 results.push({
@@ -277,7 +350,7 @@ export class IndexerService implements Indexer {
               this.logger.warn(`Batch analysis failed for ${analyzer.language}: ${err.message}, falling back to per-file`);
               for (const g of subGroup) {
                 try {
-                  const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
+                  const result = await analyzer.analyze(g.file.relativePath, g.content, repositoryPath);
                   results.push({
                     status: "fulfilled",
                     value: {
@@ -295,7 +368,7 @@ export class IndexerService implements Indexer {
         } else {
           const perFileResults = await Promise.allSettled(
             group.map(async (g) => {
-              const result = await analyzer.analyze(g.file.relativePath, g.content, repoName);
+              const result = await analyzer.analyze(g.file.relativePath, g.content, repositoryPath);
               return {
                 errors: result.errors.length,
                 symbols: result.symbols,
@@ -411,7 +484,7 @@ export class IndexerService implements Indexer {
 
     // Save last indexed commit
     if (currentCommit) {
-      await this.deps.graphRepository.setLastIndexedCommit(repoName, currentCommit);
+      await this.deps.graphRepository.setLastIndexedCommit(repositoryPath, currentCommit);
     }
 
     const totalMs = Date.now() - totalStart;
@@ -510,12 +583,18 @@ export class IndexerService implements Indexer {
   }> {
     const repoName = this.getRepoName(repositoryPath);
 
-    // Check if repository exists in the graph
+    // Check if repository exists in the graph. YATS identifies repos by rootPath
+    // (findRepositoryByPath + the bridge injects the full path), so a same-named
+    // repo at a different path is effectively a different repo. Reindex fully so
+    // the stored rootPath gets corrected instead of staying stale forever.
     const repos = await this.deps.graphRepository.listRepositories();
-    const exists = repos.some((r) => r.name === repoName);
+    const existing = repos.find((r) => r.name === repoName);
+    const pathChanged = existing ? existing.rootPath !== repositoryPath : false;
 
-    if (!exists) {
-      this.logger.info(`Repository "${repoName}" not indexed yet — full indexing...`);
+    if (!existing || pathChanged) {
+      this.logger.info(
+        `Repository "${repoName}" ${pathChanged ? "moved to a new path" : "not indexed yet"} — full indexing...`,
+      );
       const result = await this.indexRepository(repositoryPath, options);
       return { status: "indexed", result };
     }
@@ -527,7 +606,7 @@ export class IndexerService implements Indexer {
           repositoryPath,
         );
         const lastCommit = await this.deps.graphRepository.getLastIndexedCommit(
-          repoName,
+          repositoryPath,
         );
 
         if (lastCommit && currentCommit !== lastCommit) {
@@ -552,6 +631,68 @@ export class IndexerService implements Indexer {
     return { status: "fresh" };
   }
 
+  /**
+   * Rebuild the entire vector index with the current embedding model.
+   * Recreates the Qdrant collections at the model's dimension, then re-embeds
+   * every symbol already stored in Neo4j (no re-analysis of source code).
+   * May incur API embedding costs.
+   */
+  async rebuildVectors(): Promise<{ repositories: number; symbols: number; errors: number }> {
+    this.logger.info("Rebuilding vector index (re-embedding all symbols)...");
+
+    await this.deps.vectorRepository.recreateCollections(this.deps.embeddingGenerator.dimensions);
+
+    const repos = await this.deps.graphRepository.listRepositories();
+    let totalSymbols = 0;
+    let errors = 0;
+    const PAGE = 500;
+
+    for (const repo of repos) {
+      let offset = 0;
+      while (true) {
+        const symbols = await this.deps.graphRepository.listSymbols(repo.name, undefined, PAGE, offset);
+        if (symbols.length === 0) break;
+        offset += symbols.length;
+
+        for (let i = 0; i < symbols.length; i += this.embedBatchSize) {
+          const chunk = symbols.slice(i, i + this.embedBatchSize);
+          const texts = chunk.map((s) => this.buildEmbeddingText(s));
+          try {
+            const vectors = await this.deps.embeddingGenerator.embedBatch(texts);
+            await this.deps.vectorRepository.upsertVectors(
+              chunk.map((symbol, j) => ({
+                id: symbol.id,
+                vector: vectors[j] ?? [],
+                payload: {
+                  symbolId: symbol.id,
+                  language: symbol.language as any,
+                  repository: symbol.location.repository,
+                  relativePath: symbol.location.relativePath,
+                  namespace: symbol.namespace,
+                  className: symbol.parentClass,
+                  methodName: symbol.kind === "method" ? symbol.name : null,
+                  kind: symbol.kind,
+                  contentHash: symbol.contentHash,
+                  gitCommit: null,
+                  timestamp: new Date().toISOString(),
+                },
+              })),
+            );
+            totalSymbols += chunk.length;
+          } catch (e) {
+            errors += chunk.length;
+            this.logger.error(`Rebuild vectors failed for "${repo.name}": ${(e as Error).message}`);
+          }
+        }
+
+        if (symbols.length < PAGE) break;
+      }
+    }
+
+    this.logger.info(`Vector rebuild done — ${totalSymbols} symbols re-embedded across ${repos.length} repositories (${errors} errors)`);
+    return { repositories: repos.length, symbols: totalSymbols, errors };
+  }
+
   // ============================================================
   // Single File Index
   // ============================================================
@@ -559,40 +700,72 @@ export class IndexerService implements Indexer {
   async indexFile(
     repositoryName: string,
     filePath: string,
-  ): Promise<{ status: "indexed" | "skipped"; reason?: string }> {
+  ): Promise<void> {
     const content = await this.deps.fileSystem.readFile(filePath);
-    return this.indexFileContent(repositoryName, filePath, content);
+    await this.indexFileContent(repositoryName, filePath, content);
   }
 
   async indexFileContent(
     repositoryName: string,
     filePath: string,
     content: string,
-  ): Promise<{ status: "indexed" | "skipped"; reason?: string }> {
-    // Route documentation files to the doc pipeline
+    clientHash?: string,
+  ): Promise<{ status: "indexed" | "skipped" }> {
+    const hash = clientHash ?? hashFileContent(content);
+
+    // Skip unchanged files — but only when THIS file was analyzed with the
+    // current pipeline version (per-file version, not the repo-level one:
+    // the repo version is only committed at /index/complete, so a mid-run
+    // write can never turn a version-bump re-analysis into a no-op).
+    const stored = await this.deps.graphRepository.getFileState(repositoryName, filePath);
+    if (stored.analyzerVersion === ANALYSIS_SCHEMA_VERSION && stored.contentHash === hash) {
+      return { status: "skipped" };
+    }
+
+    // Route documentation files to the doc pipeline — indexed from the content
+    // received over the network (not from the server filesystem). Respect
+    // INDEX_DOCS=false exactly like the full pipeline does (P4): docs sent
+    // through the per-file path are dropped instead of always indexed.
     if (this.isDocumentationFile(filePath)) {
-      const count = await this.indexDocFileContent(filePath, repositoryName, content);
-      if (count > 0) {
-        return { status: "indexed" };
+      if (process.env.INDEX_DOCS !== "false") {
+        await this.indexDocFileContent(filePath, repositoryName, content);
       }
-      return { status: "skipped", reason: "no sections found in doc" };
+      await this.recordFileState(repositoryName, filePath, hash);
+      return { status: "indexed" };
     }
 
     const language = detectLanguage(filePath, content);
     if (!language) {
-      return { status: "skipped", reason: "unsupported language" };
+      // Not analyzable (ignored extension, non-code). Record state so the
+      // next run's diff skips it instead of re-sending a no-op every time.
+      await this.recordFileState(repositoryName, filePath, hash);
+      return { status: "indexed" };
     }
 
     const analyzer = this.deps.analyzerFactory.getAnalyzer(language);
     if (!analyzer) {
-      return { status: "skipped", reason: `no analyzer for ${language}` };
+      await this.recordFileState(repositoryName, filePath, hash);
+      return { status: "indexed" };
     }
 
     const result = await analyzer.analyze(filePath, content, repositoryName);
 
-    // Remove old symbols for this file
-    // (implemented via Neo4j query)
-    await this.removeFileSymbols(repositoryName, filePath);
+    // P2 — update the file's symbols in place instead of DETACH DELETE of the
+    // whole file: symbols that survive the re-analysis keep their node and
+    // their incoming edges (only outgoing edges are regenerated); symbols that
+    // disappeared are deleted. Stale buffered relationships from a previous
+    // analysis are dropped so the pending flush cannot resurrect dead edges.
+    await synchronizeFileSymbols(
+      {
+        graphRepository: this.deps.graphRepository,
+        vectorRepository: this.deps.vectorRepository,
+        pendingRelationships: this.pendingRelationships,
+      },
+      repositoryName,
+      filePath,
+      result.symbols.map((s) => s.id),
+      this.logger,
+    );
 
     // Store new symbols
     if (result.symbols.length > 0) {
@@ -604,7 +777,11 @@ export class IndexerService implements Indexer {
       const vectors = await this.deps.embeddingGenerator.embedBatch(texts);
 
       await this.deps.graphRepository.upsertSymbols(result.symbols);
-      await this.deps.graphRepository.upsertRelationships(result.relationships);
+      // Relationships are buffered and flushed once the indexing session goes
+      // quiet (or on /index/complete), so cross-file targets can be resolved
+      // against the complete symbol table instead of being silently dropped.
+      this.pendingRelationships.touch(repositoryName);
+      this.pendingRelationships.add(repositoryName, result.relationships);
 
       await this.deps.vectorRepository.upsertVectors(
         result.symbols.map((symbol, i) => ({
@@ -627,7 +804,49 @@ export class IndexerService implements Indexer {
       );
     }
 
+    await this.recordFileState(repositoryName, filePath, hash);
     return { status: "indexed" };
+  }
+
+  /** Persist the per-file hash + pipeline version after a successful analysis. */
+  private async recordFileState(
+    repositoryName: string,
+    filePath: string,
+    contentHash: string,
+  ): Promise<void> {
+    // Per-file only — the repo-level analyzer version is committed when the
+    // indexing run finalizes (finalizeRepository), so a version bump always
+    // re-analyzes every file instead of being defeated by the first write.
+    await this.deps.graphRepository.upsertFileHash(
+      repositoryName,
+      filePath,
+      contentHash,
+      ANALYSIS_SCHEMA_VERSION,
+    );
+  }
+
+  /**
+   * File-hash state for the host CLI's diff plan: which files were analyzed
+   * with which content, and whether the analyzer version forces a full pass.
+   */
+  async getIndexState(repositoryName: string): Promise<{
+    files: Record<string, string>;
+    storedAnalyzerVersion: number | null;
+    analyzerVersion: number;
+    reanalyzeAll: boolean;
+  }> {
+    const [files, stored] = await Promise.all([
+      // Only files analyzed at the CURRENT version count as up-to-date;
+      // stale-version entries are omitted so the CLI re-sends them.
+      this.deps.graphRepository.getFileHashes(repositoryName, ANALYSIS_SCHEMA_VERSION),
+      this.deps.graphRepository.getAnalyzerVersion(repositoryName),
+    ]);
+    return {
+      files,
+      storedAnalyzerVersion: stored,
+      analyzerVersion: ANALYSIS_SCHEMA_VERSION,
+      reanalyzeAll: stored !== ANALYSIS_SCHEMA_VERSION,
+    };
   }
 
   // ============================================================
@@ -639,6 +858,7 @@ export class IndexerService implements Indexer {
     filePath: string,
   ): Promise<{ removed: number }> {
     const count = await this.removeFileSymbols(repositoryName, filePath);
+    await this.deps.graphRepository.removeFileHash(repositoryName, filePath);
     return { removed: count };
   }
 
@@ -646,9 +866,9 @@ export class IndexerService implements Indexer {
     repositoryName: string,
     filePath: string,
   ): Promise<number> {
-    const symbols = await this.deps.graphRepository.listSymbols(repositoryName, undefined, 5000, 0);
+    const symbols = await this.deps.graphRepository.listAllSymbols(repositoryName);
     const toDelete = symbols.filter(
-      (s) => s.location.relativePath === filePath || s.id.includes(filePath),
+      (s) => s.relativePath === filePath || s.id.includes(filePath),
     );
 
     if (toDelete.length > 0) {
@@ -683,10 +903,11 @@ export class IndexerService implements Indexer {
       fileSystem: this.deps.fileSystem,
       gitAdapter: this.deps.gitAdapter,
       analyzerFactory: this.deps.analyzerFactory,
+      pendingRelationships: this.pendingRelationships,
     });
 
     const repoName = this.getRepoName(repositoryPath);
-    return incrementalIndexer.indexSince(repositoryPath, repoName, sinceCommit);
+    return incrementalIndexer.indexSince(repositoryPath, repositoryPath, sinceCommit);
   }
 
   // ============================================================
@@ -724,7 +945,7 @@ export class IndexerService implements Indexer {
       }
     } catch { /* docs/ doesn't exist or not accessible */ }
 
-    const repoName = this.getRepoName(repositoryPath);
+    const repoName = repositoryPath; // identity is the full path
     let count = 0;
 
     for (const pattern of docPatterns) {
@@ -758,20 +979,25 @@ export class IndexerService implements Indexer {
 
   private async indexDocFile(
     filePath: string,
-    repoName: string,
+    repositoryPath: string,
   ): Promise<number> {
     const content = await this.deps.fileSystem.readFile(filePath);
-    return this.indexDocFileContent(filePath, repoName, content);
+    return this.indexDocFileContent(filePath, repositoryPath, content);
   }
 
   /**
-   * Index a documentation file from in-memory content (used by per-file indexing).
+   * Index a documentation file from in-memory content (per-file indexing path —
+   * the CLI sends file content over the network; no filesystem access here).
    */
   private async indexDocFileContent(
     filePath: string,
-    repoName: string,
+    repositoryPath: string,
     content: string,
   ): Promise<number> {
+    // Defense in depth: never index docs when disabled, regardless of which
+    // route reached this method (full pipeline or per-file path).
+    if (process.env.INDEX_DOCS === "false") return 0;
+
     const sections = this.parseMarkdownSections(content, filePath);
 
     if (sections.length === 0) return 0;
@@ -781,13 +1007,19 @@ export class IndexerService implements Indexer {
 
     await this.deps.vectorRepository.upsertVectors(
       sections.map((section, i) => ({
-        id: `${repoName}::${filePath}#${section.heading}`,
+        id: `${repositoryPath}::${filePath}#${section.heading}`,
         vector: vectors[i] ?? [],
         payload: {
-          docSectionId: `${repoName}::${filePath}#${section.heading}`,
+          docSectionId: `${repositoryPath}::${filePath}#${section.heading}`,
           language: "markdown" as any,
-          repository: repoName,
+          repository: repositoryPath,
           relativePath: filePath,
+          heading: section.heading,
+          // The section CONTENT itself, so agents can answer doc questions
+          // without re-reading the file (capped; contentTruncated flags the
+          // rest — the agent can read the file for the full section).
+          content: section.content.slice(0, DOC_SECTION_CONTENT_MAX),
+          contentTruncated: section.content.length > DOC_SECTION_CONTENT_MAX,
           namespace: "",
           className: null,
           methodName: null,
@@ -800,6 +1032,16 @@ export class IndexerService implements Indexer {
     );
 
     return sections.length;
+  }
+
+  /**
+   * Check if a file is a documentation file based on DOC_EXTENSIONS env var.
+   */
+  private isDocumentationFile(filePath: string): boolean {
+    const docExtensions = (process.env.DOC_EXTENSIONS || ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme")
+      .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+    const lower = filePath.toLowerCase();
+    return docExtensions.some((ext) => lower.endsWith(ext));
   }
 
   private parseMarkdownSections(
@@ -837,16 +1079,6 @@ export class IndexerService implements Indexer {
     }
 
     return sections;
-  }
-
-  /**
-   * Check if a file is a documentation file based on DOC_EXTENSIONS env var.
-   */
-  private isDocumentationFile(filePath: string): boolean {
-    const docExtensions = (process.env.DOC_EXTENSIONS || ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme")
-      .split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
-    const lower = filePath.toLowerCase();
-    return docExtensions.some(ext => lower.endsWith(ext));
   }
 
   private buildEmbeddingText(symbol: Symbol): string {

@@ -12,4 +12,6 @@ packages:
   - "packages/analyzers/analyzer-python"
   - "packages/analyzers/analyzer-treesitter"
   - "packages/analyzers/analyzer-go"
+  - "packages/analyzers/analyzer-java"
+  - "packages/analyzers/analyzer-rust"
   - "packages/yats-toolkit"

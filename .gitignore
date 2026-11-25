@@ -32,4 +32,16 @@ bin/
 .plans
 !.plans/benchmark/
 AGENTS.md
+!packages/yats-toolkit/benchmark/agents/codex/AGENTS.md
+!connect/codex/AGENTS.md
 .aider*
+packages/yats-toolkit/benchmark/results/
+repos/
+
+# Maven build artifacts
+**/target/
+dependency-reduced-pom.xml
+
+# Python
+__pycache__/
+*.pyc

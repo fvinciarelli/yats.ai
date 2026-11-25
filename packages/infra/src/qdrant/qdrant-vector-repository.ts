@@ -29,11 +29,21 @@ const MAX_UPSERT_BATCH = 1000;
 
 export class QdrantVectorRepository implements VectorRepository {
   private readonly client: QdrantClient;
+  private readonly connection: QdrantConnection;
   private readonly logger: Logger;
 
   constructor(connection: QdrantConnection) {
+    this.connection = connection;
     this.client = connection.getClient();
     this.logger = createLogger("qdrant:vector-repo");
+  }
+
+  get dimensionMismatch(): boolean {
+    return this.connection.dimensionMismatch;
+  }
+
+  async recreateCollections(vectorSize: number): Promise<void> {
+    await this.connection.recreateCollections(vectorSize);
   }
 
   // ============================================================

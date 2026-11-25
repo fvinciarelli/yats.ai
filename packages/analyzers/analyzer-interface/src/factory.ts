@@ -25,6 +25,7 @@ const EXTENSION_MAP: Record<string, Language> = {
   ".pyw": Language.PYTHON,
   ".go": Language.GO,
   ".java": Language.JAVA,
+  ".rs": Language.RUST,
 };
 
 /** Mapping from shebang to Language */

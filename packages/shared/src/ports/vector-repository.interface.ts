@@ -13,6 +13,12 @@ export interface VectorPayload {
   contentHash: string;
   gitCommit: string | null;
   timestamp: string;
+  /** Doc section heading (e.g. "CLI.md > Commands"). Docs only. */
+  heading?: string;
+  /** Doc section body stored at index time (capped). Docs only. */
+  content?: string;
+  /** True when the stored content was truncated to the cap. */
+  contentTruncated?: boolean;
 }
 
 export interface VectorPoint {
@@ -42,10 +48,13 @@ export interface SearchHit {
 }
 
 export interface VectorRepository {
+  /** True when an existing collection's dimension doesn't match the current embedding model. */
+  readonly dimensionMismatch: boolean;
   upsertVectors(points: VectorPoint[]): Promise<void>;
   deleteVectors(symbolIds: string[]): Promise<void>;
   clearCollection(collection: CollectionName): Promise<void>;
   clearVectorsByRepository(repository: string): Promise<void>;
+  recreateCollections(vectorSize: number): Promise<void>;
   search(collection: CollectionName, queryVector: number[], options: SearchOptions): Promise<SearchHit[]>;
   searchWithFilters(collection: CollectionName, queryVector: number[], filters: VectorFilters, options: SearchOptions): Promise<SearchHit[]>;
 }

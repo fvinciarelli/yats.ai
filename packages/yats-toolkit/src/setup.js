@@ -9,9 +9,9 @@
  */
 
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, statSync, chmodSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 // ============================================================
@@ -26,23 +26,16 @@ try {
   YATS_VERSION = pkg.version || YATS_VERSION;
 } catch {}
 const YATS_DIR = join(homedir(), ".yats");
-const ENV_FILE = join(YATS_DIR, ".env");
 const REPOS_DIR = join(YATS_DIR, "repos");
 const COMPOSE_FILE = join(YATS_DIR, "docker-compose.yml");
 const MCP_CONFIG_FILE = join(YATS_DIR, "mcp-config.json");
+const YATS_BIN_DIR = join(YATS_DIR, "bin");
+const ENV_FILE = join(YATS_DIR, ".env");
 
-// Defaults for user-configurable file filtering (overridable via .env)
+// User-configurable documentation extensions (overridable via ~/.yats/.env)
 const DEFAULT_DOC_EXTENSIONS = ".md,.mdx,.rst,.txt,.adoc,.org,.wiki,.readme";
-const DEFAULT_SKIP_EXTENSIONS = ".exe,.dll,.so,.o,.a,.bin,.zip,.tar,.gz,.bz2,.xz,.7z,.rar" +
-  ",.png,.jpg,.jpeg,.gif,.ico,.webp,.bmp,.svg" +
-  ",.woff,.woff2,.ttf,.eot,.otf" +
-  ",.mp3,.mp4,.avi,.mov,.mkv,.flv,.wmv,.webm" +
-  ",.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" +
-  ",.lock,.log,.map,.min.js,.min.css";
+const DEFAULT_SKIP_EXTENSIONS = ".exe,.dll,.so,.o,.a,.bin,.zip,.tar,.gz,.bz2,.xz,.7z,.rar,.png,.jpg,.jpeg,.gif,.ico,.webp,.bmp,.svg,.woff,.woff2,.ttf,.eot,.otf,.mp3,.mp4,.avi,.mov,.mkv,.flv,.wmv,.webm,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.lock,.log,.map,.min.js,.min.css";
 const DEFAULT_IGNORED_DIRS = "node_modules,.git,dist,build,.next,__pycache__,vendor,target,bin,obj,.venv,venv,.yarn,.pnpm";
-
-const GITHUB_COMPOSE_URL =
-  "https://raw.githubusercontent.com/fvinciarelli/yats/main/docker/docker-compose.yml";
 
 const B = "\x1b[1m";
 const D = "\x1b[2m";
@@ -52,7 +45,43 @@ const Y = "\x1b[33m";
 const C = "\x1b[36m";
 const RED = "\x1b[31m";
 
-// Minimal embedded docker-compose as fallback
+// Embedding models per provider (with their vector dimensions)
+const PROVIDER_MODELS = {
+  openai: [
+    { label: "text-embedding-3-small (1536d, fast & cheap)", value: "text-embedding-3-small" },
+    { label: "text-embedding-3-large (3072d, more accurate)", value: "text-embedding-3-large" },
+    { label: "text-embedding-ada-002 (1536d, legacy)", value: "text-embedding-ada-002" },
+  ],
+  azure: [
+    { label: "text-embedding-3-small (1536d, fast & cheap)", value: "text-embedding-3-small" },
+    { label: "text-embedding-3-large (3072d, more accurate)", value: "text-embedding-3-large" },
+    { label: "text-embedding-ada-002 (1536d, legacy)", value: "text-embedding-ada-002" },
+  ],
+  mistral: [
+    { label: "mistral-embed (1024d)", value: "mistral-embed" },
+  ],
+  voyage: [
+    { label: "voyage-code-2 (1536d, code-optimized)", value: "voyage-code-2" },
+    { label: "voyage-3 (1024d)", value: "voyage-3" },
+    { label: "voyage-3-large (1024d, most accurate)", value: "voyage-3-large" },
+    { label: "voyage-3-lite (512d, fastest & cheapest)", value: "voyage-3-lite" },
+    { label: "voyage-2 (1024d, legacy)", value: "voyage-2" },
+  ],
+  ollama: [
+    { label: "nomic-embed-text (768d, fast, ~274MB)", value: "nomic-embed-text" },
+    { label: "mxbai-embed-large (1024d, more accurate, ~669MB)", value: "mxbai-embed-large" },
+    { label: "bge-m3 (1024d, multilingual)", value: "bge-m3" },
+    { label: "snowflake-arctic-embed (1024d)", value: "snowflake-arctic-embed" },
+  ],
+};
+
+const DEFAULT_MODEL = { openai: "text-embedding-3-small", azure: "text-embedding-3-small", mistral: "mistral-embed", voyage: "voyage-code-2", ollama: "nomic-embed-text" };
+
+// Default Ollama URL when the bundled container is used. External Ollama
+// deployments (host or remote) set OLLAMA_URL in ~/.yats/.env instead.
+const DEFAULT_OLLAMA_URL = "http://ollama:11434";
+
+// Embedded docker-compose template (this is what `yats setup` installs)
 const EMBEDDED_COMPOSE = `services:
   neo4j:
     image: neo4j:5.26-community
@@ -90,29 +119,42 @@ const EMBEDDED_COMPOSE = `services:
       retries: 5
       start_period: 5s
     restart: unless-stopped
-  __OLLAMA_PLACEHOLDER__
+__OLLAMA_PLACEHOLDER__
   yats:
-    image: ghcr.io/fvinciarelli/yats:latest
+    image: ghcr.io/fvinciarelli/yats.ai:latest
     ports: ["__MCP_PORT__:__MCP_PORT__"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=\${NEO4J_PASSWORD:-password}
       - QDRANT_URL=http://qdrant:6333
-      - EMBEDDING_PROVIDER=__PROVIDER__
-      - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=__OLLAMA_MODEL__
-      - OPENAI_API_KEY=__OPENAI_KEY__
-      - MISTRAL_API_KEY=__MISTRAL_KEY__
-      - VOYAGE_API_KEY=__VOYAGE_KEY__
+      - EMBEDDING_PROVIDER=\${EMBEDDING_PROVIDER:-ollama}
+      - OLLAMA_URL=\${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=\${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text}
+      - OPENAI_API_KEY=\${EMBEDDING_OPENAI_API_KEY:-}
+      - OPENAI_MODEL=\${EMBEDDING_OPENAI_MODEL:-text-embedding-3-small}
+      - OPENAI_BASE_URL=\${EMBEDDING_OPENAI_BASE_URL:-}
+      - MISTRAL_API_KEY=\${EMBEDDING_MISTRAL_API_KEY:-}
+      - MISTRAL_MODEL=\${EMBEDDING_MISTRAL_MODEL:-mistral-embed}
+      - MISTRAL_BASE_URL=\${EMBEDDING_MISTRAL_BASE_URL:-}
+      - VOYAGE_API_KEY=\${EMBEDDING_VOYAGE_API_KEY:-}
+      - VOYAGE_MODEL=\${EMBEDDING_VOYAGE_MODEL:-voyage-code-2}
+      - VOYAGE_BASE_URL=\${EMBEDDING_VOYAGE_BASE_URL:-}
+      - AZURE_OPENAI_ENDPOINT=\${EMBEDDING_AZURE_ENDPOINT:-}
+      - AZURE_OPENAI_API_KEY=\${EMBEDDING_AZURE_API_KEY:-}
+      - AZURE_OPENAI_MODEL=\${EMBEDDING_AZURE_MODEL:-text-embedding-3-small}
+      - AZURE_OPENAI_API_VERSION=\${EMBEDDING_AZURE_API_VERSION:-2024-02-01}
+      - AZURE_OPENAI_EMBEDDING_DIMENSIONS=\${EMBEDDING_AZURE_EMBEDDING_DIMENSIONS:-}
       - REPOSITORIES_PATH=/repos
       - YATS_PORT=__MCP_PORT__
-      - EMBEDDING_BATCH_SIZE=__BATCH_SIZE__
-      - INDEX_DOCS=__INDEX_DOCS__
-      - DOC_MAX_FILES=__DOC_MAX__
-      - DOC_EXTENSIONS=${DOC_EXTENSIONS:-__DOC_EXTENSIONS__}
-      - SKIP_EXTENSIONS=${SKIP_EXTENSIONS:-__SKIP_EXTENSIONS__}
-      - IGNORED_DIRS=${IGNORED_DIRS:-__IGNORED_DIRS__}
+      - EMBEDDING_BATCH_SIZE=\${EMBEDDING_BATCH_SIZE:-__BATCH_SIZE__}
+      - INDEX_DOCS=\${INDEX_DOCS:-__INDEX_DOCS__}
+      - DOC_MAX_FILES=\${DOC_MAX_FILES:-__DOC_MAX__}
+      - DOC_EXTENSIONS=\${DOC_EXTENSIONS:-__DOC_EXTENSIONS__}
+      - SKIP_EXTENSIONS=\${SKIP_EXTENSIONS:-__SKIP_EXTENSIONS__}
+      - IGNORED_DIRS=\${IGNORED_DIRS:-__IGNORED_DIRS__}
       - LOG_LEVEL=info
     volumes:
       - \${REPOS_PATH:-~/.yats/repos}:/repos:ro
@@ -126,6 +168,7 @@ volumes:
   neo4j-data:
   neo4j-logs:
   qdrant-storage:
+__OLLAMA_VOLUME__
 `;
 
 const OLLAMA_SERVICE = `  ollama:
@@ -141,9 +184,8 @@ const OLLAMA_SERVICE = `  ollama:
       - |
         ollama serve &
         sleep 5
-        ollama pull __OLLAMA_MODEL__ 2>/dev/null || true
+        ollama pull \${EMBEDDING_OLLAMA_MODEL:-nomic-embed-text} 2>/dev/null || true
         wait
-  ollama-models:
 `;
 
 // ============================================================
@@ -167,6 +209,7 @@ function pad(s) {
 /** Center text within width, preserving ANSI codes */
 function center(text, width = W) {
   const vlen = visibleLen(text);
+  if (vlen >= width) return text;
   const left = Math.floor((width - vlen) / 2);
   const right = width - vlen - left;
   return " ".repeat(left) + text + " ".repeat(right);
@@ -329,25 +372,51 @@ async function checkYatsRunning() {
   });
 }
 
+async function checkOllama() {
+  // Is an Ollama server already answering on this machine (native app,
+  // systemd service, or the client's own container with a published port)?
+  try {
+    const res = await fetch("http://localhost:11434/api/tags", {
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// From inside the YATS container, "localhost" is the container itself, so
+// rewrite host-local URLs to the Docker host gateway.
+function normalizeOllamaUrl(url) {
+  return url.replace(/^(https?):\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i, "http://host.docker.internal$3");
+}
+
 // ============================================================
 // Compose file generation
 // ============================================================
 
-function generateCompose(provider, ollamaModel, apiKey, mcpPort, batchSize, indexDocs, docMaxFiles) {
+// Generate ~/.yats/docker-compose.yml from the embedded template.
+//
+// Placeholder indentation matters: __OLLAMA_PLACEHOLDER__ sits at column 0
+// because OLLAMA_SERVICE carries its own indentation, and __OLLAMA_VOLUME__
+// sits inside the top-level volumes: section. Do not "align" them.
+export function generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles, ollamaUrl = "") {
   let compose = EMBEDDED_COMPOSE;
 
-  if (provider === "ollama") {
-    compose = compose.replace("__OLLAMA_PLACEHOLDER__", OLLAMA_SERVICE.replace("__OLLAMA_MODEL__", ollamaModel));
+  // The bundled Ollama container is used only when no external Ollama was
+  // chosen (the in-container default URL counts as "bundled").
+  const useOllamaContainer = provider === "ollama" && (!ollamaUrl || ollamaUrl === DEFAULT_OLLAMA_URL);
+  if (useOllamaContainer) {
+    compose = compose
+      .replace("__OLLAMA_PLACEHOLDER__", OLLAMA_SERVICE)
+      .replace("__OLLAMA_VOLUME__", "  ollama-models:");
   } else {
-    compose = compose.replace("__OLLAMA_PLACEHOLDER__", "");
+    compose = compose
+      .replace("__OLLAMA_PLACEHOLDER__", "")
+      .replace("__OLLAMA_VOLUME__", "");
   }
 
   compose = compose
-    .replace(/__PROVIDER__/g, provider)
-    .replace(/__OLLAMA_MODEL__/g, ollamaModel)
-    .replace(/__OPENAI_KEY__/g, provider === "openai" ? apiKey : "")
-    .replace(/__MISTRAL_KEY__/g, provider === "mistral" ? apiKey : "")
-    .replace(/__VOYAGE_KEY__/g, provider === "voyage" ? apiKey : "")
     .replace(/__MCP_PORT__/g, String(mcpPort))
     .replace(/__BATCH_SIZE__/g, String(batchSize))
     .replace(/__INDEX_DOCS__/g, indexDocs ? "true" : "false")
@@ -390,7 +459,141 @@ async function waitForHealth(url, retries = 30, delay = 2000) {
 // Main
 // ============================================================
 
-async function main() {
+async function loadEnv() {
+  const env = {};
+  try {
+    const content = readFileSync(ENV_FILE, "utf-8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq === -1) continue;
+      env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+    }
+  } catch { /* no .env file yet */ }
+  return env;
+}
+
+// Merge embedding + benchmark keys into the env map before writing ~/.yats/.env.
+// Benchmark agent keys are added empty (if missing) so users see exactly what to
+// fill in for `yats benchmark`; any existing values are preserved.
+//
+// Everything is persisted so the whole setup is visible in ~/.yats/.env:
+//   provider → EMBEDDING_PROVIDER (+ YATS_PROVIDER alias)
+//   api key  → EMBEDDING_<PROVIDER>_API_KEY
+//   model    → EMBEDDING_<PROVIDER>_MODEL (Azure: deployment name)
+//   url      → EMBEDDING_<PROVIDER>_BASE_URL / EMBEDDING_AZURE_ENDPOINT
+export function applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion, ollamaUrl }) {
+  envMap.EMBEDDING_PROVIDER = provider;
+  envMap.YATS_PROVIDER = provider;
+  if (provider === "openai" && apiKey) envMap.EMBEDDING_OPENAI_API_KEY = apiKey;
+  if (provider === "mistral" && apiKey) envMap.EMBEDDING_MISTRAL_API_KEY = apiKey;
+  if (provider === "voyage" && apiKey) envMap.EMBEDDING_VOYAGE_API_KEY = apiKey;
+  if (provider === "azure") {
+    if (apiKey) envMap.EMBEDDING_AZURE_API_KEY = apiKey;
+    if (baseUrl) envMap.EMBEDDING_AZURE_ENDPOINT = baseUrl;
+    envMap.EMBEDDING_AZURE_API_VERSION = apiVersion || "2024-02-01";
+  }
+  if (baseUrl) {
+    const baseVar = {
+      openai: "EMBEDDING_OPENAI_BASE_URL",
+      mistral: "EMBEDDING_MISTRAL_BASE_URL",
+      voyage: "EMBEDDING_VOYAGE_BASE_URL",
+    }[provider];
+    if (baseVar) envMap[baseVar] = baseUrl;
+  }
+  const modelVar = { openai: "EMBEDDING_OPENAI_MODEL", azure: "EMBEDDING_AZURE_MODEL", mistral: "EMBEDDING_MISTRAL_MODEL", voyage: "EMBEDDING_VOYAGE_MODEL", ollama: "EMBEDDING_OLLAMA_MODEL" }[provider];
+  if (model && modelVar) envMap[modelVar] = model;
+  if (provider === "ollama") {
+    // Container mode uses the default URL baked into docker-compose; only
+    // persist a URL when an external Ollama was chosen.
+    if (ollamaUrl && ollamaUrl !== DEFAULT_OLLAMA_URL) envMap.OLLAMA_URL = ollamaUrl;
+    else delete envMap.OLLAMA_URL;
+  }
+  for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"]) {
+    if (!(k in envMap)) envMap[k] = "";
+  }
+  if (!envMap.DOC_EXTENSIONS) envMap.DOC_EXTENSIONS = DEFAULT_DOC_EXTENSIONS;
+  if (!envMap.SKIP_EXTENSIONS) envMap.SKIP_EXTENSIONS = DEFAULT_SKIP_EXTENSIONS;
+  if (!envMap.IGNORED_DIRS) envMap.IGNORED_DIRS = DEFAULT_IGNORED_DIRS;
+  return envMap;
+}
+
+// PowerShell one-liner that appends <binDir> to the USER Path registry value:
+// no 1024-char truncation (setx), no literal "%PATH%" (spawn passes args
+// without shell expansion), keeps REG_EXPAND_SZ, and skips when already set.
+export function windowsPathPowerShell(binDir) {
+  const p = binDir.replace(/'/g, "''");
+  return `$p=[string][Environment]::GetEnvironmentVariable('Path','User'); if (-not $p.Contains('${p}')) { [Microsoft.Win32.Registry]::SetValue('HKEY_CURRENT_USER\\Environment','Path', ($p.TrimEnd(';') + ';' + '${p}'), 'ExpandString') }`;
+}
+
+// Verify a provider's connection before writing anything.
+// - openai/mistral/voyage: Bearer auth against {baseUrl}/embeddings, where
+//   baseUrl is the provider default or a user-supplied custom endpoint.
+// - azure: api-key auth against
+//   {endpoint}/openai/deployments/{deployment}/embeddings?api-version=...
+async function testApiConnection(provider, apiKey, { baseUrl, model, apiVersion } = {}) {
+  const defaults = {
+    openai: { base: "https://api.openai.com/v1", model: "text-embedding-3-small" },
+    mistral: { base: "https://api.mistral.ai/v1", model: "mistral-embed" },
+    voyage: { base: "https://api.voyageai.com/v1", model: "voyage-3-lite" },
+  };
+
+  const modelName = model || defaults[provider]?.model || "text-embedding-3-small";
+  let url;
+  let headers;
+
+  if (provider === "azure") {
+    if (!baseUrl) return { ok: false, error: "Azure endpoint URL is required" };
+    let base = baseUrl.replace(/\/+$/, "").split("?")[0];
+    if (!base.includes("/openai/deployments/")) {
+      base = `${base}/openai/deployments/${modelName}`;
+    }
+    if (!base.endsWith("/embeddings")) base = `${base}/embeddings`;
+    url = `${base}?api-version=${apiVersion || "2024-02-01"}`;
+    headers = { "Content-Type": "application/json", "api-key": apiKey };
+  } else {
+    const cfg = defaults[provider];
+    if (!cfg) return { ok: false, error: "Unknown provider" };
+    const base = (baseUrl || cfg.base).replace(/\/+$/, "");
+    url = `${base}/embeddings`;
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: modelName, input: ["test"] }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) return { ok: true };
+    const err = await res.text();
+    return { ok: false, error: `HTTP ${res.status}: ${err.slice(0, 200)}` };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function main(options = {}) {
+  // Load pre-filled values from .env (if exists) or CLI flags
+  const env = loadEnv();
+  const nonInteractive = options.nonInteractive || false;
+  const prefillProvider = options.provider || env.YATS_PROVIDER || env.EMBEDDING_PROVIDER || null;
+  const keyVar = { openai: "EMBEDDING_OPENAI_API_KEY", azure: "EMBEDDING_AZURE_API_KEY", mistral: "EMBEDDING_MISTRAL_API_KEY", voyage: "EMBEDDING_VOYAGE_API_KEY" }[prefillProvider];
+  const baseVar = { openai: "EMBEDDING_OPENAI_BASE_URL", azure: "EMBEDDING_AZURE_ENDPOINT", mistral: "EMBEDDING_MISTRAL_BASE_URL", voyage: "EMBEDDING_VOYAGE_BASE_URL" }[prefillProvider];
+  const prefill = {
+    provider: prefillProvider,
+    apiKey: options.apiKey || (keyVar && env[keyVar]) || null,
+    baseUrl: options.endpoint || (baseVar && env[baseVar]) || null,
+    model: options.model || null,
+    port: options.port ? parseInt(options.port, 10) : null,
+    batch: options.batch ? parseInt(options.batch, 10) : null,
+    noDocs: options.noDocs || false,
+    skipConfirm: options.skipConfirm || false,
+    ollamaUrl: options.ollamaUrl || env.OLLAMA_URL || null,
+  };
+
   header();
 
   // Check Docker
@@ -425,126 +628,318 @@ async function main() {
     process.exit(0);
   }
 
+  // Check for existing stopped install (compose file exists but containers not running)
+  if (existsSync(COMPOSE_FILE)) {
+    console.log(`  ${Y}⚠${R}  Found existing YATS installation (containers not running).`);
+    console.log("");
+    const rlStopped = createInterface({ input: process.stdin, output: process.stdout });
+    const cleanAnswer = await ask(rlStopped, `  ${B}Start fresh (deletes all indexed data)? [y/N]${R} `);
+    rlStopped.close();
+    if (cleanAnswer.toLowerCase() === "y") {
+      console.log("");
+      const sClean = spinner("Cleaning up previous installation...");
+      try {
+        await runCmd("docker", ["compose", "-f", COMPOSE_FILE, "down", "-v"]);
+        sClean.done(true);
+      } catch {
+        sClean.done(false);
+      }
+    } else {
+      console.log("");
+      console.log(`  ${G}✓${R} Keeping existing data. Proceeding with reconfiguration.`);
+    }
+    console.log("");
+  }
+
   // Step 1: Embedding provider
-  step("Step 1 — Embedding provider");
-
-  const provider = await choose("How should I generate embeddings for your code?", [
-    { label: "Ollama (local, private, included) — recommended", value: "ollama" },
-    { label: "OpenAI (cloud, needs API key)", value: "openai" },
-    { label: "Mistral (cloud, needs API key)", value: "mistral" },
-    { label: "Voyage AI (cloud, optimized for code, needs API key)", value: "voyage" },
-  ]);
-
-  let apiKey = "";
-  let ollamaModel = "nomic-embed-text";
-
-  if (provider === "ollama") {
-    step("Step 2 — Ollama model");
-    ollamaModel = await choose("Which model?", [
-      { label: "nomic-embed-text (768d, fast, ~274MB)", value: "nomic-embed-text" },
-      { label: "mxbai-embed-large (1024d, more accurate, ~669MB)", value: "mxbai-embed-large" },
-    ]);
+  let provider;
+  if (nonInteractive && prefill.provider) {
+    provider = prefill.provider;
+    console.log(`  Provider: ${provider}`);
   } else {
-    const providerNames = { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
-    step(`Step 2 — ${providerNames[provider]} API key`);
-    const rl2 = createInterface({ input: process.stdin, output: process.stdout });
-    apiKey = await ask(rl2, `  ${B}Your ${providerNames[provider]} API key:${R} `);
-    rl2.close();
+    step("Step 1 — Embedding provider");
+    provider = await choose("How should I generate embeddings for your code?", [
+      { label: "Ollama (local, private, included) — recommended", value: "ollama" },
+      { label: "OpenAI (cloud, needs API key)", value: "openai" },
+      { label: "Azure OpenAI (cloud, needs endpoint URL + API key)", value: "azure" },
+      { label: "Mistral (cloud, needs API key)", value: "mistral" },
+      { label: "Voyage AI (cloud, optimized for code, needs API key)", value: "voyage" },
+    ]);
+  }
+
+  // Ollama: bundled container vs. an existing installation
+  let ollamaUrl = "";
+  if (provider === "ollama") {
+    if (nonInteractive) {
+      ollamaUrl = prefill.ollamaUrl || "";
+      if (ollamaUrl) ollamaUrl = normalizeOllamaUrl(ollamaUrl);
+      console.log(`  Ollama: ${ollamaUrl && ollamaUrl !== DEFAULT_OLLAMA_URL ? ollamaUrl : "bundled Docker container"}`);
+    } else {
+      const hasOllama = await checkOllama();
+      step("Step 2 — Ollama");
+      const ollamaOptions = [];
+      if (hasOllama) {
+        ollamaOptions.push({ label: "Use my existing Ollama (detected on this machine)", value: "host" });
+      }
+      ollamaOptions.push({ label: "Run Ollama in Docker (bundled, ~3GB download)", value: "container" });
+      ollamaOptions.push({ label: "Use an existing Ollama at a custom URL", value: "custom" });
+      const ollamaMode = await choose("How should YATS connect to Ollama?", ollamaOptions);
+      if (ollamaMode === "host") {
+        ollamaUrl = "http://host.docker.internal:11434";
+        console.log(`  ${G}✓${R} Using the Ollama already running on this machine.`);
+      } else if (ollamaMode === "custom") {
+        const rlUrl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await ask(rlUrl, `  ${B}Ollama URL (e.g. http://192.168.1.20:11434):${R} `);
+        rlUrl.close();
+        ollamaUrl = normalizeOllamaUrl(answer.trim());
+        if (!ollamaUrl) {
+          console.log(`  ${Y}⚠${R}  No URL given — falling back to the bundled Ollama container.`);
+        } else {
+          console.log(`  ${G}✓${R} Using Ollama at ${ollamaUrl}`);
+        }
+      }
+      console.log("");
+    }
+  }
+
+  const providerNames = { openai: "OpenAI", azure: "Azure OpenAI", mistral: "Mistral", voyage: "Voyage AI" };
+  let apiKey = "";
+  let baseUrl = "";
+  const apiVersion = "2024-02-01";
+  let model = prefill.model || DEFAULT_MODEL[provider];
+
+  // Azure needs an endpoint URL — ask for it before the API key.
+  if (provider === "azure") {
+    step("Step 2 — Azure OpenAI endpoint URL");
+    if (nonInteractive && prefill.baseUrl) {
+      baseUrl = prefill.baseUrl;
+      console.log(`  Endpoint: ${baseUrl}`);
+    } else {
+      const rlAzure = createInterface({ input: process.stdin, output: process.stdout });
+      const prompt = prefill.baseUrl
+        ? `  ${B}Endpoint URL${R} [${prefill.baseUrl}]: `
+        : `  ${B}Endpoint URL (e.g. https://my-resource.openai.azure.com):${R} `;
+      baseUrl = (await ask(rlAzure, prompt)).trim();
+      if (!baseUrl && prefill.baseUrl) baseUrl = prefill.baseUrl;
+      rlAzure.close();
+      if (!baseUrl) {
+        console.log(`  ${RED}✗${R} Azure requires an endpoint URL.`);
+        process.exit(1);
+      }
+    }
+    console.log("");
+  }
+
+  // Azure: the "model" is the deployment name — pick it before the API key so
+  // the connection test hits the real deployment.
+  if (provider === "azure" && !nonInteractive) {
+    step("Step 3 — Azure deployment name");
+    console.log(`  ${D}The name of your embeddings deployment in Azure.${R}`);
+    console.log("");
+    model = await choose("Which deployment?", PROVIDER_MODELS.azure);
+    console.log("");
+  }
+
+  if (provider !== "ollama") {
+    step(`Step ${provider === "azure" ? "4" : "2"} — ${providerNames[provider]} API key`);
+
+    if (nonInteractive && prefill.apiKey) {
+      apiKey = prefill.apiKey;
+      console.log(`  API key: ${apiKey.slice(0, 8)}...`);
+    } else {
+      const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+      const defaultKey = prefill.apiKey || "";
+      const prompt = defaultKey
+        ? `  ${B}Your ${providerNames[provider]} API key${R} [${defaultKey.slice(0, 8)}...]: `
+        : `  ${B}Your ${providerNames[provider]} API key:${R} `;
+      apiKey = await ask(rl2, prompt);
+      if (!apiKey && defaultKey) apiKey = defaultKey;
+      rl2.close();
+    }
+
     console.log("");
     console.log(`  ${Y}⚠${R}  This is a paid service — you may be charged for API usage.`);
     console.log("");
+
+    // Optional custom endpoint (OpenAI-compatible providers only — Azure has
+    // its own endpoint step above). Works with any proxy or OpenAI-compatible
+    // gateway; leave empty for the provider default.
+    if (["openai", "mistral", "voyage"].includes(provider)) {
+      if (nonInteractive && prefill.baseUrl) {
+        baseUrl = prefill.baseUrl;
+        console.log(`  Custom endpoint: ${baseUrl}`);
+      } else {
+        const rlUrl = createInterface({ input: process.stdin, output: process.stdout });
+        const prompt = prefill.baseUrl
+          ? `  ${B}Custom endpoint URL (Enter = provider default)${R} [${prefill.baseUrl}]: `
+          : `  ${B}Custom endpoint URL? (Enter = provider default; e.g. a local proxy)${R}: `;
+        baseUrl = (await ask(rlUrl, prompt)).trim();
+        if (!baseUrl && prefill.baseUrl) baseUrl = prefill.baseUrl;
+        rlUrl.close();
+        if (baseUrl) console.log(`  ${G}✓${R} Custom endpoint: ${baseUrl}`);
+      }
+      console.log("");
+    }
+
+    // Optional: test connection
+    if (!nonInteractive) {
+      const rlTest = createInterface({ input: process.stdin, output: process.stdout });
+      const testAnswer = await ask(rlTest, `  ${B}Test connection? [Y/n]${R} `);
+      rlTest.close();
+      if (testAnswer.toLowerCase() !== "n") {
+        const sTest = spinner("Testing API connection...");
+        const result = await testApiConnection(provider, apiKey, {
+          baseUrl,
+          model: provider === "azure" ? model : undefined,
+          apiVersion,
+        });
+        if (result.ok) {
+          sTest.done(true);
+          console.log("");
+        } else {
+          sTest.done(false);
+          console.log(`  ${RED}✗${R} Connection failed: ${result.error}`);
+          console.log(`  ${Y}⚠${R}  You can change the API key later in ${C}~/.yats/.env${R}`);
+          console.log("");
+          if (!nonInteractive) {
+            const rlRetry = createInterface({ input: process.stdin, output: process.stdout });
+            const retryAnswer = await ask(rlRetry, `  ${B}Re-enter API key? [Y/n]${R} `);
+            rlRetry.close();
+            if (retryAnswer.toLowerCase() !== "n") {
+              const rl2b = createInterface({ input: process.stdin, output: process.stdout });
+              apiKey = await ask(rl2b, `  ${B}Your ${providerNames[provider]} API key:${R} `);
+              rl2b.close();
+              console.log("");
+            }
+          }
+        }
+      } else {
+        console.log("");
+      }
+    }
     console.log("");
   }
 
-  // Step 3: Embedding batch size
-  const BATCH_DEFAULTS = {
-    openai: 200,
-    mistral: 200,
-    voyage: 100,
-    ollama: 4,
-  };
-  const BATCH_MAX = {
-    openai: 2048,
-    mistral: 1024,
-    voyage: 128,
-    ollama: 4,
-  };
-  const defaultBatch = BATCH_DEFAULTS[provider];
-  const maxBatch = BATCH_MAX[provider];
-
-  step(`Step 3 — Embedding batch size`);
-  console.log(`  ${D}How many texts to embed per API request.${R}`);
-  console.log(`  ${D}Higher = faster indexing, lower = safer for rate limits.${R}`);
-  console.log(`  ${D}Provider max: ${maxBatch}${R}`);
-  console.log("");
-
-  const rlBatch = createInterface({ input: process.stdin, output: process.stdout });
-  const batchAnswer = await ask(rlBatch, `  ${B}Batch size${R} [${defaultBatch}]: `);
-  rlBatch.close();
-  let batchSize = defaultBatch;
-  const batchTrimmed = batchAnswer.trim();
-  if (batchTrimmed) {
-    const num = parseInt(batchTrimmed, 10);
-    if (num >= 1 && num <= maxBatch) {
-      batchSize = num;
+  // Embedding model (every provider except Azure, where the deployment name
+  // was chosen above)
+  if (provider !== "azure") {
+    if (nonInteractive) {
+      console.log(`  Embedding model: ${model}`);
     } else {
-      console.log(`  ${Y}⚠${R}  Must be 1–${maxBatch}. Using default ${defaultBatch}.`);
+      step("Step 3 — Embedding model");
+      model = await choose("Which embedding model?", PROVIDER_MODELS[provider]);
+      console.log("");
     }
+  } else if (nonInteractive) {
+    console.log(`  Azure deployment: ${model}`);
   }
-  console.log(`  ${G}✓${R} Batch size: ${batchSize}`);
-  console.log("");
+
+  // Existing-host Ollama: best-effort pull of the chosen model so indexing
+  // works right away (skipped when Ollama lives elsewhere).
+  if (provider === "ollama" && ollamaUrl === "http://host.docker.internal:11434" && !nonInteractive) {
+    const sPull = spinner(`Pulling ${model} into your existing Ollama...`);
+    try {
+      await runCmd("ollama", ["pull", model]);
+      sPull.done(true);
+    } catch {
+      sPull.done(false);
+      console.log(`  ${Y}⚠${R}  Could not run 'ollama pull'. Make sure ${B}${model}${R} is available in your Ollama (e.g. docker exec <container> ollama pull ${model}).`);
+    }
+    console.log("");
+  }
+
+  // Step 4: Embedding batch size
+  const BATCH_DEFAULTS = { openai: 200, azure: 200, mistral: 200, voyage: 100, ollama: 4 };
+  const BATCH_MAX = { openai: 2048, azure: 2048, mistral: 1024, voyage: 128, ollama: 4 };
+  const defaultBatch = prefill.batch || BATCH_DEFAULTS[provider];
+  const maxBatch = BATCH_MAX[provider];
+  let batchSize = defaultBatch;
+
+  if (nonInteractive) {
+    console.log(`  Batch size: ${batchSize}`);
+  } else {
+    step(`Step 4 — Embedding batch size`);
+    console.log(`  ${D}How many texts to embed per API request.${R}`);
+    console.log(`  ${D}Higher = faster indexing, lower = safer for rate limits.${R}`);
+    console.log(`  ${D}Provider max: ${maxBatch}${R}`);
+    console.log("");
+    const rlBatch = createInterface({ input: process.stdin, output: process.stdout });
+    const batchAnswer = await ask(rlBatch, `  ${B}Batch size${R} [${defaultBatch}]: `);
+    rlBatch.close();
+    const batchTrimmed = batchAnswer.trim();
+    if (batchTrimmed) {
+      const num = parseInt(batchTrimmed, 10);
+      if (num >= 1 && num <= maxBatch) batchSize = num;
+      else console.log(`  ${Y}⚠${R}  Must be 1–${maxBatch}. Using default ${defaultBatch}.`);
+    }
+    console.log(`  ${G}✓${R} Batch size: ${batchSize}`);
+    console.log("");
+  }
 
   // Step 4: Documentation indexing
   const docMaxFiles = 300;
-  let indexDocs = true;
+  let indexDocs = !prefill.noDocs;
 
-  step("Step 4 — Documentation indexing");
-  console.log(`  ${D}Index README, ARCHITECTURE, AI/ docs, and docs/ directory.${R}`);
-  console.log(`  ${D}Patterns (edit via DOC_PATTERNS env): AI/*.md, README.md, docs/${R}`);
-  console.log(`  ${D}If docs/ has >${docMaxFiles} .md files, you'll get a warning.${R}`);
-  console.log("");
-
-  const rlDocs = createInterface({ input: process.stdin, output: process.stdout });
-  const docsAnswer = await ask(rlDocs, `  ${B}Index documentation? [Y/n]${R} `);
-  rlDocs.close();
-  if (docsAnswer.toLowerCase() === "n") {
-    indexDocs = false;
-    console.log(`  ${Y}⚠${R}  Documentation indexing disabled. Set INDEX_DOCS=true to re-enable.`);
+  if (!nonInteractive) {
+    step("Step 5 — Documentation indexing");
+    console.log(`  ${D}Index README, ARCHITECTURE, AI/ docs, and docs/ directory.${R}`);
+    console.log(`  ${D}Patterns (edit via DOC_PATTERNS env): AI/*.md, README.md, docs/${R}`);
+    console.log(`  ${D}If docs/ has >${docMaxFiles} .md files, you'll get a warning.${R}`);
+    console.log("");
+    const rlDocs = createInterface({ input: process.stdin, output: process.stdout });
+    const docsAnswer = await ask(rlDocs, `  ${B}Index documentation? [Y/n]${R} `);
+    rlDocs.close();
+    if (docsAnswer.toLowerCase() === "n") {
+      indexDocs = false;
+      console.log(`  ${Y}⚠${R}  Documentation indexing disabled. Set INDEX_DOCS=true to re-enable.`);
+    } else {
+      console.log(`  ${G}✓${R}  Documentation will be indexed.`);
+    }
+    console.log("");
   } else {
-    console.log(`  ${G}✓${R}  Documentation will be indexed.`);
+    console.log(`  Index docs: ${indexDocs ? "Yes" : "No"}`);
   }
-  console.log("");
 
   // Optional: pre-index directories
-  step("Step 5 — Pre-index (optional)");
-  console.log(`  ${D}Indexing happens automatically on first search.${R}`);
-  console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
-  console.log("");
-  console.log(`  ${D}Tip: type a path or drag-n-drop a folder from your file manager.${R}`);
-
-  const rl3 = createInterface({ input: process.stdin, output: process.stdout });
   const pathsToIndex = [];
-  while (true) {
-    const p = await ask(rl3, `  ${B}Directory path (Enter to skip):${R} `);
-    const trimmed = p.trim();
-    if (!trimmed) break;
-    if (existsSync(trimmed)) {
-      pathsToIndex.push(trimmed);
-      console.log(`  ${G}✓${R} Added: ${trimmed}`);
-    } else {
-      console.log(`  ${RED}✗${R} Not found: ${trimmed}`);
+  if (!nonInteractive) {
+    step("Step 6 — Pre-index (optional)");
+    console.log(`  ${D}Indexing happens automatically on first search.${R}`);
+    console.log(`  ${D}Want to pre-index some directories now to skip the wait later?${R}`);
+    console.log("");
+    console.log(`  ${D}Tip: type a path or drag-n-drop a folder from your file manager.${R}`);
+    const rl3 = createInterface({ input: process.stdin, output: process.stdout });
+    while (true) {
+      const p = await ask(rl3, `  ${B}Directory path (Enter to skip):${R} `);
+      const trimmed = p.trim();
+      if (!trimmed) break;
+      const resolved = resolve(trimmed);
+      if (existsSync(resolved)) {
+        try {
+          if (statSync(resolved).isDirectory()) {
+            pathsToIndex.push(resolved);
+            console.log(`  ${G}✓${R} Added: ${resolved}`);
+          } else {
+            console.log(`  ${RED}✗${R} Not a directory: ${resolved}`);
+          }
+        } catch {
+          console.log(`  ${RED}✗${R} Cannot access: ${resolved}`);
+        }
+      } else {
+        console.log(`  ${RED}✗${R} Not found: ${resolved}`);
+      }
     }
+    rl3.close();
   }
-  rl3.close();
   console.log("");
 
   // Port selection
-  let mcpPort = 5555;
-  {
+  let mcpPort = prefill.port || 5555;
+  if (!nonInteractive) {
     const rlPort = createInterface({ input: process.stdin, output: process.stdout });
     const inUse = await checkPort(mcpPort);
-    const suggested = inUse ? 5556 : mcpPort;
-    const hint = inUse ? ` ${Y}(default 5555 is in use)${R}` : "";
+    const suggested = inUse ? (mcpPort + 1) : mcpPort;
+    const hint = inUse ? ` ${Y}(default ${mcpPort} is in use)${R}` : "";
     const answer = await ask(rlPort, `  ${B}MCP server port${R} [${suggested}]:${hint} `);
     const trimmed = answer.trim();
     if (trimmed) {
@@ -554,36 +949,38 @@ async function main() {
       mcpPort = suggested;
     }
     rlPort.close();
+    console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp${R}`);
+    console.log("");
   }
-  console.log(`  ${G}✓${R} MCP server on ${C}http://localhost:${mcpPort}/mcp/sse${R}`);
-  console.log("");
 
-  // Step 5: Confirm
-  step(`Step ${pathsToIndex.length ? "6" : "5"} — Confirm`);
-  const providerName = provider === "ollama"
-    ? `Ollama (${ollamaModel})`
-    : { openai: "OpenAI", mistral: "Mistral", voyage: "Voyage AI" }[provider];
-
-  box([
-    `${B}Provider:${R}     ${providerName}`,
-    `${B}Port:${R}         ${String(mcpPort)}`,
-    ...(pathsToIndex.length ? [`${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)")}`] : []),
-    `${B}Batch:${R}        ${String(batchSize)}`,
-    `${B}Index docs:${R}   ${indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No"}`,
-    `${B}API calls:${R}    ${provider === "ollama" ? "None (runs locally)" : `To ${provider} API`}`,
-    `${B}Disk needed:${R}  ${provider === "ollama" ? "~3GB" : "~1GB"}`,
-  ]);
-  console.log("");
-
-  const proceed = await (() => {
-    const rl4 = createInterface({ input: process.stdin, output: process.stdout });
-    return ask(rl4, `  ${B}Proceed? [Y/n]${R} `).then((a) => { rl4.close(); return a; });
-  })();
-  if (proceed.toLowerCase() === "n") {
+  // Confirm
+  if (!nonInteractive && !prefill.skipConfirm) {
+    step(`Step ${pathsToIndex.length ? "7" : "6"} — Confirm`);
+    const providerName = provider === "ollama" || provider === "azure"
+      ? `${provider === "ollama" ? "Ollama" : providerNames[provider]} (${model})`
+      : providerNames[provider];
+    box([
+      `${B}Provider:${R}     ${providerName}`,
+      ...(ollamaUrl && ollamaUrl !== DEFAULT_OLLAMA_URL ? [`${B}Ollama:${R}        ${ollamaUrl}`] : []),
+      ...(baseUrl ? [`${B}Endpoint:${R}     ${baseUrl}`] : []),
+      `${B}Port:${R}         ${String(mcpPort)}`,
+      ...(pathsToIndex.length ? [`${B}Pre-index:${R}    ${String(pathsToIndex.length + " directorie(s)")}`] : []),
+      `${B}Batch:${R}        ${String(batchSize)}`,
+      `${B}Index docs:${R}   ${indexDocs ? "Yes (max " + docMaxFiles + " files)" : "No"}`,
+      `${B}API calls:${R}    ${provider === "ollama" ? "None (runs locally)" : `To ${providerNames[provider] ?? provider} API`}`,
+      `${B}Disk needed:${R}  ${provider === "ollama" ? "~3GB" : "~1GB"}`,
+    ]);
     console.log("");
-    console.log(`  Setup cancelled. Run ${B}npx yats-toolkit${R} anytime to try again.`);
-    console.log("");
-    process.exit(0);
+    const proceed = await (() => {
+      const rl4 = createInterface({ input: process.stdin, output: process.stdout });
+      return ask(rl4, `  ${B}Proceed? [Y/n]${R} `).then((a) => { rl4.close(); return a; });
+    })();
+    if (proceed.toLowerCase() === "n") {
+      console.log("");
+      console.log(`  Setup cancelled. Run ${B}npx yats-toolkit${R} anytime to try again.`);
+      console.log("");
+      process.exit(0);
+    }
   }
 
   // Install
@@ -594,28 +991,23 @@ async function main() {
   mkdirSync(YATS_DIR, { recursive: true });
   mkdirSync(REPOS_DIR, { recursive: true });
 
-  // Write .env with user-configurable defaults
-  const envContent = [
-    `# YATS configuration — edit these values and run 'yats stop && yats start' to apply`,
-    `DOC_EXTENSIONS=${DEFAULT_DOC_EXTENSIONS}`,
-    `SKIP_EXTENSIONS=${DEFAULT_SKIP_EXTENSIONS}`,
-    `IGNORED_DIRS=${DEFAULT_IGNORED_DIRS}`,
-    "",
-  ].join("\n");
-  writeFileSync(ENV_FILE, envContent);
-
   // Generate and write docker-compose
-  const compose = generateCompose(provider, ollamaModel, apiKey, mcpPort, batchSize, indexDocs, docMaxFiles);
+  const compose = generateCompose(provider, mcpPort, batchSize, indexDocs, docMaxFiles, ollamaUrl);
   writeFileSync(COMPOSE_FILE, compose);
 
   // Write MCP config
-  const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp/sse` } } };
+  const mcpConfig = { mcpServers: { yats: { url: `http://localhost:${mcpPort}/mcp` } } };
   writeFileSync(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2));
+
+  // Persist keys to ~/.yats/.env — canonical source (embedding + benchmark keys).
+  const envMap = loadEnv();
+  applyEnvKeys(envMap, { provider, apiKey, model, baseUrl, apiVersion, ollamaUrl });
+  writeFileSync(ENV_FILE, Object.entries(envMap).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 
   // Pull the YATS Docker image from GitHub Container Registry
   const sPull = spinner("Pulling YATS image from registry...");
   try {
-    await runCmd("docker", ["pull", "ghcr.io/fvinciarelli/yats:latest"]);
+    await runCmd("docker", ["pull", "ghcr.io/fvinciarelli/yats.ai:latest"]);
     sPull.done(true);
   } catch {
     sPull.done(false);
@@ -667,41 +1059,86 @@ async function main() {
     }
   }
 
+  // Install YATS CLI globally (or to ~/.yats/bin if global fails)
+  const sCli = spinner("Installing YATS CLI...");
+  try {
+    const osPlatform = platform();
+    mkdirSync(YATS_BIN_DIR, { recursive: true });
+
+    if (osPlatform === "win32") {
+      // Windows: create a .cmd wrapper
+      const cmdScript = `@echo off\r\nnpx yats-toolkit %*\r\n`;
+      writeFileSync(join(YATS_BIN_DIR, "yats.cmd"), cmdScript);
+    } else {
+      // Linux/macOS: create a shell wrapper
+      const shScript = `#!/usr/bin/env bash\nnpx yats-toolkit "$@"\n`;
+      writeFileSync(join(YATS_BIN_DIR, "yats"), shScript);
+      chmodSync(join(YATS_BIN_DIR, "yats"), 0o755);
+    }
+    sCli.done(true);
+
+    // Add to PATH
+    const rcFiles = [];
+    if (osPlatform !== "win32") {
+      // Try .bashrc and .zshrc
+      const bashrc = join(homedir(), ".bashrc");
+      const zshrc = join(homedir(), ".zshrc");
+      if (existsSync(bashrc)) rcFiles.push(bashrc);
+      if (existsSync(zshrc)) rcFiles.push(zshrc);
+      if (rcFiles.length === 0) rcFiles.push(bashrc); // if neither exists, create .bashrc
+
+      const exportLine = `\nexport PATH="$HOME/.yats/bin:$PATH"  # YATS CLI\n`;
+      for (const rc of rcFiles) {
+        const content = existsSync(rc) ? readFileSync(rc, "utf-8") : "";
+        if (!content.includes(".yats/bin")) {
+          writeFileSync(rc, content + exportLine);
+        }
+      }
+    } else {
+      // Windows: update the USER Path via the registry through PowerShell.
+      // setx would truncate values >1024 chars, store the literal "%PATH%"
+      // (no shell expansion happens under CreateProcess), and rewrite the
+      // REG_EXPAND_SZ value as REG_SZ — corrupting the user's PATH.
+      try {
+        await runCmd("powershell", ["-NoProfile", "-NonInteractive", "-Command", windowsPathPowerShell(YATS_BIN_DIR)]);
+      } catch {}
+    }
+
+    console.log(`  ${G}✓${R} CLI installed to ${C}${YATS_BIN_DIR}${R}`);
+    if (osPlatform !== "win32") {
+      const names = rcFiles.map(f => f.split("/").pop()).join(" and ");
+      console.log(`  ${Y}⚠${R}  Added ${C}~/.yats/bin${R} to your ${C}${names}${R}`);
+      console.log(`  ${Y}⚠${R}  Run ${B}source ${names.includes("zshrc") ? "~/.zshrc" : "~/.bashrc"}${R} or restart your terminal`);
+      console.log(`  ${Y}⚠${R}  for the ${B}yats${R} command to be available.`);
+    }
+  } catch (e) {
+    sCli.done(false);
+  }
+
   // Done
   console.log("");
-  console.log(`  ✅  ${G}YATS is ready!${R}`);
-  divider();
+  console.log(`  ✅  ${G}YATS is ready!${R}  →  ${C}http://localhost:${mcpPort}/mcp${R}`);
   console.log("");
-  console.log(`  ${B}MCP configuration for your AI agent:${R}`);
+  console.log(`  Config saved to ${C}~/.yats/.env${R}`);
+  console.log(`  ${D}Benchmark agent keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) go there too.${R}`);
   console.log("");
-
   box([
-    `${B}For Cursor, Zed, Cline, Continue.dev, Roo Code:${R}`,
-    `{ "url": "http://localhost:${mcpPort}/mcp/sse" }`,
+    `${B}Copy this URL into your AI agent:${R}`,
+    `{ "url": "http://localhost:${mcpPort}/mcp" }`,
     "",
-    `${B}For Copilot, Claude Desktop (stdio only):${R}`,
+    `${B}Copilot / Claude Desktop:${R}`,
     `{ "command": "npx", "args": ["yats-bridge"] }`,
+    "",
+    `${D}For more: yats connect${R}`,
+    `${C}github.com/fvinciarelli/yats.ai/connect${R}`,
   ]);
   console.log("");
-  console.log(`  Config saved to ${C}${MCP_CONFIG_FILE}${R}`);
-  divider();
+  console.log(`  ${B}Try:${R} ${C}"how does auth work in this project?"${R}`);
   console.log("");
-  console.log(`  ${B}How it works:${R}`);
+  console.log(`  ${B}Commands:${R}  yats status | yats clear | yats stop/start`);
+  console.log(`             yats update | yats connect`);
   console.log("");
-  console.log(`    Just ask your AI agent about your code.`);
-  console.log(`    The index builds automatically on the first search.`);
-  console.log("");
-  console.log(`    Example: "${D}how does authentication work in my project?${R}"`);
-  console.log("");
-  console.log(`  ${B}Commands:${R}`);
-  console.log(`    yats add ~/work/project    Add a repo to index`);
-  console.log(`    yats status                Check what's indexed`);
-  console.log(`    yats stop                  Stop all services`);
-  console.log(`    yats start                 Start all services`);
-  console.log(`    yats update                Update CLI to latest`);
-  console.log(`    yats update-base           Update Docker images`);
-  console.log("");
-  console.log(`  Docs: ${C}https://yats.site${R}`);
+  console.log(`  Docs:  ${C}https://fvinciarelli.github.io/yats.ai/${R}  ·  ${C}https://yats.site${R}`);
   console.log("");
 }
 export default main;

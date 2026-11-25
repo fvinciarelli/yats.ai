@@ -1,0 +1,102 @@
+{
+  "note": "Catalog of agent versions → prompt/config templates. `yats connect` detects the installed agent CLI version and selects the entry whose range matches (ranges inclusive, first match wins). Each entry records WHAT was tested and HOW it performed with the test-connect suite. Untested entries fall back to the default templates. Update procedure when a new agent version ships: see test-connect/README.md → 'Procedure: a new agent version ships'.",
+  "codex": {
+    "versions": [
+      {
+        "since": "0.172.0",
+        "files": {},
+        "tested": {
+          "date": "2026-11-25",
+          "agentVersion": "0.172.0",
+          "model": "deepseek-flash",
+          "matrix": "test-connect q01 (abs-bench)",
+          "result": "PASS · 54.9% input-token savings · 0 fallbacks · 2/2 runs",
+          "prompt": "v5"
+        }
+      },
+      {
+        "until": "0.171.999",
+        "files": {
+          "connect/codex/config.toml": "connect/codex/legacy/config.toml"
+        },
+        "tested": null
+      }
+    ]
+  },
+  "claude": {
+    "versions": [
+      {
+        "files": {},
+        "tested": {
+          "date": "2026-11-25",
+          "agentVersion": "2.1.332",
+          "model": "deepseek-flash (ANTHROPIC_BASE_URL BYOK)",
+          "matrix": "test-connect q01 (abs-bench)",
+          "result": "PASS · 77.4% input-token savings · 0 fallbacks · 2/2 runs",
+          "prompt": "v5"
+        }
+      }
+    ]
+  },
+  "copilot": {
+    "versions": [
+      {
+        "files": {},
+        "tested": {
+          "date": "2026-11-25",
+          "agentVersion": "1.0.116",
+          "model": "deepseek-flash (BYOK, anthropic endpoint)",
+          "matrix": "test-connect q01 (abs-bench)",
+          "result": "PASS · 0 fallbacks · 2/2 runs · tokens not reported by BYOK",
+          "prompt": "v5"
+        }
+      }
+    ]
+  },
+  "pi": {
+    "versions": [
+      {
+        "files": {},
+        "tested": {
+          "date": "2026-11-25",
+          "agentVersion": "1.6.0",
+          "model": "deepseek-flash (models.json custom provider)",
+          "matrix": "test-connect q01 (abs-bench)",
+          "result": "PASS · 25.4% input-token savings · 0 fallbacks · 2/2 runs",
+          "prompt": "v1"
+        }
+      }
+    ]
+  },
+  "gemini": {
+    "versions": [
+      {
+        "files": {},
+        "tested": {
+          "date": "2026-11-25",
+          "agentVersion": "0.71.1",
+          "model": "gemini-flash-lite-latest",
+          "matrix": "test-connect q01 (abs-bench)",
+          "result": "PENDING re-test — free-tier quota exhausted mid-run; v5 prompt showed correct behavior (search_documentation first, path= ✓)",
+          "prompt": "v5"
+        }
+      }
+    ]
+  },
+  "cursor": {
+    "versions": [
+      {
+        "files": {},
+        "tested": null
+      }
+    ]
+  },
+  "vscode": {
+    "versions": [
+      {
+        "files": {},
+        "tested": null
+      }
+    ]
+  }
+}
