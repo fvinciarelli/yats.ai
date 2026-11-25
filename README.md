@@ -66,12 +66,18 @@ The wizard asks which embedding provider to use (Ollama local + free, or OpenAI/
 
 ## Works with the agents you already use
 
-| | Claude Code | Gemini CLI | Copilot CLI | Codex CLI | Cursor |
-|---|---|---|---|---|---|
-| Transport | stdio bridge | stdio bridge | stdio bridge | stdio bridge | HTTP |
-| Setup | `yats connect --install` | `yats connect --install` | `yats connect --install` | `yats connect --install` | `yats connect --install` |
+| | Claude Code | Gemini CLI | Copilot CLI | Codex CLI | Cursor | Pi (pi.dev) | VS Code (native MCP) |
+|---|---|---|---|---|---|---|---|
+| Transport | stdio bridge | stdio bridge | stdio bridge | stdio bridge | HTTP | HTTP | stdio bridge |
+| Setup | `yats connect --install claude` | `yats connect --install gemini` | `yats connect --install copilot` | `yats connect --install codex` | `yats connect --install cursor` | `yats connect --install pi` | `yats connect --install vscode` |
 
-👉 Run **`yats connect`** from your repo — it installs your agent's config in one command without overwriting existing files (see [`connect/`](./connect/) for details). Each agent gets custom instructions that teach it to call `search_code` before `grep`, and to expand the graph instead of guessing relationships.
+👉 Run **`yats connect`** from your repo — it installs your agent's config in one command without overwriting existing files (see [`connect/`](./connect/) for details). It detects your agent's **version** and installs the prompt + config that performed best for that version (a catalog validated with our [test-connect suite](./test-connect/)). Each agent gets custom instructions that teach it to call `search_code` before `grep`, and to expand the graph instead of guessing relationships.
+
+```bash
+yats connect                          # interactive picker (claude, cursor, copilot, vscode, gemini, codex, pi)
+yats connect codex                    # show the config that would be installed
+printf 'y\n' | yats connect --install codex   # non-interactive install
+```
 
 ---
 
@@ -216,7 +222,7 @@ flowchart LR
     B --> D[(Qdrant<br/>vector store)]
     C --> E[MCP server<br/>20 tools]
     D --> E
-    E --> F[AI agent<br/>Claude · Cursor · Copilot · Codex · Gemini]
+    E --> F[AI agent<br/>Claude · Cursor · Copilot · Codex · Gemini · Pi]
 ```
 
 - **Graph:** Neo4j 5 (symbols, calls, imports, inheritance — full relationship graph)
@@ -287,7 +293,9 @@ yats start                        # Start services (after stop)
 yats update                       # Update CLI to latest version
 yats update-base                  # Update Docker images
 yats connect [agent]              # Show agent setup config
-yats connect --install <agent>    # Auto-place config files
+                                  #   agents: claude, cursor, copilot, vscode, gemini, codex, pi
+yats connect --install <agent>    # Auto-place config files (merges, never overwrites)
+yats connect --link [agent]       # Show GitHub links for an agent's manual setup
 yats bridge                       # MCP stdio ↔ HTTP proxy (for CLI-only agents)
 yats benchmark                    # AI agent token comparison
 yats watch <path> [--live] [--no-config]  # Sync index with git commits
