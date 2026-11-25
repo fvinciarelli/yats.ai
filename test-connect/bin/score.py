@@ -62,6 +62,8 @@ def parse_copilot(path: Path):
             if name.startswith("yats-"):
                 calls.append({"tool": name.removeprefix("yats-"), "args": d.get("arguments", {})})
             elif name == "bash":
+                if is_startup_check(name, d.get("arguments", {})):
+                    continue
                 reads += 1
         elif t == "assistant.message":
             content = r.get("data", {}).get("content")
@@ -80,8 +82,14 @@ def parse_copilot(path: Path):
     return calls, reads, answer, usage
 
 
+def is_startup_check(name, args):
+    """The instructed startup check (`yats list` / `yats index`) is not a fallback."""
+    cmd = (args or {}).get("command", "")
+    return cmd.strip().startswith(("yats list", "yats index"))
+
+
 def parse_claude(path: Path):
-    calls, reads, answer, usage = [], 0, "", None
+    calls, reads, file_reads, answer, usage = [], 0, 0, "", {}
     for line in path.read_text().splitlines():
         try:
             r = json.loads(line)
@@ -94,13 +102,18 @@ def parse_claude(path: Path):
                     name = block.get("name", "")
                     if name.startswith("mcp__yats__"):
                         calls.append({"tool": name.removeprefix("mcp__yats__"), "args": block.get("input", {})})
-                    elif name in ("Read", "Bash", "Grep", "Glob"):
+                    elif name == "Read":
+                        file_reads += 1  # targeted read at YATS-returned lines — by design
+                    elif name in ("Bash", "Grep", "Glob", "WebSearch", "WebFetch"):
+                        if name == "Bash" and is_startup_check(name, block.get("input", {})):
+                            continue
                         reads += 1
         elif t == "result":
             usage = r.get("usage", {})
             answer = r.get("result", "")
             if r.get("total_cost_usd") is not None:
                 usage["total_cost_usd"] = r["total_cost_usd"]
+    usage["_file_reads"] = file_reads
     return calls, reads, answer, usage
 
 
@@ -155,11 +168,15 @@ def aggregate(files):
             file=Path(f).name,
             calls=calls, reads=reads, answer=answer, usage=usage,
             n=len(calls),
-            first_is_search=len(calls) > 0 and calls[0]["tool"] in ("search_code", "search_documentation"),
+            # startup checks (list_repositories / yats list) don't count:
+            # first SUBSTANTIVE call must be a search tool
+            first_is_search=next((c["tool"] in ("search_code", "search_documentation")
+                                  for c in calls if c["tool"] != "list_repositories"), False),
             all_have_path=len(calls) > 0 and all(path_ok(c) for c in calls),
-            within_budget=len(calls) <= 5,
+            within_budget=len([c for c in calls if c["tool"] != "list_repositories"]) <= 4,
             inp=total_input(usage),
             out=usage.get("output_tokens", 0) if usage else 0,
+            file_reads=(usage or {}).get("_file_reads", 0),
         ))
     if not runs:
         return None
@@ -184,6 +201,7 @@ def aggregate(files):
         budget_rate=rate(lambda r: r["within_budget"]),
         zero_fallback_rate=rate(lambda r: r["reads"] == 0),
         mean_reads=mean([r["reads"] for r in runs]),
+        mean_file_reads=mean([r["file_reads"] for r in runs]),
         mean_in=mean([r["inp"] for r in runs]),
         mean_out=mean([r["out"] for r in runs]),
         answers=[r["answer"] for r in runs],
@@ -214,6 +232,8 @@ def main():
             p = "path✓" if path_ok(c) else "path✗"
             print(f"    - {c['tool']} ({p})")
         print(f"  Fallback (shell/web/read): mean {w['mean_reads']:.1f}")
+        if w.get("mean_file_reads"):
+            print(f"  Targeted file reads (Read at YATS lines — by design): mean {w['mean_file_reads']:.1f}")
         print(f"  Tokens: in≈{w['mean_in']:,.0f} out≈{w['mean_out']:,.0f}")
         if w["cost"]:
             print(f"  Cost reported by agent: {w['cost']}")
@@ -224,7 +244,7 @@ def main():
             ("uses YATS tools", w["mean_calls"] >= 1),
             (f"starts with search_code/search_documentation ({w['first_rate']:.0%} of runs)", w["first_rate"] == 1),
             (f"passes path= on every call ({w['path_rate']:.0%} of runs)", w["path_rate"] == 1),
-            (f"respects 3-5 call budget ({w['budget_rate']:.0%} of runs)", w["budget_rate"] == 1),
+            (f"respects ≤4-call budget ({w['budget_rate']:.0%} of runs)", w["budget_rate"] == 1),
             (f"no fallback to shell/web ({w['zero_fallback_rate']:.0%} of runs)", w["zero_fallback_rate"] == 1),
         ]
         for name, ok in checks:
