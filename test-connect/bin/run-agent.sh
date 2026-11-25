@@ -28,9 +28,18 @@ mkdir -p "$HOME_DIR"
 
 OUT_DIR="$DIR/results/$AGENT"
 mkdir -p "$OUT_DIR"
-OUT_FILE="$OUT_DIR/$(basename "$QUESTION_FILE" .md)__${MODE#--}.jsonl"
 
-echo "▶ $AGENT · $(basename "$QUESTION_FILE") · ${MODE#--}  →  $OUT_FILE"
+# Multi-run support: YATS_TEST_RUNS=N repeats the whole cell (reset+install+run)
+# so noisy single runs average out. Output: <q>__<mode>__run<i>.jsonl
+RUNS="${YATS_TEST_RUNS:-1}"
+for run_i in $(seq 1 "$RUNS"); do
+  if [ "$RUNS" -gt 1 ]; then
+    OUT_FILE="$OUT_DIR/$(basename "$QUESTION_FILE" .md)__${MODE#--}__run${run_i}.jsonl"
+  else
+    OUT_FILE="$OUT_DIR/$(basename "$QUESTION_FILE" .md)__${MODE#--}.jsonl"
+  fi
+
+echo "▶ $AGENT · $(basename "$QUESTION_FILE") · ${MODE#--} [run $run_i/$RUNS] → $OUT_FILE"
 
 # --- Reset the fixture to a clean state for this agent, then install connect
 # config only when testing WITH yats (baseline = the repo as-is, no YATS).
@@ -66,3 +75,4 @@ timeout "${YATS_TEST_TIMEOUT:-300}" docker run --rm --network host \
   -e DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
   yats-agent-lab:latest \
   /test-connect-bin/agent-entry.sh "$(cat "$QUESTION_FILE")" 2>&1 | tee "$OUT_FILE"
+done

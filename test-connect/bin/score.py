@@ -138,40 +138,69 @@ def total_input(usage):
             + usage.get("inputTokens", 0))
 
 
+def mean(values):
+    return sum(values) / len(values) if values else 0
+
+
+def aggregate(files):
+    """Parse every run of a condition and aggregate: means for counts/tokens,
+    pass-rates for binary criteria (multi-run averages out single-run noise)."""
+    runs = []
+    for f in files:
+        parsed = parse(Path(f))
+        if parsed is None:
+            continue
+        calls, reads, answer, usage = parsed
+        runs.append(dict(
+            file=Path(f).name,
+            calls=calls, reads=reads, answer=answer, usage=usage,
+            n=len(calls),
+            first_is_search=len(calls) > 0 and calls[0]["tool"] in ("search_code", "search_documentation"),
+            all_have_path=len(calls) > 0 and all(path_ok(c) for c in calls),
+            within_budget=len(calls) <= 5,
+            inp=total_input(usage),
+            out=usage.get("output_tokens", 0) if usage else 0,
+        ))
+    if not runs:
+        return None
+    rate = lambda pred: sum(1 for r in runs if pred(r)) / len(runs)
+    cost = None
+    for r in runs:
+        u = r["usage"]
+        if not u:
+            continue
+        if u.get("total_cost_usd") is not None:
+            cost = f"${u['total_cost_usd']:.4f} (agent-reported)"
+            break
+        if u.get("totalNanoAiu") is not None or u.get("totalPremiumRequests") is not None:
+            cost = f"AIU={u.get('totalNanoAiu', 0)}, premiumRequests={u.get('totalPremiumRequests', 0)}"
+            break
+    return dict(
+        runs=len(runs),
+        sample_calls=runs[0]["calls"],
+        mean_calls=mean([r["n"] for r in runs]),
+        first_rate=rate(lambda r: r["first_is_search"]),
+        path_rate=rate(lambda r: r["all_have_path"]),
+        budget_rate=rate(lambda r: r["within_budget"]),
+        zero_fallback_rate=rate(lambda r: r["reads"] == 0),
+        mean_reads=mean([r["reads"] for r in runs]),
+        mean_in=mean([r["inp"] for r in runs]),
+        mean_out=mean([r["out"] for r in runs]),
+        answers=[r["answer"] for r in runs],
+        cost=cost,
+    )
+
+
 def main():
     files = sys.argv[1:]
     expects_file = None
     if files and files[0].endswith(".expects"):
         expects_file, files = files[0], files[1:]
-    with_yats = next((f for f in files if "with-yats" in f), None)
-    without_yats = next((f for f in files if "without-yats" in f), None)
+    with_yats = sorted(f for f in files if "with-yats" in f)
+    without_yats = sorted(f for f in files if "without-yats" in f)
 
-    results = {}
-    for label, f in (("with-yats", with_yats), ("without-yats", without_yats)):
-        if not f:
-            continue
-        calls, reads, answer, usage = parse(Path(f))
-        n = len(calls)
-        first_is_search = n > 0 and calls[0]["tool"] in ("search_code", "search_documentation")
-        all_have_path = n > 0 and all(path_ok(c) for c in calls)
-        within_budget = n <= 5
-        inp = total_input(usage)
-        out = usage.get("output_tokens", 0) if usage else 0
-        cost = None
-        if usage:
-            if usage.get("total_cost_usd") is not None:
-                cost = f"${usage['total_cost_usd']:.4f} (agent-reported)"
-            elif usage.get("totalNanoAiu") is not None or usage.get("totalPremiumRequests") is not None:
-                cost = (f"AIU={usage.get('totalNanoAiu', 0)}, "
-                        f"premiumRequests={usage.get('totalPremiumRequests', 0)}")
-        results[label] = dict(
-            calls=calls, reads=reads, answer=answer,
-            n_yats=n, first_is_search=first_is_search,
-            all_have_path=all_have_path, within_budget=within_budget,
-            input_tokens=inp, output_tokens=out, cost=cost,
-        )
-
-    w = results.get("with-yats")
+    w = aggregate(with_yats) if with_yats else None
+    b = aggregate(without_yats) if without_yats else None
     failures = []
 
     print("=" * 62)
@@ -179,47 +208,45 @@ def main():
     print("=" * 62)
 
     if w:
-        print(f"\n[with-yats] {Path(with_yats).name}")
-        print(f"  YATS tool calls: {w['n_yats']}")
-        for c in w["calls"]:
+        print(f"\n[with-yats] {w['runs']} run(s)")
+        print(f"  YATS tool calls: mean {w['mean_calls']:.1f}")
+        for c in w["sample_calls"]:
             p = "path✓" if path_ok(c) else "path✗"
             print(f"    - {c['tool']} ({p})")
-        print(f"  Fallback (shell/web/read): {w['reads']}")
-        print(f"  Tokens: in={w['input_tokens']:,} out={w['output_tokens']:,}")
-        cost = w.get("cost")
-        if cost:
-            print(f"  Cost reported by agent: {cost}")
+        print(f"  Fallback (shell/web/read): mean {w['mean_reads']:.1f}")
+        print(f"  Tokens: in≈{w['mean_in']:,.0f} out≈{w['mean_out']:,.0f}")
+        if w["cost"]:
+            print(f"  Cost reported by agent: {w['cost']}")
         else:
             print("  Cost: not reported (derive from provider pricing)")
 
         checks = [
-            ("uses YATS tools", w["n_yats"] >= 1),
-            ("starts with search_code / search_documentation", w["first_is_search"]),
-            ("passes path= on every call", w["all_have_path"]),
-            ("respects 3-5 call budget", w["within_budget"]),
-            ("does not fall back to shell/web", w["reads"] == 0),
+            ("uses YATS tools", w["mean_calls"] >= 1),
+            (f"starts with search_code/search_documentation ({w['first_rate']:.0%} of runs)", w["first_rate"] == 1),
+            (f"passes path= on every call ({w['path_rate']:.0%} of runs)", w["path_rate"] == 1),
+            (f"respects 3-5 call budget ({w['budget_rate']:.0%} of runs)", w["budget_rate"] == 1),
+            (f"no fallback to shell/web ({w['zero_fallback_rate']:.0%} of runs)", w["zero_fallback_rate"] == 1),
         ]
         for name, ok in checks:
             print(f"  {'✅' if ok else '❌'} {name}")
             if not ok:
                 failures.append(name)
 
-    if w and results.get("without-yats"):
-        b = results["without-yats"]
-        print(f"\n[without-yats] {Path(without_yats).name}")
-        print(f"  Fallback (shell/web/read): {b['reads']}")
-        print(f"  Tokens: in={b['input_tokens']:,} out={b['output_tokens']:,}")
-        if b["input_tokens"]:
-            sav = (b["input_tokens"] - w["input_tokens"]) / b["input_tokens"] * 100
+    if w and b:
+        print(f"\n[without-yats] {b['runs']} run(s)")
+        print(f"  Fallback (shell/web/read): mean {b['mean_reads']:.1f}")
+        print(f"  Tokens: in≈{b['mean_in']:,.0f} out≈{b['mean_out']:,.0f}")
+        if b["mean_in"]:
+            sav = (b["mean_in"] - w["mean_in"]) / b["mean_in"] * 100
             print(f"\n  💰 input-token savings: {sav:.1f}%")
 
     if expects_file and w and Path(expects_file).exists():
         expected = [k.strip() for k in Path(expects_file).read_text().split(",")]
-        missing = [k for k in expected if k.lower() not in (w["answer"] or "").lower()]
-        print(f"\n[answer] expects: {', '.join(expected)}")
-        print(f"  {'✅' if not missing else '❌ missing: ' + ', '.join(missing)}")
-        if missing:
-            failures.append(f"answer missing {missing}")
+        ok_runs = sum(1 for ans in w["answers"] if all(k.lower() in (ans or "").lower() for k in expected))
+        print(f"\n[answer] expects: {', '.join(expected)} — correct in {ok_runs}/{len(w['answers'])} runs")
+        print(f"  {'✅' if ok_runs == len(w['answers']) else '❌'}")
+        if ok_runs < len(w["answers"]):
+            failures.append("answer missing keywords in some runs")
 
     print("\n" + ("❌ FAIL" if failures else "✅ PASS"))
     sys.exit(1 if failures else 0)
