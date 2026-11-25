@@ -7,3 +7,4 @@ multi_agent = false              # REQUIRED: force direct MCP tool usage
 [mcp_servers.yats]
 command = "yats"
 args = ["bridge"]
+default_tools_approval_mode = "approve"  # YATS tools are read-only: never prompt (exec mode rejects prompts)
