@@ -69,7 +69,8 @@ case "$AGENT" in
   gemini)
     # Gemini cannot use DeepSeek: needs its own key + model (free tier works)
     export GEMINI_API_KEY="${GEMINI_API_KEY:-}"
-    G_MODEL="${YATS_TEST_GEMINI_MODEL:-gemini-flash-latest}"
+    # flash-lite-latest: el tier lite responde estable (los flash full dan 503 a menudo)
+    G_MODEL="${YATS_TEST_GEMINI_MODEL:-gemini-flash-lite-latest}"
     if [ "$MODE" = "with-yats" ]; then
       export GEMINI_CLI_TRUST_WORKSPACE=true
       gemini -p "$PROMPT" \

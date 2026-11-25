@@ -142,6 +142,40 @@ def parse_pi(path: Path):
     return calls, reads, answer, usage
 
 
+def parse_gemini(path: Path):
+    """Gemini CLI stream-json: tool_use {tool_name, parameters}, message deltas,
+    result.stats {input_tokens (incl. cached), output_tokens}."""
+    calls, reads, file_reads, usage = [], 0, 0, {}
+    answer_parts = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = r.get("type")
+        if t == "tool_use":
+            name = r.get("tool_name", "")
+            if name.startswith("mcp_yats_"):
+                calls.append({"tool": name.removeprefix("mcp_yats_"), "args": r.get("parameters", {})})
+            elif name == "read_file":
+                file_reads += 1  # targeted read at YATS-returned lines — by design
+            elif name in ("grep_search", "glob_search", "list_dir", "web_search", "web_fetch"):
+                reads += 1
+            # update_topic and other bookkeeping tools are ignored
+        elif t == "message" and r.get("role") == "assistant":
+            answer_parts.append(r.get("content", ""))
+        elif t == "result" and r.get("status") == "success":
+            s = r.get("stats") or {}
+            # input_tokens already includes the cached portion
+            usage = {"input_tokens": s.get("input_tokens", 0),
+                     "output_tokens": s.get("output_tokens", 0)}
+    usage["_file_reads"] = file_reads
+    return calls, reads, "".join(answer_parts), usage
+
+
 def parse_claude(path: Path):
     calls, reads, file_reads, answer, usage = [], 0, 0, "", {}
     for line in path.read_text().splitlines():
@@ -179,6 +213,8 @@ def parse(path: Path):
         return parse_claude(path)
     if "copilot" in name:
         return parse_copilot(path)
+    if "gemini" in name:
+        return parse_gemini(path)
     if "/pi/" in name:
         return parse_pi(path)
     return parse_codex(path)
