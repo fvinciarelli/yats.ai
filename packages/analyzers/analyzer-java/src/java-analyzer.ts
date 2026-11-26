@@ -93,13 +93,20 @@ export class JavaAnalyzer extends AbstractAnalyzer {
     if (!this.bridgeJar) {
       return this.analyzeFallback(filePath, content, repositoryName);
     }
-    try {
-      return await this.analyzeWithBridge(filePath, content, repositoryName);
-    } catch (err) {
-      const result = this.analyzeFallback(filePath, content, repositoryName);
-      result.errors.push(this.bridgeFailureWarning("java", err));
-      return result;
+    // CI runners can be slow right after `mvn package` (JVM cold start, CPU
+    // contention): one retry turns a transient spawn failure into a pass
+    // instead of a silent regex fallback that loses USES_TYPE edges.
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await this.analyzeWithBridge(filePath, content, repositoryName);
+      } catch (err) {
+        lastErr = err;
+      }
     }
+    const result = this.analyzeFallback(filePath, content, repositoryName);
+    result.errors.push(this.bridgeFailureWarning("java", lastErr));
+    return result;
   }
 
   private async analyzeWithBridge(
@@ -145,6 +152,9 @@ export class JavaAnalyzer extends AbstractAnalyzer {
 
       proc.on("error", reject);
 
+      // If the JVM dies instantly (corrupt/stale jar), the stdin write below
+      // emits EPIPE; swallow it so the close handler produces the rejection.
+      proc.stdin!.on("error", () => {});
       proc.stdin!.write(content);
       proc.stdin!.end();
     });

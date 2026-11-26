@@ -3,8 +3,24 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { JavaAnalyzer } from "./java-analyzer.js";
 import { SymbolKind, RelationshipKind } from "@yats/shared";
+import type { AnalysisResult } from "@yats/shared";
 
 const analyzer = new JavaAnalyzer();
+
+/**
+ * Fails with the bridge's own error when the JVM bridge did not run. Without
+ * this, a bridge failure degrades to the regex fallback and the assertions
+ * below fail with a misleading message (e.g. a bare "expected USES_TYPE
+ * edges") that hides the real cause.
+ */
+function assertBridgeRan(result: AnalysisResult, note: string): void {
+  const fallback = result.errors.filter((e) => e.message.includes("regex fallback"));
+  assert.deepEqual(
+    fallback.map((e) => e.message),
+    [],
+    `Java bridge must run for ${note}: ${fallback.map((e) => e.message).join("; ")}`,
+  );
+}
 
 const FIXTURE = `package com.acme.order;
 
@@ -49,6 +65,7 @@ describe("JavaAnalyzer", () => {
 
   it("extracts types, members and relationships", async () => {
     const result = await analyzer.analyze("src/main/java/Fixture.java", FIXTURE, "test-repo");
+    assertBridgeRan(result, "symbol extraction");
 
     const names = result.symbols.map((s) => `${s.kind}:${s.name}`);
     assert.ok(names.includes("service:OrderService"), `kinds: ${names.join(", ")}`);
@@ -69,6 +86,7 @@ describe("JavaAnalyzer", () => {
 
   it("namespace is the java package", async () => {
     const result = await analyzer.analyze("src/main/java/Fixture.java", FIXTURE, "test-repo");
+    assertBridgeRan(result, "namespace extraction");
     const svc = result.symbols.find((s) => s.name === "OrderService");
     assert.equal(svc?.namespace, "com.acme.order");
     assert.equal(svc?.language, "java");
@@ -76,6 +94,7 @@ describe("JavaAnalyzer", () => {
 
   it("methods carry parentClass and real snippet", async () => {
     const result = await analyzer.analyze("src/main/java/Fixture.java", FIXTURE, "test-repo");
+    assertBridgeRan(result, "member extraction");
     const helper = result.symbols.find((s) => s.name === "helper");
     assert.equal(helper?.parentClass, "OrderService");
     assert.ok(helper?.sourceSnippet.includes("helper"));
@@ -124,6 +143,7 @@ public class ProfileService {
 }
 `;
     const result = await analyzer.analyze("com/acme/services/ProfileService.java", code, "repo");
+    assertBridgeRan(result, "USES_TYPE extraction");
     const uses = result.relationships.filter(
       (r) => r.kind === RelationshipKind.USES_TYPE,
     );
