@@ -5,6 +5,17 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-11-26
+
+### Fixed
+- **Java bridge spawn hardened.** One retry on transient JVM cold-start
+  failures (common on CI runners right after `mvn package`), stdin EPIPE
+  handled when the JVM dies instantly (corrupt/stale jar), and
+  bridge-dependent tests now fail with the bridge's own error instead of a
+  misleading assertion failure. A stale `target/` jar (predating the
+  USES_TYPE feature) no longer degrades to a silent regex fallback that
+  drops USES_TYPE edges.
+
 ## [0.9.0] - 2026-11-25
 
 ### Added
