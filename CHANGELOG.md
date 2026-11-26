@@ -5,9 +5,13 @@ All notable changes to YATS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.1] - 2026-11-26
+## [0.9.2] - 2026-11-26
 
 ### Fixed
+- **`connect/pi/AGENTS.md` was never tracked** (the broad `AGENTS.md`
+  gitignore rule swallowed it), so the Pi connect template was missing from
+  CI checkouts and npm packages — `yats connect` for pi.dev fell back to
+  degraded behavior and the test suite failed on the runner.
 - **Java bridge spawn hardened.** One retry on transient JVM cold-start
   failures (common on CI runners right after `mvn package`), stdin EPIPE
   handled when the JVM dies instantly (corrupt/stale jar), and

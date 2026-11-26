@@ -34,6 +34,7 @@ bin/
 AGENTS.md
 !packages/yats-toolkit/benchmark/agents/codex/AGENTS.md
 !connect/codex/AGENTS.md
+!packages/yats-toolkit/connect/pi/AGENTS.md
 .aider*
 packages/yats-toolkit/benchmark/results/
 repos/
